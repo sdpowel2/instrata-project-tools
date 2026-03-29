@@ -2,10 +2,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FolderOpen, Plus, Search } from 'lucide-react';
 import { useStore } from '../store';
+import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
 
 export function ProjectsList() {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
+  // In Supabase mode, RLS policies ensure members only see their own projects.
+  // In demo mode, all projects are shown regardless of role.
   const projects = useStore((s) => s.projects);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');

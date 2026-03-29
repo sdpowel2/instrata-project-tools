@@ -1,6 +1,7 @@
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pdf-lib';
 import type { Project, ProjectBoMItem, CloseoutPackage } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
+import { isUrl, fetchFileBytes } from '../lib/storage';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431);
@@ -552,7 +553,13 @@ export async function exportCloseoutPDF(
     } else {
       for (const drawing of drawings) {
         try {
-          const drawingBytes = Uint8Array.from(atob(drawing.fileData), (c) => c.charCodeAt(0));
+          // Support both URL (Supabase Storage) and base64 (legacy/demo)
+          let drawingBytes: Uint8Array;
+          if (isUrl(drawing.fileData)) {
+            drawingBytes = await fetchFileBytes(drawing.fileData);
+          } else {
+            drawingBytes = Uint8Array.from(atob(drawing.fileData), (c) => c.charCodeAt(0));
+          }
           const drawingPdf = await PDFDocument.load(drawingBytes);
           const pages = await pdfDoc.copyPages(drawingPdf, drawingPdf.getPageIndices());
 

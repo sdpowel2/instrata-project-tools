@@ -6,6 +6,8 @@ import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
 import { exportSubmittalPDF } from '../utils/exportSubmittalPDF';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { uploadFile } from '../lib/storage';
 import type { ItemCategory, SubmittalStatus } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
@@ -42,21 +44,34 @@ export function SubmittalDetail() {
 
   const handleCSVImport = (items: ImportedItem[]) => {
     items.forEach((item, i) => {
-      // Convert cutsheet file to base64 if present
+      const idx = submittal.items.length + i;
+
       if (item.cutSheetFile) {
-        const reader = new FileReader();
-        const idx = submittal.items.length + i;
-        reader.onload = (e) => {
-          const base64 = (e.target?.result as string).split(',')[1];
-          // We need to find the item by sortOrder since we don't have the id yet
-          const sub = useStore.getState().submittals.find((s) => s.id === submittalId);
-          const addedItem = sub?.items.find((it) => it.sortOrder === idx);
-          if (addedItem) {
-            updateItem(submittalId!, addedItem.id, { cutSheetData: base64, cutSheetPath: item.cutSheetName });
-          }
-        };
-        reader.readAsDataURL(item.cutSheetFile);
+        if (isSupabaseConfigured()) {
+          // Upload to Supabase Storage
+          const file = item.cutSheetFile;
+          uploadFile('cutsheets', projectId!, file).then((url) => {
+            const sub = useStore.getState().submittals.find((s) => s.id === submittalId);
+            const addedItem = sub?.items.find((it) => it.sortOrder === idx);
+            if (addedItem) {
+              updateItem(submittalId!, addedItem.id, { cutSheetData: url, cutSheetPath: item.cutSheetName });
+            }
+          }).catch((err) => console.error('Cutsheet upload failed:', err));
+        } else {
+          // Fallback: convert to base64 for demo mode
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const base64 = (e.target?.result as string).split(',')[1];
+            const sub = useStore.getState().submittals.find((s) => s.id === submittalId);
+            const addedItem = sub?.items.find((it) => it.sortOrder === idx);
+            if (addedItem) {
+              updateItem(submittalId!, addedItem.id, { cutSheetData: base64, cutSheetPath: item.cutSheetName });
+            }
+          };
+          reader.readAsDataURL(item.cutSheetFile);
+        }
       }
+
       addItem(submittalId!, {
         manufacturer: item.manufacturer,
         model: item.model,
@@ -65,19 +80,27 @@ export function SubmittalDetail() {
         qty: item.qty,
         notes: item.notes,
         locations: item.locations || [],
-        sortOrder: submittal.items.length + i,
+        sortOrder: idx,
         cutSheetPath: item.cutSheetName || undefined,
       });
     });
   };
 
   const handleCutSheetUpload = (itemId: string, file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = (e.target?.result as string).split(',')[1];
-      updateItem(submittalId!, itemId, { cutSheetPath: file.name, cutSheetData: base64 });
-    };
-    reader.readAsDataURL(file);
+    if (isSupabaseConfigured()) {
+      // Upload to Supabase Storage
+      uploadFile('cutsheets', projectId!, file).then((url) => {
+        updateItem(submittalId!, itemId, { cutSheetPath: file.name, cutSheetData: url });
+      }).catch((err) => console.error('Cutsheet upload failed:', err));
+    } else {
+      // Fallback: base64 for demo mode
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = (e.target?.result as string).split(',')[1];
+        updateItem(submittalId!, itemId, { cutSheetPath: file.name, cutSheetData: base64 });
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const sortedItems = [...submittal.items].sort((a, b) => a.sortOrder - b.sortOrder);

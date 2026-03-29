@@ -5,6 +5,8 @@ import { useStore } from '../store';
 import { Modal } from '../components/Modal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
 import { BoMLocationView } from '../components/BoMLocationView';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { uploadFile } from '../lib/storage';
 import type { ProjectBoMItem, ItemCategory, SubmittalItemLocation } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
@@ -122,7 +124,7 @@ export function ProjectOverview() {
       );
     }
 
-    // For items with cutsheet files, convert to base64 then import
+    // For items with cutsheet files, upload to storage or convert to base64
     if (withFiles.length > 0) {
       const promises = withFiles.map(
         (item) =>
@@ -137,22 +139,53 @@ export function ProjectOverview() {
             cutSheetData?: string;
             cutSheetName?: string;
           }>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-              const base64 = (e.target?.result as string).split(',')[1];
-              resolve({
-                manufacturer: item.manufacturer,
-                model: item.model,
-                description: item.description,
-                category: item.category,
-                qty: item.qty,
-                notes: item.notes,
-                locations: item.locations || [],
-                cutSheetData: base64,
-                cutSheetName: item.cutSheetName,
+            if (isSupabaseConfigured()) {
+              // Upload to Supabase Storage
+              uploadFile('cutsheets', projectId!, item.cutSheetFile!).then((url) => {
+                resolve({
+                  manufacturer: item.manufacturer,
+                  model: item.model,
+                  description: item.description,
+                  category: item.category,
+                  qty: item.qty,
+                  notes: item.notes,
+                  locations: item.locations || [],
+                  cutSheetData: url,
+                  cutSheetName: item.cutSheetName,
+                });
+              }).catch((err) => {
+                console.error('Cutsheet upload failed:', err);
+                // Import without cutsheet on failure
+                resolve({
+                  manufacturer: item.manufacturer,
+                  model: item.model,
+                  description: item.description,
+                  category: item.category,
+                  qty: item.qty,
+                  notes: item.notes,
+                  locations: item.locations || [],
+                  cutSheetName: item.cutSheetName,
+                });
               });
-            };
-            reader.readAsDataURL(item.cutSheetFile!);
+            } else {
+              // Fallback: base64 for demo mode
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const base64 = (e.target?.result as string).split(',')[1];
+                resolve({
+                  manufacturer: item.manufacturer,
+                  model: item.model,
+                  description: item.description,
+                  category: item.category,
+                  qty: item.qty,
+                  notes: item.notes,
+                  locations: item.locations || [],
+                  cutSheetData: base64,
+                  cutSheetName: item.cutSheetName,
+                });
+              };
+              reader.readAsDataURL(item.cutSheetFile!);
+            }
           }),
       );
       Promise.all(promises).then((resolved) => {

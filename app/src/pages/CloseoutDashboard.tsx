@@ -9,6 +9,8 @@ import { LocationProductPicker } from '../components/LocationProductPicker';
 import type { PunchStatus, PunchPriority, SignOffStatus, Warranty } from '../types';
 import { exportSignOffPDF } from '../utils/exportSignOffPDF';
 import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { uploadFile, isUrl } from '../lib/storage';
 
 /* ─── Warranty Edit Modal (sub-component) ─── */
 function WarrantyEditModal({
@@ -236,41 +238,75 @@ export function CloseoutDashboard() {
   };
 
   // ── As-Built Drawings ──
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1];
-      setDrawingForm((prev) => ({ ...prev, fileName: file.name, fileData: base64 }));
-    };
-    reader.readAsDataURL(file);
+
+    if (isSupabaseConfigured()) {
+      // Store the File object for upload on submit
+      setPendingFile(file);
+      setDrawingForm((prev) => ({ ...prev, fileName: file.name, fileData: '__pending_upload__' }));
+    } else {
+      // Fallback: base64 for demo mode
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(',')[1];
+        setDrawingForm((prev) => ({ ...prev, fileName: file.name, fileData: base64 }));
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
-  const handleAddDrawing = (e: React.FormEvent) => {
+  const handleAddDrawing = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!drawingForm.title || !drawingForm.fileData) return;
+
+    let fileData = drawingForm.fileData;
+
+    if (isSupabaseConfigured() && pendingFile) {
+      try {
+        fileData = await uploadFile('as-builts', projectId!, pendingFile);
+      } catch (err) {
+        console.error('As-built drawing upload failed:', err);
+        return;
+      }
+    }
+
     addAsBuiltDrawing(closeoutId, {
       title: drawingForm.title,
       revision: drawingForm.revision,
       fileName: drawingForm.fileName,
-      fileData: drawingForm.fileData,
+      fileData,
     });
     setShowAddDrawing(false);
     setDrawingForm({ title: '', revision: '', fileName: '', fileData: '' });
+    setPendingFile(null);
   };
 
   const handleViewDrawing = (d: { fileName: string; fileData: string }) => {
-    const byteChars = atob(d.fileData);
-    const byteNumbers = new Uint8Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-    const blob = new Blob([byteNumbers], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = d.fileName;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (isUrl(d.fileData)) {
+      // Open URL directly
+      const a = document.createElement('a');
+      a.href = d.fileData;
+      a.download = d.fileName;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
+    } else {
+      // Legacy base64 handling
+      const byteChars = atob(d.fileData);
+      const byteNumbers = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([byteNumbers], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = d.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
   };
 
   const toggleRoom = (room: string) => {

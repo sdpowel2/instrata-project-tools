@@ -1,6 +1,7 @@
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pdf-lib';
 import type { Submittal, SubmittalItem, Project } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
+import { isUrl, fetchFileBytes } from '../lib/storage';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431); // #22326E
@@ -357,7 +358,13 @@ export async function exportSubmittalPDF(
     if (!item.cutSheetData) continue;
 
     try {
-      const cutsheetBytes = Uint8Array.from(atob(item.cutSheetData), (c) => c.charCodeAt(0));
+      // Support both URL (Supabase Storage) and base64 (legacy/demo)
+      let cutsheetBytes: Uint8Array;
+      if (isUrl(item.cutSheetData)) {
+        cutsheetBytes = await fetchFileBytes(item.cutSheetData);
+      } else {
+        cutsheetBytes = Uint8Array.from(atob(item.cutSheetData), (c) => c.charCodeAt(0));
+      }
       const cutsheetPdf = await PDFDocument.load(cutsheetBytes);
       const pages = await pdfDoc.copyPages(cutsheetPdf, cutsheetPdf.getPageIndices());
 

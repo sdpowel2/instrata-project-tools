@@ -608,7 +608,16 @@ export const useStore = create<AppState>((set, get) => ({
 
     dbExec(async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      return supabase.from('projects').insert(projectToRow({ ...project, createdBy: user?.id } as any));
+      const userId = user?.id;
+      const res = await supabase.from('projects').insert(projectToRow({ ...project, createdBy: userId } as any));
+      // Also add the creator as a project member
+      if (!res.error && userId) {
+        const { error: memberError } = await supabase
+          .from('project_members')
+          .insert({ project_id: id, user_id: userId });
+        if (memberError) console.error('[Supabase] Failed to add creator as project member:', memberError);
+      }
+      return res;
     });
 
     return id;

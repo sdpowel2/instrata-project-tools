@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { useParams, useNavigate, NavLink, Outlet } from 'react-router-dom';
-import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft } from 'lucide-react';
+import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft, Users } from 'lucide-react';
 import { useStore } from '../store';
+import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
+import { ProjectMembersModal } from '../components/ProjectMembersModal';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 const tabs = [
   { to: '', label: 'Overview', end: true },
@@ -14,7 +18,9 @@ const tabs = [
 export function ProjectHome() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
 
   if (!project) {
     return <div className="p-8 text-text-secondary">Project not found.</div>;
@@ -37,7 +43,18 @@ export function ProjectHome() {
               {project.address && <><span>&middot;</span><span>{project.address}</span></>}
             </div>
           </div>
-          <StatusBadge status={project.status} />
+          <div className="flex items-center gap-3">
+            {isSupabaseConfigured() && (
+              <button
+                onClick={() => setTeamModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-navy border border-border rounded-lg hover:bg-surface transition-colors"
+              >
+                <Users size={14} />
+                Team
+              </button>
+            )}
+            <StatusBadge status={project.status} />
+          </div>
         </div>
 
         {/* Tab nav */}
@@ -66,6 +83,14 @@ export function ProjectHome() {
       <div className="flex-1 overflow-y-auto">
         <Outlet />
       </div>
+
+      {/* Project members modal */}
+      <ProjectMembersModal
+        open={teamModalOpen}
+        onClose={() => setTeamModalOpen(false)}
+        projectId={project.id}
+        projectName={project.name}
+      />
     </div>
   );
 }
