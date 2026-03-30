@@ -75,9 +75,24 @@ export function isUrl(value: string): boolean {
 }
 
 /**
- * Fetch file bytes from a URL. Useful for PDF exports that need the raw data.
+ * Fetch file bytes from a URL.
+ * If the URL is a Supabase Storage URL, uses the authenticated Supabase client
+ * to download it (handles private buckets). Falls back to plain fetch otherwise.
  */
 export async function fetchFileBytes(url: string): Promise<Uint8Array> {
+  // Check if this is a Supabase Storage URL for a known private bucket
+  const buckets: StorageBucket[] = ['cutsheets', 'as-builts'];
+  for (const bucket of buckets) {
+    const path = extractStoragePath(bucket, url);
+    if (path) {
+      const { data, error } = await supabase.storage.from(bucket).download(path);
+      if (error) throw new Error(`Storage download failed: ${error.message}`);
+      const buffer = await data.arrayBuffer();
+      return new Uint8Array(buffer);
+    }
+  }
+
+  // Plain URL (e.g. external or public)
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to fetch file: ${response.statusText}`);
   const buffer = await response.arrayBuffer();
