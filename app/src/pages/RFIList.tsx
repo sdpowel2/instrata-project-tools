@@ -6,6 +6,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
 import { LocationProductPicker } from '../components/LocationProductPicker';
+import { exportRFIPDF } from '../utils/exportRFIPDF';
 import type { RFIStatus } from '../types';
 
 export function RFIList() {
@@ -40,7 +41,30 @@ export function RFIList() {
     setForm({ subject: '', specSection: '', description: '', status: 'Open', responseDue: '', responseSummary: '', answeredBy: '', locationRef: undefined, productRef: undefined });
   };
 
+  const projects = useStore((s) => s.projects);
+  const project = projects.find((p) => p.id === projectId);
   const selectedRFI = rfis.find((r) => r.id === showDetail);
+
+  // ── CSV Export ──
+  const handleExportCSV = () => {
+    const headers = ['RFI #', 'Subject', 'Spec Section', 'Status', 'Response Due', 'Answered By', 'Answered At', 'Description', 'Response Summary'];
+    const rows = rfis.map((r) => [
+      r.number, r.subject, r.specSection, r.status, r.responseDue,
+      r.answeredBy || '', r.answeredAt || '', r.description, r.responseSummary || '',
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `RFI-Log-${project?.number || projectId}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
 
   const handleAnswer = () => {
     if (!selectedRFI) return;
@@ -57,7 +81,7 @@ export function RFIList() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold text-navy">RFI Log</h2>
         <div className="flex gap-3">
-          <button className="btn-secondary text-sm"><Download size={14} /> Export CSV</button>
+          <button onClick={handleExportCSV} className="btn-secondary text-sm"><Download size={14} /> Export CSV</button>
           <button onClick={() => setShowNew(true)} className="btn-primary text-sm"><Plus size={16} /> New RFI</button>
         </div>
       </div>
@@ -230,7 +254,7 @@ export function RFIList() {
             )}
 
             <div className="flex justify-between pt-4 border-t border-border">
-              <button className="btn-secondary text-sm"><Download size={14} /> Export PDF</button>
+              <button onClick={() => project && exportRFIPDF(selectedRFI, project)} className="btn-secondary text-sm"><Download size={14} /> Export PDF</button>
               <div className="flex gap-2">
                 {selectedRFI.status !== 'Closed' && selectedRFI.status !== 'Void' && (
                   <>
