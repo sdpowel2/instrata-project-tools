@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate, NavLink, Outlet } from 'react-router-dom';
-import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft, Users } from 'lucide-react';
+import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft, Users, ShieldCheck } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { ProjectMembersModal } from '../components/ProjectMembersModal';
@@ -8,6 +8,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 
 const tabs = [
   { to: '', label: 'Overview', end: true },
+  { to: 'review', label: 'Auto Review', icon: ShieldCheck },
   { to: 'submittals', label: 'Submittals', icon: FileText },
   { to: 'rfis', label: 'RFIs', icon: MessageSquareWarning },
   { to: 'closeout', label: 'Closeout', icon: ClipboardCheck },

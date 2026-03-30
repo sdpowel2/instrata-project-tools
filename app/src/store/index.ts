@@ -5,6 +5,7 @@ import type {
   ProjectBoMItem, AsBuiltDrawing,
   ItemCategory,
   SubmittalItemLocation,
+  ReviewRun, ReviewFlag, ReviewRunStatus, ReviewFlagStatus,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
@@ -396,7 +397,31 @@ const seedManuals: OwnerManual[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Store Interface (unchanged from original — components stay the same)
+// Review row mappers
+// ---------------------------------------------------------------------------
+
+function rowToReviewRun(r: any): ReviewRun {
+  return {
+    id: r.id, projectId: r.project_id, runNumber: r.run_number,
+    triggeredAt: r.triggered_at, status: r.status,
+    reviewedBy: r.reviewed_by ?? undefined, reviewedAt: r.reviewed_at ?? undefined,
+    createdAt: r.created_at,
+  };
+}
+
+function rowToReviewFlag(r: any): ReviewFlag {
+  return {
+    id: r.id, reviewRunId: r.review_run_id, ruleId: r.rule_id,
+    severity: r.severity, category: r.category, flagName: r.flag_name,
+    description: r.description, lineItemRef: r.line_item_ref ?? undefined,
+    status: r.status, managerComment: r.manager_comment ?? undefined,
+    resolvedBy: r.resolved_by ?? undefined, resolvedAt: r.resolved_at ?? undefined,
+    diffStatus: r.diff_status ?? undefined, createdAt: r.created_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Store Interface
 // ---------------------------------------------------------------------------
 
 interface AppState {
@@ -407,6 +432,7 @@ interface AppState {
   rfis: RFI[];
   closeouts: CloseoutPackage[];
   manuals: OwnerManual[];
+  reviewRuns: ReviewRun[];
 
   // Loading state
   isLoading: boolean;
@@ -472,6 +498,11 @@ interface AppState {
   addManualDevice: (manualId: string, sectionId: string, d: Omit<ManualDevice, 'id' | 'sectionId'>) => void;
   updateManualDevice: (manualId: string, sectionId: string, dId: string, d: Partial<ManualDevice>) => void;
   deleteManualDevice: (manualId: string, sectionId: string, dId: string) => void;
+
+  // Review actions
+  fetchProjectFlags: (runId: string) => Promise<ReviewFlag[]>;
+  updateRunStatus: (runId: string, status: ReviewRunStatus, reviewedBy?: string) => Promise<void>;
+  updateFlagStatus: (flagId: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +519,7 @@ export const useStore = create<AppState>((set, get) => ({
   rfis: DB ? [] : seedRFIs,
   closeouts: DB ? [] : seedCloseouts,
   manuals: DB ? [] : seedManuals,
+  reviewRuns: [],
 
   isLoading: DB,      // start loading if Supabase is configured
   isInitialized: !DB, // already initialized in demo mode
@@ -519,6 +551,8 @@ export const useStore = create<AppState>((set, get) => ({
         supabase.from('sign_off_sheets').select('*'),
         supabase.from('as_built_drawings').select('*'),
         supabase.from('owner_manuals').select('*'),
+        // Review runs — summary only (no csv_snapshot, no flags)
+        supabase.from('review_runs').select('id,project_id,run_number,triggered_at,status,reviewed_by,reviewed_at,created_at').order('run_number', { ascending: false }),
       ]);
 
       const timeout = new Promise<never>((_, reject) =>
@@ -537,10 +571,11 @@ export const useStore = create<AppState>((set, get) => ({
         signOffSheetsRes,
         asBuiltDrawingsRes,
         manualsRes,
+        reviewRunsRes,
       ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, manualsRes]) {
+      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, manualsRes, reviewRunsRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
@@ -549,6 +584,7 @@ export const useStore = create<AppState>((set, get) => ({
       const projectBoM = (bomRes.data ?? []).map(rowToBoMItem);
       const rfis = (rfisRes.data ?? []).map(rowToRFI);
       const manuals = (manualsRes.data ?? []).map(rowToManual);
+      const reviewRuns = (reviewRunsRes.data ?? []).map(rowToReviewRun);
 
       // Nest submittal items into submittals
       const submittalItems = (submittalItemsRes.data ?? []).map(rowToSubmittalItem);
@@ -603,7 +639,7 @@ export const useStore = create<AppState>((set, get) => ({
       }));
 
       set({
-        projects, projectBoM, submittals, rfis, closeouts, manuals,
+        projects, projectBoM, submittals, rfis, closeouts, manuals, reviewRuns,
         isLoading: false, isInitialized: true,
       });
     } catch (err) {
@@ -1200,5 +1236,46 @@ export const useStore = create<AppState>((set, get) => ({
         dbExec(() => supabase.from('owner_manuals').update({ sections: manual.sections }).eq('id', manualId));
       }
     }
+  },
+
+  // =========================================================================
+  // Review actions
+  // =========================================================================
+
+  fetchProjectFlags: async (runId) => {
+    if (!isSupabaseConfigured()) return [];
+    const { data, error } = await supabase
+      .from('review_flags')
+      .select('*')
+      .eq('review_run_id', runId)
+      .order('severity', { ascending: true }) // high → low (alphabetically: high < low < moderate)
+      .order('created_at', { ascending: true });
+    if (error) { console.error('[review] fetchProjectFlags error:', error); return []; }
+    // Sort by severity weight: high → moderate → low
+    const weight = (s: string) => s === 'high' ? 0 : s === 'moderate' ? 1 : 2;
+    return (data ?? []).map(rowToReviewFlag).sort((a, b) => weight(a.severity) - weight(b.severity));
+  },
+
+  updateRunStatus: async (runId, status, reviewedBy) => {
+    if (!isSupabaseConfigured()) return;
+    const updates: any = { status };
+    if (status === 'approved' || status === 'changes_requested') {
+      updates.reviewed_at = new Date().toISOString();
+      if (reviewedBy) updates.reviewed_by = reviewedBy;
+    }
+    const { error } = await supabase.from('review_runs').update(updates).eq('id', runId);
+    if (error) { console.error('[review] updateRunStatus error:', error); return; }
+    set((s) => ({
+      reviewRuns: s.reviewRuns.map((r) => r.id === runId ? { ...r, status, reviewedAt: updates.reviewed_at } : r),
+    }));
+  },
+
+  updateFlagStatus: async (flagId, status, comment) => {
+    if (!isSupabaseConfigured()) return;
+    const updates: any = { status };
+    if (comment !== undefined) updates.manager_comment = comment;
+    if (status === 'resolved' || status === 'waived') updates.resolved_at = new Date().toISOString();
+    const { error } = await supabase.from('review_flags').update(updates).eq('id', flagId);
+    if (error) console.error('[review] updateFlagStatus error:', error);
   },
 }));

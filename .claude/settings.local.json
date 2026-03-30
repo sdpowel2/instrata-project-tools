@@ -7,7 +7,12 @@
       "Bash(taskkill //F //PID 65516)",
       "Bash(npm ls:*)",
       "Bash(npm install:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git merge:*)"
     ]
   }
 }

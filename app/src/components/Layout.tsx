@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
-  ClipboardCheck, BookOpen, Settings, ChevronRight, LogOut,
+  ClipboardCheck, BookOpen, Settings, ChevronRight, LogOut, ShieldCheck,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -10,6 +10,7 @@ import instrataLogo from '../assets/instrata-logo-white.png';
 const mainNav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/projects', icon: FolderOpen, label: 'Projects' },
+  { to: '/review-queue', icon: ShieldCheck, label: 'Review Queue' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

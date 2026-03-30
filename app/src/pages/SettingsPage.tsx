@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2 } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import type { LaborRate, ReviewConfigEntry } from '../types';
 
 interface Profile {
   id: string;
@@ -105,6 +106,319 @@ function TeamMembersSection() {
   );
 }
 
+// ─── Review Config Section ────────────────────────────────────────────────────
+
+function ReviewConfigSection() {
+  const [config, setConfig] = useState<ReviewConfigEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    supabase.from('review_config').select('*').then(({ data }) => {
+      if (data) {
+        setConfig(data.map((r: any) => ({
+          key: r.key, value: r.value, label: r.label, dataType: r.data_type,
+        })));
+      }
+      setLoading(false);
+    });
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    for (const entry of config) {
+      await supabase.from('review_config').update({ value: entry.value }).eq('key', entry.key);
+    }
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  if (loading) return <div className="py-6 flex justify-center"><Loader2 size={18} className="animate-spin text-text-secondary" /></div>;
+
+  return (
+    <div>
+      <div className="space-y-4">
+        {config.map((entry) => (
+          <label key={entry.key} className="block">
+            <span className="text-sm font-medium text-text-primary">{entry.label}</span>
+            <input
+              type={entry.dataType === 'list' || entry.dataType === 'text' ? 'text' : 'number'}
+              value={entry.value}
+              onChange={e => setConfig(prev => prev.map(c => c.key === entry.key ? { ...c, value: e.target.value } : c))}
+              className="input mt-1.5"
+              placeholder={entry.dataType === 'list' ? 'comma-separated values' : ''}
+            />
+            <span className="text-xs text-text-secondary mt-0.5 block">
+              {entry.dataType === 'percent' && 'Percentage (0–100)'}
+              {entry.dataType === 'days' && 'Number of days'}
+              {entry.dataType === 'list' && 'Comma-separated. Leave blank to disable this rule.'}
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-border">
+        {saved && <span className="text-sm text-green-600">Saved</span>}
+        <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-50">
+          {saving ? <><Loader2 size={14} className="animate-spin inline mr-1" />Saving…</> : 'Save Changes'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Labor Rates Section ──────────────────────────────────────────────────────
+
+function LaborRatesSection() {
+  const [rates, setRates] = useState<LaborRate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newType, setNewType] = useState('');
+  const [newRate, setNewRate] = useState('');
+  const [newCeiling, setNewCeiling] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('labor_rates').select('*').order('labor_type');
+    setRates((data ?? []).map((r: any) => ({
+      id: r.id, laborType: r.labor_type, ratePerHour: r.rate_per_hour,
+      hoursCeiling: r.hours_ceiling ?? undefined, isActive: r.is_active, updatedAt: r.updated_at,
+    })));
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async () => {
+    if (!newType.trim() || !newRate) return;
+    setAdding(true);
+    const { error } = await supabase.from('labor_rates').insert({
+      labor_type: newType.trim(),
+      rate_per_hour: parseFloat(newRate),
+      hours_ceiling: newCeiling ? parseFloat(newCeiling) : null,
+      is_active: true,
+    });
+    if (!error) { setNewType(''); setNewRate(''); setNewCeiling(''); await load(); }
+    setAdding(false);
+  };
+
+  const handleToggle = async (id: string, isActive: boolean) => {
+    await supabase.from('labor_rates').update({ is_active: isActive }).eq('id', id);
+    setRates(prev => prev.map(r => r.id === id ? { ...r, isActive } : r));
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Remove this labor type?')) return;
+    await supabase.from('labor_rates').delete().eq('id', id);
+    setRates(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleUpdateCeiling = async (id: string, ceiling: string) => {
+    const val = ceiling ? parseFloat(ceiling) : null;
+    await supabase.from('labor_rates').update({ hours_ceiling: val }).eq('id', id);
+    setRates(prev => prev.map(r => r.id === id ? { ...r, hoursCeiling: val ?? undefined } : r));
+  };
+
+  if (loading) return <div className="py-6 flex justify-center"><Loader2 size={18} className="animate-spin text-text-secondary" /></div>;
+
+  return (
+    <div className="space-y-3">
+      {rates.length === 0 && (
+        <p className="text-sm text-text-secondary">No labor types configured yet.</p>
+      )}
+      {rates.map(rate => (
+        <div key={rate.id} className={`flex items-center gap-3 p-3 rounded-lg border ${rate.isActive ? 'border-border bg-surface/30' : 'border-border/40 bg-gray-50 opacity-60'}`}>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-text-primary">{rate.laborType}</div>
+            <div className="text-xs text-text-secondary">${rate.ratePerHour.toFixed(2)}/hr</div>
+          </div>
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              defaultValue={rate.hoursCeiling ?? ''}
+              placeholder="hr ceiling"
+              onBlur={e => handleUpdateCeiling(rate.id, e.target.value)}
+              className="w-24 text-xs border border-border rounded px-2 py-1 text-center focus:outline-none focus:ring-1 focus:ring-navy/20"
+            />
+            <span className="text-xs text-text-secondary">hrs max</span>
+          </div>
+          <button
+            onClick={() => handleToggle(rate.id, !rate.isActive)}
+            className={`text-xs px-2 py-1 rounded border transition-colors ${rate.isActive ? 'border-gray-300 text-gray-500 hover:bg-gray-100' : 'border-navy/30 text-navy hover:bg-navy/5'}`}
+          >
+            {rate.isActive ? 'Disable' : 'Enable'}
+          </button>
+          <button onClick={() => handleDelete(rate.id)} className="text-red-400 hover:text-red-600 transition-colors">
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ))}
+
+      {/* Add new */}
+      <div className="flex items-center gap-2 pt-2">
+        <input
+          type="text"
+          value={newType}
+          onChange={e => setNewType(e.target.value)}
+          placeholder="Labor type name"
+          className="input flex-1 text-sm"
+        />
+        <input
+          type="number"
+          value={newRate}
+          onChange={e => setNewRate(e.target.value)}
+          placeholder="$/hr"
+          className="input w-24 text-sm"
+        />
+        <input
+          type="number"
+          value={newCeiling}
+          onChange={e => setNewCeiling(e.target.value)}
+          placeholder="max hrs"
+          className="input w-24 text-sm"
+        />
+        <button
+          onClick={handleAdd}
+          disabled={adding || !newType.trim() || !newRate}
+          className="btn-primary flex items-center gap-1 disabled:opacity-50"
+        >
+          {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Product Catalog Import Section ──────────────────────────────────────────
+
+function ProductCatalogSection() {
+  const [file, setFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState<{ inserted: number; skipped: number } | null>(null);
+  const [error, setError] = useState('');
+  const [catalogCount, setCatalogCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    supabase.from('product_catalog').select('id', { count: 'exact', head: true }).then(({ count }) => {
+      setCatalogCount(count ?? 0);
+    });
+  }, [result]);
+
+  const handleImport = async () => {
+    if (!file) return;
+    setImporting(true);
+    setError('');
+    setResult(null);
+
+    try {
+      const text = await file.text();
+      const lines = text.replace(/\r\n/g, '\n').split('\n').filter(Boolean);
+      if (lines.length < 2) throw new Error('CSV must have a header row and at least one data row.');
+
+      const parseRow = (line: string): string[] => {
+        const fields: string[] = [];
+        let field = ''; let inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (inQ) { if (c === '"' && line[i+1] === '"') { field += '"'; i++; } else if (c === '"') { inQ = false; } else { field += c; } }
+          else { if (c === '"') { inQ = true; } else if (c === ',') { fields.push(field.trim()); field = ''; } else { field += c; } }
+        }
+        fields.push(field.trim());
+        return fields;
+      };
+
+      const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
+      const getIdx = (...names: string[]) => names.map(n => headers.indexOf(n)).find(i => i >= 0) ?? -1;
+
+      const mfgIdx   = getIdx('manufacturer');
+      const modelIdx = getIdx('model number', 'model_number', 'model#', 'model');
+      const descIdx  = getIdx('description');
+      const priceIdx = getIdx('msrp', 'list price', 'list_price', 'price');
+      const catIdx   = getIdx('category');
+
+      if (mfgIdx < 0 || modelIdx < 0) throw new Error('CSV must have "Manufacturer" and "Model Number" columns.');
+
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const vals = parseRow(lines[i]);
+        const mfg   = vals[mfgIdx]?.trim();
+        const model = vals[modelIdx]?.trim();
+        if (!mfg || !model) continue;
+        const rawPrice = priceIdx >= 0 ? vals[priceIdx]?.replace(/[$,]/g, '').trim() : '';
+        const price = rawPrice ? parseFloat(rawPrice) : null;
+        rows.push({
+          manufacturer: mfg, model_number: model,
+          description:  descIdx >= 0 ? (vals[descIdx] ?? '') : '',
+          list_price:   isNaN(price as any) ? null : price,
+          category:     catIdx >= 0 ? (vals[catIdx] ?? '') : '',
+        });
+      }
+
+      // Upsert in batches of 100
+      let inserted = 0;
+      for (let i = 0; i < rows.length; i += 100) {
+        const batch = rows.slice(i, i + 100);
+        const { error: err } = await supabase.from('product_catalog')
+          .upsert(batch, { onConflict: 'manufacturer,model_number', ignoreDuplicates: false });
+        if (err) throw new Error(err.message);
+        inserted += batch.length;
+      }
+      setResult({ inserted, skipped: 0 });
+    } catch (err: any) {
+      setError(err.message ?? 'Import failed');
+    }
+    setImporting(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-text-secondary">Current catalog size:</span>
+        <span className="font-semibold text-text-primary">
+          {catalogCount === null ? '—' : `${catalogCount.toLocaleString()} items`}
+        </span>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-text-primary mb-1.5">
+          Import from CSV
+        </label>
+        <p className="text-xs text-text-secondary mb-3">
+          Expected columns: <code className="bg-surface px-1 rounded">Manufacturer</code>, <code className="bg-surface px-1 rounded">Model Number</code>, <code className="bg-surface px-1 rounded">Description</code>, <code className="bg-surface px-1 rounded">MSRP</code>, <code className="bg-surface px-1 rounded">Category</code>. Existing items are updated.
+        </p>
+        <input
+          type="file"
+          accept=".csv"
+          onChange={e => { setFile(e.target.files?.[0] ?? null); setResult(null); setError(''); }}
+          className="block w-full text-sm text-text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-border file:text-sm file:bg-surface hover:file:bg-gray-100 transition-colors"
+        />
+      </div>
+
+      {file && (
+        <button
+          onClick={handleImport}
+          disabled={importing}
+          className="btn-primary flex items-center gap-2 disabled:opacity-50"
+        >
+          {importing ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : 'Import Catalog'}
+        </button>
+      )}
+
+      {result && (
+        <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          Import complete — {result.inserted} items processed.
+        </div>
+      )}
+      {error && (
+        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { isAdmin } = useAuth();
   const configured = isSupabaseConfigured();
@@ -173,6 +487,38 @@ export function SettingsPage() {
             </p>
           )}
         </div>
+      )}
+
+      {/* Auto Review — Admin only */}
+      {isAdmin && configured && (
+        <>
+          <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <SlidersHorizontal size={18} className="text-navy" />
+              <h2 className="text-base font-semibold text-navy">Auto Review — Rule Thresholds</h2>
+            </div>
+            <ReviewConfigSection />
+          </div>
+
+          <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Briefcase size={18} className="text-navy" />
+              <h2 className="text-base font-semibold text-navy">Labor Rates</h2>
+            </div>
+            <p className="text-sm text-text-secondary mb-4">
+              Labor types must match exactly what engineers enter in the D-Tools Labor Type column. Any unmatched type generates a High flag.
+            </p>
+            <LaborRatesSection />
+          </div>
+
+          <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <ShieldCheck size={18} className="text-navy" />
+              <h2 className="text-base font-semibold text-navy">Product Catalog</h2>
+            </div>
+            <ProductCatalogSection />
+          </div>
+        </>
       )}
 
       <div className="bg-white rounded-xl border border-border shadow-sm p-6">

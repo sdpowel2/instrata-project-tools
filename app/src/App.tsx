@@ -11,6 +11,8 @@ import { RFIList } from './pages/RFIList';
 import { CloseoutDashboard } from './pages/CloseoutDashboard';
 import { OwnerManualPage } from './pages/OwnerManual';
 import { SettingsPage } from './pages/SettingsPage';
+import { AutoReviewPage } from './pages/AutoReview';
+import { ReviewQueuePage } from './pages/ReviewQueue';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -78,12 +80,14 @@ export default function App() {
               <Route path="projects/new" element={<ProjectNew />} />
               <Route path="projects/:projectId" element={<ProjectHome />}>
                 <Route index element={<ProjectOverview />} />
+                <Route path="review" element={<AutoReviewPage />} />
                 <Route path="submittals" element={<SubmittalList />} />
                 <Route path="submittals/:submittalId" element={<SubmittalDetail />} />
                 <Route path="rfis" element={<RFIList />} />
                 <Route path="closeout" element={<CloseoutDashboard />} />
                 <Route path="manual" element={<OwnerManualPage />} />
               </Route>
+              <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Route>

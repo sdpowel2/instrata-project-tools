@@ -1,4 +1,68 @@
 export type ProjectStatus = 'Active' | 'Pending Closeout' | 'Closed';
+
+// ===================== AUTO REVIEWER =====================
+
+export type ReviewRunStatus = 'pending_review' | 'in_review' | 'changes_requested' | 'quick_fix' | 'approved';
+export type ReviewFlagStatus = 'open' | 'resolved' | 'waived' | 'commented';
+export type ReviewFlagSeverity = 'high' | 'moderate' | 'low';
+export type ReviewFlagCategory = 'margin' | 'pricing' | 'labor' | 'data' | 'catalog' | 'project';
+export type ReviewDiffStatus = 'new' | 'recurring' | 'resolved';
+
+export interface ReviewRun {
+  id: string;
+  projectId: string;
+  runNumber: number;
+  triggeredAt: string;
+  status: ReviewRunStatus;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  flagCounts?: { high: number; moderate: number; low: number; open: number };
+}
+
+export interface ReviewFlag {
+  id: string;
+  reviewRunId: string;
+  ruleId: string;
+  severity: ReviewFlagSeverity;
+  category: ReviewFlagCategory;
+  flagName: string;
+  description: string;
+  lineItemRef?: string;
+  status: ReviewFlagStatus;
+  managerComment?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  diffStatus?: ReviewDiffStatus;
+  createdAt: string;
+}
+
+export interface ReviewConfigEntry {
+  key: string;
+  value: string;
+  label: string;
+  dataType: 'number' | 'percent' | 'days' | 'text' | 'list';
+}
+
+export interface LaborRate {
+  id: string;
+  laborType: string;
+  ratePerHour: number;
+  hoursCeiling?: number;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface ProductCatalogItem {
+  id: string;
+  manufacturer: string;
+  modelNumber: string;
+  description: string;
+  listPrice?: number;
+  category: string;
+  lastUpdated?: string;
+  createdAt: string;
+}
 export type ProjectBusinessUnit = 'Instrata SE' | 'Instrata SW' | 'Instrata NE' | 'Instrata MA';
 export type SubmittalStatus = 'Draft' | 'Submitted' | 'Approved' | 'Revise & Resubmit';
 export type RFIStatus = 'Open' | 'Answered' | 'Closed' | 'Void';
