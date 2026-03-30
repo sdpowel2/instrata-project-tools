@@ -390,8 +390,15 @@ serve(async (req) => {
     });
   }
 
-  const expectedBoard = Deno.env.get('MONDAY_BOARD_ID');
-  if (expectedBoard && String(event.boardId) !== expectedBoard) {
+  const presalesBoardId  = Deno.env.get('MONDAY_PRESALES_BOARD_ID') ?? '136334399';
+  const postsalesBoardId = Deno.env.get('MONDAY_BOARD_ID');
+  const incomingBoardId  = String(event.boardId);
+
+  const isPresales  = incomingBoardId === presalesBoardId;
+  const isPostsales = postsalesBoardId ? incomingBoardId === postsalesBoardId : false;
+
+  if (!isPresales && !isPostsales) {
+    console.log(`[monday-webhook] Ignored board ${incomingBoardId} (not presales=${presalesBoardId} or postsales=${postsalesBoardId})`);
     return new Response(JSON.stringify({ status: 'wrong_board' }), {
       headers: { 'Content-Type': 'application/json' },
     });
@@ -473,17 +480,22 @@ serve(async (req) => {
   const scopeOfWork  = cols['scope of work'] || cols['scope'] || '';
   const businessUnit = VALID_BUSINESS_UNITS.find(bu => bu.toLowerCase() === rawBU.toLowerCase()) || '';
 
-  // ── Route: status changed to "Review" → trigger auto-review ───────────────
-  const currentStatus = colsById[STATUS_COLUMN_ID] || cols['status'] || '';
-  if (currentStatus.toLowerCase() === 'review') {
-    console.log('[monday-webhook] Status is "Review" — triggering auto-review pipeline');
-    return await runAutoReview({
-      supabase, apiToken, itemId, item, projectName, projectNum, client,
-      businessUnit, siteAddress, scopeOfWork, mondayPayload: body,
-    });
+  // ── Route: PRE-SALES board → auto-review when status = "Review" ──────────
+  if (isPresales) {
+    const currentStatus = colsById[STATUS_COLUMN_ID] || cols['status'] || '';
+    if (currentStatus.toLowerCase() === 'review') {
+      console.log('[monday-webhook] Pre-sales board — status is "Review", triggering auto-review');
+      return await runAutoReview({
+        supabase, apiToken, itemId, item, projectName, projectNum, client,
+        businessUnit, siteAddress, scopeOfWork, mondayPayload: body,
+      });
+    }
+    // Pre-sales event but not "Review" status — still upsert the project record
+    console.log(`[monday-webhook] Pre-sales board — status "${currentStatus}", upserting project`);
   }
 
-  // ── Route: create or update project ───────────────────────────────────────
+  // ── Route: POST-SALES board (or pre-sales non-review) → create/update project
+
   const { data: existing } = await supabase
     .from('projects')
     .select('id')
