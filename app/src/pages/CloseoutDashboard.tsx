@@ -10,7 +10,7 @@ import type { PunchStatus, PunchPriority, SignOffStatus, Warranty } from '../typ
 import { exportSignOffPDF } from '../utils/exportSignOffPDF';
 import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
 import { isSupabaseConfigured } from '../lib/supabase';
-import { uploadFile, isUrl } from '../lib/storage';
+import { uploadFile, isUrl, fetchFileBytes } from '../lib/storage';
 
 /* ─── Warranty Edit Modal (sub-component) ─── */
 function WarrantyEditModal({
@@ -186,6 +186,7 @@ export function CloseoutDashboard() {
   // Sign-Off accordion state
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
   const [customItemInputs, setCustomItemInputs] = useState<Record<string, string>>({});
+  const [signOffPreparedBy, setSignOffPreparedBy] = useState('');
 
   // ── Sign-Off: BoM items grouped by room (must be above early return) ──
   const roomGroups = useMemo(() => {
@@ -285,27 +286,22 @@ export function CloseoutDashboard() {
     setPendingFile(null);
   };
 
-  const handleViewDrawing = (d: { fileName: string; fileData: string }) => {
-    if (isUrl(d.fileData)) {
-      // Open URL directly
-      const a = document.createElement('a');
-      a.href = d.fileData;
-      a.download = d.fileName;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      a.click();
-    } else {
-      // Legacy base64 handling
-      const byteChars = atob(d.fileData);
-      const byteNumbers = new Uint8Array(byteChars.length);
-      for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-      const blob = new Blob([byteNumbers], { type: 'application/pdf' });
+  const handleViewDrawing = async (d: { fileName: string; fileData: string }) => {
+    try {
+      // Use authenticated fetch for both private Storage URLs and legacy base64
+      const bytes = await fetchFileBytes(d.fileData);
+      const blob = new Blob([bytes], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = d.fileName;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err: any) {
+      console.error('[Download Drawing]', err);
+      alert('Download failed: ' + err.message);
     }
   };
 
@@ -551,11 +547,21 @@ export function CloseoutDashboard() {
       {/* ═══════════════════ Sign-Off Tab ═══════════════════ */}
       {activeTab === 'signoff' && (
         <>
-          <div className="flex justify-end gap-3 mb-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-text-primary whitespace-nowrap">Prepared By</label>
+              <input
+                value={signOffPreparedBy}
+                onChange={(e) => setSignOffPreparedBy(e.target.value)}
+                placeholder="Instrata"
+                className="input text-sm w-56"
+              />
+            </div>
             <button
               onClick={() => {
                 if (project) {
-                  exportSignOffPDF(project, projectBoM, closeout.signOffSheets || [], project.client, project.client)
+                  const preparedBy = signOffPreparedBy.trim() || 'Instrata';
+                  exportSignOffPDF(project, projectBoM, closeout.signOffSheets || [], preparedBy, project.client)
                     .catch((err) => { console.error('[Sign-Off PDF]', err); alert('PDF export failed: ' + err.message); });
                 }
               }}
@@ -658,11 +664,13 @@ export function CloseoutDashboard() {
                               className="input flex-1 text-sm"
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter' && customItemInputs[room]?.trim()) {
-                                  // Ensure sheet exists for this room
                                   let targetSheet = sheet;
                                   if (!targetSheet) {
                                     addSignOffSheet(closeoutId, { zone: room, system: '', testedBy: '', testedDate: '', witnessedBy: '', status: 'Pending' as SignOffStatus, notes: '', customItems: [] });
-                                    // We'll need to get the sheet on next render; for now just add
+                                    // Zustand set() is synchronous — read the new sheet immediately
+                                    targetSheet = useStore.getState().closeouts
+                                      .find((c) => c.id === closeoutId)?.signOffSheets
+                                      .find((s) => s.zone === room);
                                   }
                                   if (targetSheet) {
                                     addSignOffCustomItem(closeoutId, targetSheet.id, customItemInputs[room].trim());
@@ -677,6 +685,10 @@ export function CloseoutDashboard() {
                                 let targetSheet = sheet;
                                 if (!targetSheet) {
                                   addSignOffSheet(closeoutId, { zone: room, system: '', testedBy: '', testedDate: '', witnessedBy: '', status: 'Pending' as SignOffStatus, notes: '', customItems: [] });
+                                  // Zustand set() is synchronous — read the new sheet immediately
+                                  targetSheet = useStore.getState().closeouts
+                                    .find((c) => c.id === closeoutId)?.signOffSheets
+                                    .find((s) => s.zone === room);
                                 }
                                 if (targetSheet) {
                                   addSignOffCustomItem(closeoutId, targetSheet.id, customItemInputs[room].trim());
