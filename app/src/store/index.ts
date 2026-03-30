@@ -163,6 +163,8 @@ function rfiToRow(r: Partial<RFI>): Record<string, any> {
 function rowToCloseout(r: any): Omit<CloseoutPackage, 'warranties' | 'punchItems' | 'signOffSheets' | 'asBuiltDrawings'> {
   return {
     id: r.id, projectId: r.project_id, status: r.status, createdAt: r.created_at,
+    productManualUrl: r.product_manual_url ?? undefined,
+    productManualName: r.product_manual_name ?? undefined,
   } as any;
 }
 function closeoutToRow(c: Partial<CloseoutPackage>): Record<string, any> {
@@ -171,6 +173,8 @@ function closeoutToRow(c: Partial<CloseoutPackage>): Record<string, any> {
   if (c.projectId !== undefined) row.project_id = c.projectId;
   if (c.status !== undefined) row.status = c.status;
   if (c.createdAt !== undefined) row.created_at = c.createdAt;
+  if (c.productManualUrl !== undefined) row.product_manual_url = c.productManualUrl;
+  if (c.productManualName !== undefined) row.product_manual_name = c.productManualName;
   return row;
 }
 
@@ -456,6 +460,8 @@ interface AppState {
   deleteSignOffCustomItem: (closeoutId: string, sheetId: string, itemId: string) => void;
   addAsBuiltDrawing: (closeoutId: string, d: Omit<AsBuiltDrawing, 'id' | 'closeoutId' | 'uploadedAt'>) => void;
   deleteAsBuiltDrawing: (closeoutId: string, dId: string) => void;
+  setProductManual: (closeoutId: string, url: string, name: string) => void;
+  clearProductManual: (closeoutId: string) => void;
 
   // Manual actions
   addManual: (m: Omit<OwnerManual, 'id' | 'createdAt' | 'sections'>) => string;
@@ -1048,6 +1054,28 @@ export const useStore = create<AppState>((set, get) => ({
       } : x),
     }));
     dbExec(() => supabase.from('as_built_drawings').insert(asBuiltDrawingToRow(drawing)));
+  },
+
+  setProductManual: (closeoutId, url, name) => {
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId
+        ? { ...x, productManualUrl: url, productManualName: name }
+        : x),
+    }));
+    dbExec(() => supabase.from('closeout_packages').update({
+      product_manual_url: url, product_manual_name: name,
+    }).eq('id', closeoutId));
+  },
+
+  clearProductManual: (closeoutId) => {
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId
+        ? { ...x, productManualUrl: undefined, productManualName: undefined }
+        : x),
+    }));
+    dbExec(() => supabase.from('closeout_packages').update({
+      product_manual_url: null, product_manual_name: null,
+    }).eq('id', closeoutId));
   },
 
   deleteAsBuiltDrawing: (closeoutId, dId) => {

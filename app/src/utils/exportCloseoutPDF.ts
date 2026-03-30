@@ -2,6 +2,8 @@ import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pd
 import type { Project, ProjectBoMItem, CloseoutPackage } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
 import { isUrl, fetchFileBytes } from '../lib/storage';
+import { extractBookmarks } from './extractBookmarks';
+import { appendManualSection } from './exportManualsPDF';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431);
@@ -141,6 +143,7 @@ export async function exportCloseoutPDF(
   let punchStartPage = 0;
   let signOffStartPage = 0;
   let asBuiltStartPage = 0;
+  let manualsStartPage = 0;
 
   // ===================== COVER PAGE =====================
   const coverPage = pdfDoc.addPage(PageSizes.Letter);
@@ -221,6 +224,7 @@ export async function exportCloseoutPDF(
     { label: 'Punch List', key: 'punch' },
     { label: 'Test & Sign-Off', key: 'signoff' },
     { label: 'As-Built Drawings', key: 'asbuilt' },
+    ...(closeout.productManualUrl ? [{ label: 'Product Manuals', key: 'manuals' }] : []),
   ];
 
   const tocEntryPositions: { key: string; y: number }[] = [];
@@ -591,6 +595,27 @@ export async function exportCloseoutPDF(
     }
   }
 
+  // ===================== PRODUCT MANUALS SECTION =====================
+  if (closeout.productManualUrl) {
+    try {
+      const manualBytes = await fetchFileBytes(closeout.productManualUrl);
+      const bookmarks   = await extractBookmarks(manualBytes);
+      manualsStartPage  = currentPageNum + 1;
+      currentPageNum    = await appendManualSection(
+        pdfDoc, fontRegular, fontBold, fontItalic,
+        project, manualBytes, bookmarks, currentPageNum,
+      );
+    } catch (err) {
+      console.warn('[Closeout PDF] Could not embed product manuals:', err);
+      const ph = pdfDoc.addPage(PageSizes.Letter);
+      currentPageNum++;
+      manualsStartPage = currentPageNum;
+      ph.drawText('Product Manuals — file could not be embedded.', {
+        x: MARGIN, y: PAGE_H / 2, size: 11, font: fontItalic, color: MID_GRAY,
+      });
+    }
+  }
+
   // ===================== FILL IN TOC PAGE NUMBERS + LINKS =====================
   const allPages = pdfDoc.getPages();
 
@@ -600,6 +625,7 @@ export async function exportCloseoutPDF(
     else if (key === 'punch') pageNum = punchStartPage;
     else if (key === 'signoff') pageNum = signOffStartPage;
     else if (key === 'asbuilt') pageNum = asBuiltStartPage;
+    else if (key === 'manuals') pageNum = manualsStartPage;
 
     if (pageNum > 0) {
       const pageText = String(pageNum);

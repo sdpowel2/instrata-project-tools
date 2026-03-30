@@ -113,6 +113,14 @@ export interface CloseoutPackage {
   punchItems: PunchItem[];
   signOffSheets: SignOffSheet[];
   asBuiltDrawings: AsBuiltDrawing[];
+  productManualUrl?: string;
+  productManualName?: string;
+}
+
+export interface ManualBookmark {
+  title: string;
+  page: number;
+  depth: number;
 }
 
 export interface Warranty {

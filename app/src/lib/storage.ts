@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 
-export type StorageBucket = 'cutsheets' | 'as-builts';
+export type StorageBucket = 'cutsheets' | 'as-builts' | 'manuals';
 
 /**
  * Upload a file to Supabase Storage.

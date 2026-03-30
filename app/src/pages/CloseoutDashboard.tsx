@@ -1,14 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Shield, AlertTriangle, Trash2, Download, CheckCircle2, ClipboardCheck, ChevronDown, ChevronRight, X, Eye, FileText, Upload } from 'lucide-react';
+import { Plus, Shield, AlertTriangle, Trash2, Download, CheckCircle2, ClipboardCheck, ChevronDown, ChevronRight, X, Eye, FileText, Upload, BookOpen } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
 import { LocationProductPicker } from '../components/LocationProductPicker';
-import type { PunchStatus, PunchPriority, SignOffStatus, Warranty } from '../types';
+import type { PunchStatus, PunchPriority, SignOffStatus, Warranty, ManualBookmark } from '../types';
 import { exportSignOffPDF } from '../utils/exportSignOffPDF';
 import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
+import { exportManualsPDF } from '../utils/exportManualsPDF';
+import { extractBookmarks } from '../utils/extractBookmarks';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile, isUrl, fetchFileBytes } from '../lib/storage';
 
@@ -165,7 +167,7 @@ export function CloseoutDashboard() {
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
   // ── All useState hooks ABOVE the early return ──
-  const [activeTab, setActiveTab] = useState<'warranties' | 'punch' | 'signoff' | 'drawings'>('warranties');
+  const [activeTab, setActiveTab] = useState<'warranties' | 'punch' | 'signoff' | 'drawings' | 'manuals'>('warranties');
   const [showAddWarranty, setShowAddWarranty] = useState(false);
   const [showAddPunch, setShowAddPunch] = useState(false);
   const [editingWarranty, setEditingWarranty] = useState<Warranty | null>(null);
@@ -187,6 +189,14 @@ export function CloseoutDashboard() {
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
   const [customItemInputs, setCustomItemInputs] = useState<Record<string, string>>({});
   const [signOffPreparedBy, setSignOffPreparedBy] = useState('');
+
+  // Manuals tab state
+  const setProductManual   = useStore((s) => s.setProductManual);
+  const clearProductManual = useStore((s) => s.clearProductManual);
+  const [manualBookmarks, setManualBookmarks] = useState<ManualBookmark[]>([]);
+  const [manualUploading, setManualUploading] = useState(false);
+  const [manualExporting, setManualExporting] = useState(false);
+  const manualInputRef = useRef<HTMLInputElement>(null);
 
   // ── Sign-Off: BoM items grouped by room (must be above early return) ──
   const roomGroups = useMemo(() => {
@@ -329,6 +339,7 @@ export function CloseoutDashboard() {
     { key: 'punch', label: 'Punch List', icon: AlertTriangle, count: closeout.punchItems.length },
     { key: 'signoff', label: 'Test & Sign-Off', icon: CheckCircle2, count: (closeout.signOffSheets || []).length },
     { key: 'drawings', label: 'As-Built Drawings', icon: ClipboardCheck, count: (closeout.asBuiltDrawings || []).length },
+    { key: 'manuals', label: 'Manuals', icon: BookOpen, count: closeout.productManualUrl ? 1 : 0 },
   ] as const;
 
   return (
@@ -770,6 +781,119 @@ export function CloseoutDashboard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ═══════════════════ Manuals Tab ═══════════════════ */}
+      {activeTab === 'manuals' && (
+        <>
+          {/* Hidden file input */}
+          <input
+            ref={manualInputRef}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file || !projectId) return;
+              setManualUploading(true);
+              try {
+                const url = await uploadFile('manuals', projectId, file);
+                setProductManual(closeoutId, url, file.name);
+                // Parse bookmarks from the uploaded file
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                const bms = await extractBookmarks(bytes);
+                setManualBookmarks(bms);
+              } catch (err: any) {
+                alert('Upload failed: ' + err.message);
+              }
+              setManualUploading(false);
+              e.target.value = '';
+            }}
+          />
+
+          {!closeout.productManualUrl ? (
+            <EmptyState
+              icon={<BookOpen size={48} />}
+              title="No product manuals uploaded"
+              description="Staple all product manuals into a single PDF in Bluebeam, then upload it here. Bookmarks will be parsed automatically for the table of contents."
+              action={
+                <button
+                  onClick={() => manualInputRef.current?.click()}
+                  disabled={manualUploading}
+                  className="btn-primary disabled:opacity-50"
+                >
+                  <Upload size={16} /> {manualUploading ? 'Uploading...' : 'Upload Manual PDF'}
+                </button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {/* File info card */}
+              <div className="bg-white rounded-xl border border-border shadow-sm p-5 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-navy/10 flex items-center justify-center">
+                    <BookOpen size={20} className="text-navy" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-text-primary">{closeout.productManualName}</p>
+                    <p className="text-xs text-text-secondary mt-0.5">{manualBookmarks.length > 0 ? `${manualBookmarks.filter(b => b.depth === 0).length} sections detected` : 'No bookmarks detected'}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      setManualExporting(true);
+                      try {
+                        const bytes = await fetchFileBytes(closeout.productManualUrl!);
+                        const bms   = manualBookmarks.length > 0 ? manualBookmarks : await extractBookmarks(bytes);
+                        if (project) await exportManualsPDF(project, bytes, bms);
+                      } catch (err: any) {
+                        alert('Export failed: ' + err.message);
+                      }
+                      setManualExporting(false);
+                    }}
+                    disabled={manualExporting}
+                    className="btn-secondary text-sm disabled:opacity-50"
+                  >
+                    <Download size={14} /> {manualExporting ? 'Exporting...' : 'Export PDF'}
+                  </button>
+                  <button
+                    onClick={() => manualInputRef.current?.click()}
+                    disabled={manualUploading}
+                    className="btn-secondary text-sm disabled:opacity-50"
+                  >
+                    <Upload size={14} /> {manualUploading ? 'Uploading...' : 'Replace'}
+                  </button>
+                  <button
+                    onClick={() => { clearProductManual(closeoutId); setManualBookmarks([]); }}
+                    className="p-2 rounded-lg hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors"
+                    title="Remove manual"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Bookmark preview */}
+              {manualBookmarks.length > 0 && (
+                <div className="bg-white rounded-xl border border-border shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 bg-navy">
+                    <p className="text-sm font-semibold text-white">Detected Table of Contents</p>
+                    <p className="text-xs text-white/60 mt-0.5">Parsed from PDF bookmarks — will appear in exported document</p>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {manualBookmarks.map((bm, i) => (
+                      <div key={i} className="flex items-center justify-between px-5 py-2.5" style={{ paddingLeft: `${20 + bm.depth * 16}px` }}>
+                        <span className={`text-sm ${bm.depth === 0 ? 'font-semibold text-navy' : 'text-text-secondary'}`}>{bm.title}</span>
+                        {bm.page > 0 && <span className="text-xs font-mono text-text-secondary ml-4 shrink-0">p. {bm.page}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>
