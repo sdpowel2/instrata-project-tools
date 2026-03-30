@@ -339,7 +339,8 @@ export function CloseoutDashboard() {
           className="btn-primary text-sm"
           onClick={() => {
             if (project && closeout) {
-              exportCloseoutPDF(project, closeout, projectBoM, project.client, project.client);
+              exportCloseoutPDF(project, closeout, projectBoM, project.client, project.client)
+                .catch((err) => { console.error('[Closeout PDF]', err); alert('PDF export failed: ' + err.message); });
             }
           }}
         >

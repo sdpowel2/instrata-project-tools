@@ -435,7 +435,7 @@ export async function exportCloseoutPDF(
 
       // Table header
       page.drawRectangle({ x: MARGIN, y: y - 4, width: CONTENT_W, height: 20, color: NAVY });
-      page.drawText('\u2713', { x: COL_CHECK_X + 10, y, size: HEADER_SIZE, font: fontBold, color: WHITE });
+      page.drawText('OK', { x: COL_CHECK_X + 6, y, size: HEADER_SIZE, font: fontBold, color: WHITE });
       page.drawText('Manufacturer', { x: COL_MFR_X + 4, y, size: HEADER_SIZE, font: fontBold, color: WHITE });
       page.drawText('Model', { x: COL_MODEL_X + 4, y, size: HEADER_SIZE, font: fontBold, color: WHITE });
       page.drawText('Description', { x: COL_DESC_X + 4, y, size: HEADER_SIZE, font: fontBold, color: WHITE });
