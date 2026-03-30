@@ -555,7 +555,8 @@ export function CloseoutDashboard() {
             <button
               onClick={() => {
                 if (project) {
-                  exportSignOffPDF(project, projectBoM, closeout.signOffSheets || [], project.client, project.client);
+                  exportSignOffPDF(project, projectBoM, closeout.signOffSheets || [], project.client, project.client)
+                    .catch((err) => { console.error('[Sign-Off PDF]', err); alert('PDF export failed: ' + err.message); });
                 }
               }}
               className="btn-secondary text-sm"
