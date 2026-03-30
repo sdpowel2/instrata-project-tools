@@ -72,30 +72,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Check for an existing session
-    supabase.auth.getSession().then(async ({ data: { session: currentSession } }) => {
-      setSession(currentSession);
-      if (currentSession?.user) {
-        const profile = await fetchProfile(
-          currentSession.user.id,
-          currentSession.user.email ?? '',
-        );
-        setUser(profile);
+    let isMounted = true;
+
+    // Try to restore the session with a timeout so it can't hang forever.
+    async function initSession() {
+      try {
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 4000),
+          ),
+        ]);
+
+        if (!isMounted) return;
+        const currentSession = result.data.session;
+        setSession(currentSession);
+        if (currentSession?.user) {
+          const profile = await fetchProfile(
+            currentSession.user.id,
+            currentSession.user.email ?? '',
+          );
+          if (isMounted) setUser(profile);
+        }
+      } catch {
+        if (!isMounted) return;
+        console.warn('[Auth] Session restore failed or timed out');
+        setSession(null);
+        setUser(null);
       }
-      setLoading(false);
-    });
+      if (isMounted) setLoading(false);
+    }
+
+    initSession();
 
     // Listen for auth changes (login, logout, token refresh)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!isMounted) return;
       setSession(newSession);
       if (newSession?.user) {
         const profile = await fetchProfile(
           newSession.user.id,
           newSession.user.email ?? '',
         );
-        setUser(profile);
+        if (isMounted) setUser(profile);
       } else {
         setUser(null);
       }
@@ -103,13 +124,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => {
+      isMounted = false;
       subscription.unsubscribe();
     };
   }, [configured]);
 
   const signOut = async () => {
     if (configured) {
-      await supabase.auth.signOut();
+      try {
+        await supabase.auth.signOut();
+      } catch (err) {
+        console.warn('[Auth] signOut API failed, clearing local session:', err);
+      }
+      // Always clear Supabase's localStorage keys, even if the API call failed
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith('sb-')) localStorage.removeItem(key);
+      });
     }
     setSession(null);
     setUser(null);

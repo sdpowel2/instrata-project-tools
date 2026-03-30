@@ -1,6 +1,6 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
+import { supabase, resetSupabaseClient } from '../lib/supabase';
 import instrataLogo from '../assets/instrata-logo-white.png';
 
 export function Login() {
@@ -15,7 +15,16 @@ export function Login() {
     setError('');
     setLoading(true);
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    // Clear stale tokens and destroy/recreate the Supabase client.
+    // This guarantees a fresh client with no corrupted internal state
+    // from Navigator Lock timeouts on page refresh.
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('sb-')) localStorage.removeItem(key);
+    });
+    resetSupabaseClient();
+
+    const fresh = (await import('../lib/supabase')).supabase;
+    const { error: authError } = await fresh.auth.signInWithPassword({
       email,
       password,
     });

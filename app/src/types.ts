@@ -1,4 +1,5 @@
 export type ProjectStatus = 'Active' | 'Pending Closeout' | 'Closed';
+export type ProjectBusinessUnit = 'Instrata SE' | 'Instrata SW' | 'Instrata NE' | 'Instrata MA';
 export type SubmittalStatus = 'Draft' | 'Submitted' | 'Approved' | 'Revise & Resubmit';
 export type RFIStatus = 'Open' | 'Answered' | 'Closed' | 'Void';
 export type PunchStatus = 'Open' | 'In Progress' | 'Complete' | 'N/A';
@@ -14,7 +15,9 @@ export interface Project {
   number: string;
   client: string;
   address: string;
+  businessUnit: ProjectBusinessUnit | '';
   status: ProjectStatus;
+  mondayItemId?: number;
   createdAt: string;
   updatedAt: string;
 }

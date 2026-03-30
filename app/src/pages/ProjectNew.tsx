@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store';
-import type { ProjectStatus } from '../types';
+import type { ProjectStatus, ProjectBusinessUnit } from '../types';
 
 export function ProjectNew() {
   const navigate = useNavigate();
   const addProject = useStore((s) => s.addProject);
-  const [form, setForm] = useState({ name: '', number: '', client: '', address: '', status: 'Active' as ProjectStatus });
+  const [form, setForm] = useState({ name: '', number: '', client: '', address: '', businessUnit: '' as ProjectBusinessUnit | '', status: 'Active' as ProjectStatus });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,6 +26,15 @@ export function ProjectNew() {
         </Field>
         <Field label="Client" required>
           <input value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} required className="input" placeholder="Client name" />
+        </Field>
+        <Field label="Business Unit" required>
+          <select value={form.businessUnit} onChange={(e) => setForm({ ...form, businessUnit: e.target.value as ProjectBusinessUnit })} required className="input">
+            <option value="" disabled>Select a business unit</option>
+            <option value="Instrata SE">Instrata SE</option>
+            <option value="Instrata SW">Instrata SW</option>
+            <option value="Instrata NE">Instrata NE</option>
+            <option value="Instrata MA">Instrata MA</option>
+          </select>
         </Field>
         <Field label="Address">
           <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="input" placeholder="Project address" />

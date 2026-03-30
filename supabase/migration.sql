@@ -16,15 +16,17 @@ create table public.profiles (
 
 -- 2. projects
 create table public.projects (
-  id         uuid primary key default gen_random_uuid(),
-  name       text not null default '',
-  number     text not null default '',
-  client     text not null default '',
-  address    text not null default '',
-  status     text not null default 'Active',
-  created_by uuid references public.profiles on delete set null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null default '',
+  number          text not null default '',
+  client          text not null default '',
+  address         text not null default '',
+  business_unit   text not null default '',
+  status          text not null default 'Active',
+  monday_item_id  bigint unique,
+  created_by      uuid references public.profiles on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
 );
 
 -- 3. project_members (junction)

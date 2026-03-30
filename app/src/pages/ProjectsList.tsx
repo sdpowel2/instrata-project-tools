@@ -13,13 +13,16 @@ export function ProjectsList() {
   const projects = useStore((s) => s.projects);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [buFilter, setBuFilter] = useState<string>('All');
 
   const filtered = projects.filter((p) => {
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase()) ||
       p.number.toLowerCase().includes(search.toLowerCase()) ||
-      p.client.toLowerCase().includes(search.toLowerCase());
+      p.client.toLowerCase().includes(search.toLowerCase()) ||
+      (p.businessUnit && p.businessUnit.toLowerCase().includes(search.toLowerCase()));
     const matchStatus = statusFilter === 'All' || p.status === statusFilter;
-    return matchSearch && matchStatus;
+    const matchBU = buFilter === 'All' || p.businessUnit === buFilter;
+    return matchSearch && matchStatus && matchBU;
   }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   return (
@@ -61,6 +64,17 @@ export function ProjectsList() {
             </button>
           ))}
         </div>
+        <select
+          value={buFilter}
+          onChange={(e) => setBuFilter(e.target.value)}
+          className="px-3 py-2 text-sm font-medium rounded-lg border border-border bg-white text-text-secondary focus:outline-none focus:ring-2 focus:ring-navy/20 focus:border-navy"
+        >
+          <option value="All">All Business Units</option>
+          <option value="Instrata SE">Instrata SE</option>
+          <option value="Instrata SW">Instrata SW</option>
+          <option value="Instrata NE">Instrata NE</option>
+          <option value="Instrata MA">Instrata MA</option>
+        </select>
       </div>
 
       {/* Table */}
@@ -71,6 +85,7 @@ export function ProjectsList() {
               <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider">Project</th>
               <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider">Number</th>
               <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider">Client</th>
+              <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider">Business Unit</th>
               <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider">Status</th>
               <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wider">Last Updated</th>
             </tr>
@@ -92,6 +107,7 @@ export function ProjectsList() {
                 </td>
                 <td className="px-6 py-4 text-sm font-mono text-text-secondary">{project.number}</td>
                 <td className="px-6 py-4 text-sm text-text-secondary">{project.client}</td>
+                <td className="px-6 py-4 text-sm text-text-secondary">{project.businessUnit || '—'}</td>
                 <td className="px-6 py-4"><StatusBadge status={project.status} /></td>
                 <td className="px-6 py-4 text-sm text-text-secondary">{project.updatedAt}</td>
               </tr>

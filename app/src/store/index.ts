@@ -34,7 +34,9 @@ const now = () => new Date().toISOString().split('T')[0];
 function rowToProject(r: any): Project {
   return {
     id: r.id, name: r.name, number: r.number, client: r.client,
-    address: r.address, status: r.status, createdAt: r.created_at, updatedAt: r.updated_at,
+    address: r.address, businessUnit: r.business_unit ?? '', status: r.status,
+    mondayItemId: r.monday_item_id ?? undefined,
+    createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<string, any> {
@@ -44,7 +46,9 @@ function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<stri
   if (p.number !== undefined) row.number = p.number;
   if (p.client !== undefined) row.client = p.client;
   if (p.address !== undefined) row.address = p.address;
+  if (p.businessUnit !== undefined) row.business_unit = p.businessUnit;
   if (p.status !== undefined) row.status = p.status;
+  if (p.mondayItemId !== undefined) row.monday_item_id = p.mondayItemId;
   if (p.createdAt !== undefined) row.created_at = p.createdAt;
   if (p.updatedAt !== undefined) row.updated_at = p.updatedAt;
   if ((p as any).createdBy !== undefined) row.created_by = (p as any).createdBy;
@@ -301,11 +305,11 @@ function dbExec(fn: () => Promise<{ error: any }>): void {
 // ---------------------------------------------------------------------------
 
 const seedProjects: Project[] = [
-  { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', status: 'Active', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
-  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', status: 'Active', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
-  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', status: 'Pending Closeout', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
-  { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', status: 'Closed', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
-  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', status: 'Active', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
+  { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', businessUnit: 'Instrata NE', status: 'Active', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
+  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'Active', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
+  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Pending Closeout', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
+  { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', businessUnit: 'Instrata NE', status: 'Closed', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
+  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'Active', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
 ];
 
 const seedProjectBoM: ProjectBoMItem[] = [
@@ -497,20 +501,8 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isLoading: true });
 
     try {
-      // Fetch all tables in parallel
-      const [
-        projectsRes,
-        bomRes,
-        submittalsRes,
-        submittalItemsRes,
-        rfisRes,
-        closeoutsRes,
-        warrantiesRes,
-        punchItemsRes,
-        signOffSheetsRes,
-        asBuiltDrawingsRes,
-        manualsRes,
-      ] = await Promise.all([
+      // Fetch all tables in parallel (with 10s timeout to prevent infinite spinner)
+      const fetchWithTimeout = Promise.all([
         supabase.from('projects').select('*'),
         supabase.from('project_bom_items').select('*'),
         supabase.from('submittals').select('*'),
@@ -523,6 +515,24 @@ export const useStore = create<AppState>((set, get) => ({
         supabase.from('as_built_drawings').select('*'),
         supabase.from('owner_manuals').select('*'),
       ]);
+
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Data fetch timed out')), 10000),
+      );
+
+      const [
+        projectsRes,
+        bomRes,
+        submittalsRes,
+        submittalItemsRes,
+        rfisRes,
+        closeoutsRes,
+        warrantiesRes,
+        punchItemsRes,
+        signOffSheetsRes,
+        asBuiltDrawingsRes,
+        manualsRes,
+      ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
       for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, manualsRes]) {

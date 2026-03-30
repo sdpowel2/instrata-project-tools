@@ -40,6 +40,7 @@ export function ProjectHome() {
               <span className="font-mono">{project.number}</span>
               <span>&middot;</span>
               <span>{project.client}</span>
+              {project.businessUnit && <><span>&middot;</span><span>{project.businessUnit}</span></>}
               {project.address && <><span>&middot;</span><span>{project.address}</span></>}
             </div>
           </div>

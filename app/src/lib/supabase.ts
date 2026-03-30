@@ -29,7 +29,18 @@ function getOrCreateClient(): SupabaseClient {
   return client;
 }
 
-export const supabase = getOrCreateClient();
+export let supabase = getOrCreateClient();
+
+/**
+ * Destroy the cached Supabase client and create a fresh one.
+ * Use this when the client's internal auth state has become corrupted
+ * (e.g. after a Navigator Lock timeout on page refresh).
+ */
+export function resetSupabaseClient(): void {
+  const w = window as any;
+  delete w[GLOBAL_KEY];
+  supabase = getOrCreateClient();
+}
 
 /** Returns true if Supabase is properly configured with real credentials */
 export function isSupabaseConfigured(): boolean {
