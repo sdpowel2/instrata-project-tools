@@ -209,7 +209,6 @@ export async function exportSignOffPDF(
   const COL_DESC_X = COL_MODEL_X + COL_MODEL_W;
   const COL_DESC_W = 175;
   const COL_QTY_X = COL_DESC_X + COL_DESC_W;
-  const COL_QTY_W = 45;
 
   const ROW_H = 22;
   const BODY_SIZE = 11;
@@ -337,7 +336,7 @@ export async function exportSignOffPDF(
 
   // ===================== SAVE & DOWNLOAD =====================
   const pdfBytes = await pdfDoc.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([pdfBytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
 
   const a = document.createElement('a');

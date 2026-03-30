@@ -4,7 +4,6 @@ import letterheadUrl from '../assets/letterhead.pdf?url';
 
 const NAVY      = rgb(0.133, 0.196, 0.431);
 const ORANGE    = rgb(0.965, 0.553, 0.180);
-const WHITE     = rgb(1, 1, 1);
 const LIGHT_GRAY = rgb(0.94, 0.945, 0.96);
 const DARK_GRAY = rgb(0.3, 0.3, 0.35);
 const MID_GRAY  = rgb(0.5, 0.5, 0.55);
@@ -159,7 +158,7 @@ export async function exportManualsPDF(
   await appendManualSection(pdfDoc, fontRegular, fontBold, fontItalic, project, manualBytes, bookmarks, 0);
 
   const pdfBytes = await pdfDoc.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([pdfBytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;

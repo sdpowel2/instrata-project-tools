@@ -7,7 +7,7 @@ import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal'
 import { BoMLocationView } from '../components/BoMLocationView';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
-import type { ProjectBoMItem, ItemCategory, SubmittalItemLocation } from '../types';
+import type { ItemCategory, SubmittalItemLocation } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
 

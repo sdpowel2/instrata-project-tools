@@ -1,6 +1,7 @@
-import { useState, FormEvent } from 'react';
+import { useState } from 'react';
+import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { supabase, resetSupabaseClient } from '../lib/supabase';
+import { resetSupabaseClient } from '../lib/supabase';
 import instrataLogo from '../assets/instrata-logo-white.png';
 
 export function Login() {

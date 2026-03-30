@@ -443,7 +443,7 @@ export async function exportSubmittalPDF(
   console.log('[PDF Export] Saving PDF...');
   const pdfBytes = await pdfDoc.save();
   console.log('[PDF Export] PDF saved, size:', pdfBytes.length, 'bytes');
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([pdfBytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
 
   // Download the PDF directly (avoids popup blocker issues)

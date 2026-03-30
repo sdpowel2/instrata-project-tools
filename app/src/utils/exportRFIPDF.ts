@@ -19,8 +19,6 @@ const CONTENT_W = PAGE_W - MARGIN * 2;
 
 // Content starts below the letterhead header graphic (~top 210pt)
 const CONTENT_TOP = PAGE_H - 215;
-// Content ends above the letterhead footer (~bottom 70pt)
-const CONTENT_BOTTOM = 75;
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
   const r = await fetch(url);
@@ -176,7 +174,7 @@ export async function exportRFIPDF(rfi: RFI, project: Project): Promise<void> {
 
   // ── Save & download ──
   const pdfBytes = await pdfDoc.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([pdfBytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;

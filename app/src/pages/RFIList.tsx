@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, MessageSquareWarning, AlertCircle, Download, Search } from 'lucide-react';
+import { Plus, MessageSquareWarning, Download, Search } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';

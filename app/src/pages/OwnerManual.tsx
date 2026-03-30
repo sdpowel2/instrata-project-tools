@@ -13,11 +13,9 @@ export function OwnerManualPage() {
   const allManuals = useStore((s) => s.manuals);
   const manuals = useMemo(() => allManuals.filter((x) => x.projectId === projectId), [allManuals, projectId]);
   const addManual = useStore((s) => s.addManual);
-  const updateManual = useStore((s) => s.updateManual);
   const addSection = useStore((s) => s.addManualSection);
   const deleteSection = useStore((s) => s.deleteManualSection);
   const addDevice = useStore((s) => s.addManualDevice);
-  const updateDevice = useStore((s) => s.updateManualDevice);
   const deleteDevice = useStore((s) => s.deleteManualDevice);
 
   const [showNewManual, setShowNewManual] = useState(false);

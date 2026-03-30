@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2 } from 'lucide-react';
 import { useStore } from '../store';
@@ -27,7 +27,6 @@ export function SubmittalDetail() {
   const [showAddItem, setShowAddItem] = useState(false);
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [editing, setEditing] = useState(false);
   const [itemForm, setItemForm] = useState({
     manufacturer: '', model: '', description: '', category: 'Display' as ItemCategory,
     qty: 1, notes: '', sortOrder: 0,
@@ -104,11 +103,6 @@ export function SubmittalDetail() {
   };
 
   const sortedItems = [...submittal.items].sort((a, b) => a.sortOrder - b.sortOrder);
-  const grouped = categories.reduce((acc, cat) => {
-    const items = sortedItems.filter((i) => i.category === cat);
-    if (items.length > 0) acc.push({ category: cat, items });
-    return acc;
-  }, [] as { category: string; items: typeof sortedItems }[]);
 
   return (
     <div className="p-8 max-w-[1200px]">

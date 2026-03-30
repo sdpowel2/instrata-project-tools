@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useParams, useNavigate, NavLink, Outlet } from 'react-router-dom';
 import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft, Users } from 'lucide-react';
 import { useStore } from '../store';
-import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
 import { ProjectMembersModal } from '../components/ProjectMembersModal';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -18,7 +17,6 @@ const tabs = [
 export function ProjectHome() {
   const { projectId } = useParams();
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const [teamModalOpen, setTeamModalOpen] = useState(false);
 

@@ -12,7 +12,7 @@ import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
 import { exportManualsPDF } from '../utils/exportManualsPDF';
 import { extractBookmarks } from '../utils/extractBookmarks';
 import { isSupabaseConfigured } from '../lib/supabase';
-import { uploadFile, isUrl, fetchFileBytes } from '../lib/storage';
+import { uploadFile, fetchFileBytes } from '../lib/storage';
 
 /* ─── Warranty Edit Modal (sub-component) ─── */
 function WarrantyEditModal({
@@ -155,8 +155,6 @@ export function CloseoutDashboard() {
   const updatePunchItem = useStore((s) => s.updatePunchItem);
   const deletePunchItem = useStore((s) => s.deletePunchItem);
   const addSignOffSheet = useStore((s) => s.addSignOffSheet);
-  const updateSignOffSheet = useStore((s) => s.updateSignOffSheet);
-  const deleteSignOffSheet = useStore((s) => s.deleteSignOffSheet);
   const addSignOffCustomItem = useStore((s) => s.addSignOffCustomItem);
   const deleteSignOffCustomItem = useStore((s) => s.deleteSignOffCustomItem);
   const addAsBuiltDrawing = useStore((s) => s.addAsBuiltDrawing);
@@ -300,7 +298,7 @@ export function CloseoutDashboard() {
     try {
       // Use authenticated fetch for both private Storage URLs and legacy base64
       const bytes = await fetchFileBytes(d.fileData);
-      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

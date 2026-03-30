@@ -2,9 +2,8 @@ import { create } from 'zustand';
 import type {
   Project, Submittal, SubmittalItem, RFI, CloseoutPackage,
   Warranty, PunchItem, SignOffSheet, OwnerManual, ManualSection, ManualDevice,
-  ProjectBoMItem, AsBuiltDrawing, SignOffCustomItem,
-  ProjectStatus, SubmittalStatus, RFIStatus, PunchStatus, PunchPriority,
-  CloseoutStatus, ItemCategory, ManualSectionType, SignOffStatus,
+  ProjectBoMItem, AsBuiltDrawing,
+  ItemCategory,
   SubmittalItemLocation,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -297,7 +296,7 @@ function manualToRow(m: Partial<OwnerManual>): Record<string, any> {
 // ---------------------------------------------------------------------------
 // Fire-and-forget Supabase helper — logs errors but never blocks
 // ---------------------------------------------------------------------------
-function dbExec(fn: () => Promise<{ error: any }>): void {
+function dbExec(fn: () => PromiseLike<{ error: any }>): void {
   if (!isSupabaseConfigured()) return;
   fn().then(({ error }) => {
     if (error) console.error('[Supabase sync error]', error);
