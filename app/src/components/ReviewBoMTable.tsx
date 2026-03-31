@@ -25,9 +25,21 @@ type FilterMode = 'all' | 'flagged';
 
 // ─── Flag matching helpers ───────────────────────────────────────────────────
 
-/** Get flags for an equipment row by model number match */
-function getFlagsForModel(model: string, flagsByRef: Map<string, ReviewFlag[]>): ReviewFlag[] {
-  return flagsByRef.get(model.trim().toLowerCase()) ?? [];
+/** Get flags for an equipment row by model + location compound key */
+function getFlagsForEquip(row: CsvRow, flagsByRef: Map<string, ReviewFlag[]>): ReviewFlag[] {
+  const results: ReviewFlag[] = [];
+  const model = row.modelNumber.trim();
+  const loc = row.location || 'Unassigned';
+  // Location-qualified lookup (matches engine's "model @ location" format)
+  const locKey = `${model} @ ${loc}`.toLowerCase();
+  const locFlags = flagsByRef.get(locKey);
+  if (locFlags) results.push(...locFlags);
+  // Also check plain model key for backward compatibility and rules that
+  // don't use location-qualified refs (e.g. MISSING_ROOM_LOCATION)
+  const plainFlags = flagsByRef.get(model.toLowerCase());
+  if (plainFlags) results.push(...plainFlags);
+  // Deduplicate by flag ID
+  return [...new Map(results.map(f => [f.id, f])).values()];
 }
 
 /** Get flags for a labor row by labor type + location compound key */
@@ -112,7 +124,7 @@ function computeNodeOwn(
   let flagCount = 0;
   let worst: string | null = null;
   for (const r of equip) {
-    const fl = getFlagsForModel(r.modelNumber, flagsByRef);
+    const fl = getFlagsForEquip(r, flagsByRef);
     flagCount += fl.length;
     const w = worstSeverity(fl);
     if (w && (!worst || SEVERITY_WEIGHT[w] < SEVERITY_WEIGHT[worst])) worst = w;
@@ -472,7 +484,7 @@ function LocationNodeView({
               <tbody className="divide-y divide-border">
                 {filteredEquip.map((row, idx) => {
                   const rowKey = `equip-${node.fullPath}-${idx}`;
-                  const rowFlags = getFlagsForModel(row.modelNumber, flagsByRef);
+                  const rowFlags = getFlagsForEquip(row, flagsByRef);
                   const expanded = expandedKeys.has(rowKey);
                   const qty = row.quantity ?? 0;
                   const extCost = (row.unitCost ?? 0) * qty;

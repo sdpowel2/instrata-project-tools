@@ -62,13 +62,20 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find identical siblings: same ruleId + same description (exact same issue)
+  // Find identical siblings across the ENTIRE quote (different flag IDs, same issue).
+  // lineItemRef is location-qualified (e.g. "MODEL @ Location"), so extract the base
+  // model/item by splitting on " @ " to match the same item across all locations.
+  // Matches on ruleId + description (exact same issue) + same base item.
+  const baseRef = (flag.lineItemRef ?? '').split(' @ ')[0].trim().toLowerCase();
   const identicalSiblings = allFlags
-    ? allFlags.filter(f =>
-        f.id !== flag.id &&
-        f.ruleId === flag.ruleId &&
-        f.description === flag.description,
-      )
+    ? allFlags.filter(f => {
+        if (f.id === flag.id) return false;
+        if (f.ruleId !== flag.ruleId) return false;
+        if (f.description !== flag.description) return false;
+        // Same base item (model/labor type before " @ ")
+        const otherBase = (f.lineItemRef ?? '').split(' @ ')[0].trim().toLowerCase();
+        return otherBase === baseRef;
+      })
     : [];
   // Only show bulk actions when there are open/actionable siblings
   const openSiblings = identicalSiblings.filter(f => f.status === 'open' || f.status === 'commented');
