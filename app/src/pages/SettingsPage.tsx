@@ -170,18 +170,35 @@ function ReviewConfigSection() {
 
 // ─── Labor Rates Section ──────────────────────────────────────────────────────
 
+// Standard D-Tools labor types — used for quick-seed
+const DTOOLS_LABOR_TYPES = [
+  'Engineering', 'Mobilization', 'Training', 'Install',
+  'Commissioning', 'Programming', 'Cabling', 'Premiere Protect',
+];
+
 function LaborRatesSection() {
-  const [rates, setRates] = useState<LaborRate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [newType, setNewType] = useState('');
-  const [newRate, setNewRate] = useState('');
+  const [rates, setRates]         = useState<LaborRate[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [newType, setNewType]       = useState('');
+  const [newCost, setNewCost]       = useState('');
+  const [newPrice, setNewPrice]     = useState('');
   const [newCeiling, setNewCeiling] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding]       = useState(false);
+  const [addError, setAddError]   = useState<string | null>(null);
+  const [seeding, setSeeding]     = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('labor_rates').select('*').order('labor_type');
+    setLoadError(null);
+    const { data, error } = await supabase.from('labor_rates').select('*').order('labor_type');
+    if (error) {
+      setLoadError(error.message);
+      setLoading(false);
+      return;
+    }
     setRates((data ?? []).map((r: any) => ({
       id: r.id, laborType: r.labor_type, ratePerHour: r.rate_per_hour,
+      costPerHour: r.cost_per_hour ?? 0, pricePerHour: r.price_per_hour ?? 0,
       hoursCeiling: r.hours_ceiling ?? undefined, isActive: r.is_active, updatedAt: r.updated_at,
     })));
     setLoading(false);
@@ -190,16 +207,40 @@ function LaborRatesSection() {
   useEffect(() => { load(); }, [load]);
 
   const handleAdd = async () => {
-    if (!newType.trim() || !newRate) return;
+    if (!newType.trim()) return;
     setAdding(true);
+    setAddError(null);
     const { error } = await supabase.from('labor_rates').insert({
-      labor_type: newType.trim(),
-      rate_per_hour: parseFloat(newRate),
-      hours_ceiling: newCeiling ? parseFloat(newCeiling) : null,
-      is_active: true,
+      labor_type:     newType.trim(),
+      rate_per_hour:  newCost ? parseFloat(newCost) : 0,
+      cost_per_hour:  newCost ? parseFloat(newCost) : 0,
+      price_per_hour: newPrice ? parseFloat(newPrice) : 0,
+      hours_ceiling:  newCeiling ? parseFloat(newCeiling) : null,
+      is_active:      true,
     });
-    if (!error) { setNewType(''); setNewRate(''); setNewCeiling(''); await load(); }
+    if (error) {
+      setAddError(error.message);
+    } else {
+      setNewType(''); setNewCost(''); setNewPrice(''); setNewCeiling('');
+      await load();
+    }
     setAdding(false);
+  };
+
+  // Quick-seed all standard D-Tools labor types at $0/hr — rates can be updated after
+  const handleSeed = async () => {
+    setSeeding(true);
+    setAddError(null);
+    const existing = new Set(rates.map(r => r.laborType.toLowerCase()));
+    const toInsert = DTOOLS_LABOR_TYPES
+      .filter(t => !existing.has(t.toLowerCase()))
+      .map(t => ({ labor_type: t, rate_per_hour: 0, is_active: true }));
+    if (toInsert.length > 0) {
+      const { error } = await supabase.from('labor_rates').insert(toInsert);
+      if (error) setAddError(error.message);
+      else await load();
+    }
+    setSeeding(false);
   };
 
   const handleToggle = async (id: string, isActive: boolean) => {
@@ -219,72 +260,173 @@ function LaborRatesSection() {
     setRates(prev => prev.map(r => r.id === id ? { ...r, hoursCeiling: val ?? undefined } : r));
   };
 
+  const handleUpdateRate = async (id: string, rate: string) => {
+    const val = rate ? parseFloat(rate) : 0;
+    await supabase.from('labor_rates').update({ rate_per_hour: val }).eq('id', id);
+    setRates(prev => prev.map(r => r.id === id ? { ...r, ratePerHour: val } : r));
+  };
+
+  const handleUpdateCostRate = async (id: string, val: string) => {
+    const n = val ? parseFloat(val) : 0;
+    await supabase.from('labor_rates').update({ cost_per_hour: n }).eq('id', id);
+    setRates(prev => prev.map(r => r.id === id ? { ...r, costPerHour: n } : r));
+  };
+
+  const handleUpdatePriceRate = async (id: string, val: string) => {
+    const n = val ? parseFloat(val) : 0;
+    await supabase.from('labor_rates').update({ price_per_hour: n }).eq('id', id);
+    setRates(prev => prev.map(r => r.id === id ? { ...r, pricePerHour: n } : r));
+  };
+
   if (loading) return <div className="py-6 flex justify-center"><Loader2 size={18} className="animate-spin text-text-secondary" /></div>;
+
+  if (loadError) return (
+    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+      <span>Failed to load labor rates: {loadError}</span>
+      <button onClick={load} className="underline hover:no-underline ml-auto">Retry</button>
+    </div>
+  );
 
   return (
     <div className="space-y-3">
+
+      {/* Quick-seed banner */}
       {rates.length === 0 && (
-        <p className="text-sm text-text-secondary">No labor types configured yet.</p>
-      )}
-      {rates.map(rate => (
-        <div key={rate.id} className={`flex items-center gap-3 p-3 rounded-lg border ${rate.isActive ? 'border-border bg-surface/30' : 'border-border/40 bg-gray-50 opacity-60'}`}>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-text-primary">{rate.laborType}</div>
-            <div className="text-xs text-text-secondary">${rate.ratePerHour.toFixed(2)}/hr</div>
-          </div>
-          <div className="flex items-center gap-1">
-            <input
-              type="number"
-              defaultValue={rate.hoursCeiling ?? ''}
-              placeholder="hr ceiling"
-              onBlur={e => handleUpdateCeiling(rate.id, e.target.value)}
-              className="w-24 text-xs border border-border rounded px-2 py-1 text-center focus:outline-none focus:ring-1 focus:ring-navy/20"
-            />
-            <span className="text-xs text-text-secondary">hrs max</span>
-          </div>
+        <div className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">No labor types yet. Seed the standard D-Tools types to get started.</p>
           <button
-            onClick={() => handleToggle(rate.id, !rate.isActive)}
-            className={`text-xs px-2 py-1 rounded border transition-colors ${rate.isActive ? 'border-gray-300 text-gray-500 hover:bg-gray-100' : 'border-navy/30 text-navy hover:bg-navy/5'}`}
+            onClick={handleSeed}
+            disabled={seeding}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors ml-3 shrink-0"
           >
-            {rate.isActive ? 'Disable' : 'Enable'}
-          </button>
-          <button onClick={() => handleDelete(rate.id)} className="text-red-400 hover:text-red-600 transition-colors">
-            <Trash2 size={14} />
+            {seeding ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+            Seed D-Tools Types
           </button>
         </div>
-      ))}
+      )}
+      {rates.length > 0 && DTOOLS_LABOR_TYPES.some(t => !rates.find(r => r.laborType.toLowerCase() === t.toLowerCase())) && (
+        <button
+          onClick={handleSeed}
+          disabled={seeding}
+          className="text-xs text-navy hover:underline disabled:opacity-50"
+        >
+          {seeding ? 'Adding...' : '+ Add missing D-Tools types'}
+        </button>
+      )}
+
+      {rates.map(rate => {
+        const marginPct = rate.pricePerHour > 0
+          ? Math.round((rate.pricePerHour - rate.costPerHour) / rate.pricePerHour * 100)
+          : null;
+        const marginColor = marginPct === null
+          ? 'text-text-secondary bg-surface'
+          : marginPct >= 30 ? 'text-green-700 bg-green-50'
+          : marginPct >= 20 ? 'text-amber-700 bg-amber-50'
+          : 'text-red-700 bg-red-50';
+
+        return (
+          <div key={rate.id} className={`p-3 rounded-lg border ${rate.isActive ? 'border-border bg-surface/30' : 'border-border/40 bg-gray-50 opacity-60'}`}>
+            {/* Row 1: name + margin badge + actions */}
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm font-medium text-text-primary flex-1 min-w-0 truncate">{rate.laborType}</span>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${marginColor}`}>
+                {marginPct !== null ? `${marginPct}% margin` : 'No rates set'}
+              </span>
+              <button
+                onClick={() => handleToggle(rate.id, !rate.isActive)}
+                className={`text-xs px-2 py-1 rounded border transition-colors ${rate.isActive ? 'border-gray-300 text-gray-500 hover:bg-gray-100' : 'border-navy/30 text-navy hover:bg-navy/5'}`}
+              >
+                {rate.isActive ? 'Disable' : 'Enable'}
+              </button>
+              <button onClick={() => handleDelete(rate.id)} className="text-red-400 hover:text-red-600 transition-colors">
+                <Trash2 size={14} />
+              </button>
+            </div>
+            {/* Row 2: cost/hr, price/hr, hrs max */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary w-14 shrink-0">Cost/hr</span>
+                <span className="text-xs text-text-secondary">$</span>
+                <input
+                  type="number"
+                  defaultValue={rate.costPerHour || ''}
+                  placeholder="0.00"
+                  onBlur={e => handleUpdateCostRate(rate.id, e.target.value)}
+                  className="w-20 text-xs border border-border rounded px-2 py-1 text-center focus:outline-none focus:ring-1 focus:ring-navy/20"
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary w-14 shrink-0">Price/hr</span>
+                <span className="text-xs text-text-secondary">$</span>
+                <input
+                  type="number"
+                  defaultValue={rate.pricePerHour || ''}
+                  placeholder="0.00"
+                  onBlur={e => handleUpdatePriceRate(rate.id, e.target.value)}
+                  className="w-20 text-xs border border-border rounded px-2 py-1 text-center focus:outline-none focus:ring-1 focus:ring-navy/20"
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary w-14 shrink-0">Hrs max</span>
+                <input
+                  type="number"
+                  defaultValue={rate.hoursCeiling ?? ''}
+                  placeholder="—"
+                  onBlur={e => handleUpdateCeiling(rate.id, e.target.value)}
+                  className="w-20 text-xs border border-border rounded px-2 py-1 text-center focus:outline-none focus:ring-1 focus:ring-navy/20"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Add error */}
+      {addError && (
+        <div className="p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">{addError}</div>
+      )}
 
       {/* Add new */}
-      <div className="flex items-center gap-2 pt-2">
-        <input
-          type="text"
-          value={newType}
-          onChange={e => setNewType(e.target.value)}
-          placeholder="Labor type name"
-          className="input flex-1 text-sm"
-        />
-        <input
-          type="number"
-          value={newRate}
-          onChange={e => setNewRate(e.target.value)}
-          placeholder="$/hr"
-          className="input w-24 text-sm"
-        />
-        <input
-          type="number"
-          value={newCeiling}
-          onChange={e => setNewCeiling(e.target.value)}
-          placeholder="max hrs"
-          className="input w-24 text-sm"
-        />
-        <button
-          onClick={handleAdd}
-          disabled={adding || !newType.trim() || !newRate}
-          className="btn-primary flex items-center gap-1 disabled:opacity-50"
-        >
-          {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-          Add
-        </button>
+      <div className="pt-2 border-t border-border">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            value={newType}
+            onChange={e => setNewType(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAdd()}
+            placeholder="Labor type name"
+            className="input flex-1 min-w-[140px] text-sm"
+          />
+          <input
+            type="number"
+            value={newCost}
+            onChange={e => setNewCost(e.target.value)}
+            placeholder="Cost/hr $"
+            className="input w-28 text-sm"
+          />
+          <input
+            type="number"
+            value={newPrice}
+            onChange={e => setNewPrice(e.target.value)}
+            placeholder="Price/hr $"
+            className="input w-28 text-sm"
+          />
+          <input
+            type="number"
+            value={newCeiling}
+            onChange={e => setNewCeiling(e.target.value)}
+            placeholder="Max hrs"
+            className="input w-24 text-sm"
+          />
+          <button
+            onClick={handleAdd}
+            disabled={adding || !newType.trim()}
+            className="btn-primary flex items-center gap-1 disabled:opacity-50 shrink-0"
+          >
+            {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            Add
+          </button>
+        </div>
       </div>
     </div>
   );

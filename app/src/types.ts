@@ -48,6 +48,8 @@ export interface LaborRate {
   id: string;
   laborType: string;
   ratePerHour: number;
+  costPerHour: number;
+  pricePerHour: number;
   hoursCeiling?: number;
   isActive: boolean;
   updatedAt: string;

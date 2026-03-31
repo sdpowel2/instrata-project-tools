@@ -1307,7 +1307,7 @@ export const useStore = create<AppState>((set, get) => ({
     // 1. Fetch review config, labor rates, and product catalog in parallel
     const [configRes, laborRes, catalogRes] = await Promise.all([
       supabase.from('review_config').select('key,value'),
-      supabase.from('labor_rates').select('labor_type,hours_ceiling').eq('is_active', true),
+      supabase.from('labor_rates').select('labor_type,cost_per_hour,price_per_hour,hours_ceiling').eq('is_active', true),
       supabase.from('product_catalog').select('model_number,list_price'),
     ]);
 

@@ -41,14 +41,17 @@ export interface EngineFlag {
 export interface ReviewConfig {
   marginFloorProject:   number;
   marginFloorPhase:     number;
+  marginFloorLabor:     number;
   costDeviationPct:     number;
   preferredVendors:     string[];
   freeItemModels:       string[];
 }
 
 export interface LaborRate {
-  labor_type:    string;
-  hours_ceiling: number | null;
+  labor_type:     string;
+  cost_per_hour:  number | null;
+  price_per_hour: number | null;
+  hours_ceiling:  number | null;
 }
 
 export interface CatalogItem {
@@ -278,6 +281,35 @@ export function runRules(
     }
   }
 
+  // ── MODERATE: Labor Margin Below Floor ───────────────────────────────────
+  // Uses cost_per_hour and price_per_hour from labor_rates × hours per type
+  const laborRateMap = new Map<string, { cost: number; price: number }>();
+  for (const rate of laborRates) {
+    laborRateMap.set(rate.labor_type.toLowerCase(), {
+      cost:  rate.cost_per_hour  ?? 0,
+      price: rate.price_per_hour ?? 0,
+    });
+  }
+  let totalLaborCost = 0, totalLaborPrice = 0;
+  for (const r of laborRows) {
+    if (!r.laborType || !r.laborHours) continue;
+    const rate = laborRateMap.get(r.laborType.toLowerCase());
+    if (rate) {
+      totalLaborCost  += r.laborHours * rate.cost;
+      totalLaborPrice += r.laborHours * rate.price;
+    }
+  }
+  if (totalLaborPrice > 0) {
+    const laborMargin = ((totalLaborPrice - totalLaborCost) / totalLaborPrice) * 100;
+    if (laborMargin < config.marginFloorLabor) {
+      flag('LABOR_MARGIN_BELOW_FLOOR', 'moderate', 'labor',
+        'Labor Margin Below Floor',
+        `Overall labor margin is ${laborMargin.toFixed(1)}%, below the configured ${config.marginFloorLabor}% floor. ` +
+        `(Cost: $${totalLaborCost.toFixed(0)} / Price: $${totalLaborPrice.toFixed(0)})`,
+      );
+    }
+  }
+
   // ── MODERATE: Phase / Location Margin Below Floor ─────────────────────────
   // Group by top-level location (floor/area before the first ": ")
   const locationGroups = new Map<string, { price: number; cost: number }>();
@@ -385,6 +417,7 @@ export function buildReviewConfig(configMap: Record<string, string>): ReviewConf
   return {
     marginFloorProject: parseFloat(configMap['margin_floor_project'] ?? '30'),
     marginFloorPhase:   parseFloat(configMap['margin_floor_phase']   ?? '25'),
+    marginFloorLabor:   parseFloat(configMap['margin_floor_labor']   ?? '25'),
     costDeviationPct:   parseFloat(configMap['cost_deviation_pct']   ?? '15'),
     preferredVendors:   (configMap['preferred_vendors'] ?? '').split(',').map(s => s.trim()).filter(Boolean),
     freeItemModels:     (configMap['free_item_models']  ?? '').split(',').map(s => s.trim()).filter(Boolean),
