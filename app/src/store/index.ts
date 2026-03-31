@@ -1357,10 +1357,12 @@ export const useStore = create<AppState>((set, get) => ({
     console.log('[review] Run number:', runNumber, '| Resubmission:', isResubmission);
 
     // 4. Diff against prior run flags if this is a resubmission
+    // Also fetch full prior flag details to carry forward resolved/waived status.
+    let priorFlagMap: Map<string, { status: string; description: string; manager_comment: string | null; resolved_by: string | null; resolved_at: string | null }> | null = null;
     if (isResubmission && latestPrior) {
       const { data: priorFlags } = await supabase
         .from('review_flags')
-        .select('rule_id,line_item_ref,id')
+        .select('rule_id,line_item_ref,id,status,description,manager_comment,resolved_by,resolved_at')
         .eq('review_run_id', latestPrior.id);
 
       if (priorFlags?.length) {
@@ -1371,6 +1373,18 @@ export const useStore = create<AppState>((set, get) => ({
           .map((pf: any) => pf.id);
         if (resolvedIds.length) {
           await supabase.from('review_flags').update({ diff_status: 'resolved' }).in('id', resolvedIds);
+        }
+        // Build lookup for carrying forward resolved/waived status
+        priorFlagMap = new Map();
+        for (const pf of priorFlags) {
+          const key = `${pf.rule_id}::${pf.line_item_ref ?? ''}`;
+          priorFlagMap.set(key, {
+            status: pf.status,
+            description: pf.description,
+            manager_comment: pf.manager_comment,
+            resolved_by: pf.resolved_by,
+            resolved_at: pf.resolved_at,
+          });
         }
       } else {
         flags = flags.map(f => ({ ...f, diff_status: 'new' as const }));
@@ -1418,22 +1432,39 @@ export const useStore = create<AppState>((set, get) => ({
     }
     console.log('[review] review_run created:', runData.id);
 
-    // 7. Insert flags
+    // 7. Insert flags — carry forward resolved/waived status for recurring flags
+    //    whose description is identical (same exact issue, not just same rule).
     if (flags.length > 0) {
-      const flagRows = flags.map(f => ({
-        review_run_id: runData.id,
-        rule_id:       f.rule_id,
-        severity:      f.severity,
-        category:      f.category,
-        flag_name:     f.flag_name,
-        description:   f.description,
-        line_item_ref: f.line_item_ref,
-        diff_status:   f.diff_status,
-        status:        'open',
-      }));
+      const flagRows = flags.map(f => {
+        const row: Record<string, any> = {
+          review_run_id: runData.id,
+          rule_id:       f.rule_id,
+          severity:      f.severity,
+          category:      f.category,
+          flag_name:     f.flag_name,
+          description:   f.description,
+          line_item_ref: f.line_item_ref,
+          diff_status:   f.diff_status,
+          status:        'open',
+        };
+        // Carry forward resolved/waived from prior run if the issue is unchanged
+        if (priorFlagMap && f.diff_status === 'recurring') {
+          const key = `${f.rule_id}::${f.line_item_ref ?? ''}`;
+          const prior = priorFlagMap.get(key);
+          if (prior && (prior.status === 'resolved' || prior.status === 'waived')
+              && prior.description === f.description) {
+            row.status          = prior.status;
+            row.manager_comment = prior.manager_comment;
+            row.resolved_by     = prior.resolved_by;
+            row.resolved_at     = prior.resolved_at;
+          }
+        }
+        return row;
+      });
       const { error: flagError } = await supabase.from('review_flags').insert(flagRows);
       if (flagError) console.error('[review] Failed to insert flags:', flagError);
-      else console.log('[review] Inserted', flagRows.length, 'flags');
+      else console.log('[review] Inserted', flagRows.length, 'flags',
+        `(${flagRows.filter(r => r.status !== 'open').length} carried forward)`);
     }
 
     // 8. Update local store state

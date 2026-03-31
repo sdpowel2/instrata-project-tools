@@ -13,6 +13,7 @@ import { ReviewQuoteView } from '../components/ReviewBoMTable';
 import { parseCsv, mapRow } from '../utils/reviewEngine';
 import type { CsvRow } from '../utils/reviewEngine';
 import { supabase } from '../lib/supabase';
+import { generateReviewSummaryPdf } from '../utils/reviewReport';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -277,6 +278,7 @@ function CsvDropZone({
 export function AutoReviewPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { session, isAdmin } = useAuth();
+  const project = useStore(s => s.projects.find(p => p.id === projectId));
   const reviewRuns = useStore(s => s.reviewRuns);
   const updateRunStatus = useStore(s => s.updateRunStatus);
   const updateFlagStatus = useStore(s => s.updateFlagStatus);
@@ -348,6 +350,20 @@ export function AutoReviewPage() {
     if (!latestRun) return;
     setUpdatingRun(true);
     await updateRunStatus(latestRun.id, newStatus, session?.user?.id);
+    // Generate and download review summary PDF
+    if ((newStatus === 'approved' || newStatus === 'changes_requested') && project) {
+      try {
+        generateReviewSummaryPdf({
+          projectName: project.name,
+          projectNumber: project.number,
+          run: latestRun,
+          flags,
+          action: newStatus,
+        });
+      } catch (err) {
+        console.warn('[review] PDF generation failed:', err);
+      }
+    }
     setUpdatingRun(false);
   };
 

@@ -272,7 +272,44 @@ function FlagDot({
   onClick: () => void;
 }) {
   if (flags.length === 0) return <span className="text-green-400 text-xs">✓</span>;
-  const worst = worstSeverity(flags)!;
+
+  const openFlags = flags.filter(f => f.status === 'open' || f.status === 'commented');
+  const allResolved = openFlags.length === 0 && flags.some(f => f.status === 'resolved');
+  const allWaived = openFlags.length === 0 && flags.every(f => f.status === 'waived');
+  const allHandled = openFlags.length === 0;
+
+  // All flags resolved → green check
+  if (allResolved && !allWaived) {
+    return (
+      <button onClick={onClick} className="inline-flex items-center gap-1">
+        {expanded ? <ChevronDown size={12} className="text-text-secondary" /> : <ChevronRight size={12} className="text-text-secondary" />}
+        <span className="text-green-500 text-xs font-bold">✓</span>
+      </button>
+    );
+  }
+
+  // All flags waived → purple check
+  if (allWaived) {
+    return (
+      <button onClick={onClick} className="inline-flex items-center gap-1">
+        {expanded ? <ChevronDown size={12} className="text-text-secondary" /> : <ChevronRight size={12} className="text-text-secondary" />}
+        <span className="text-purple-500 text-xs font-bold">✓</span>
+      </button>
+    );
+  }
+
+  // Mix of handled + open, or all handled (resolved + waived mix)
+  if (allHandled) {
+    return (
+      <button onClick={onClick} className="inline-flex items-center gap-1">
+        {expanded ? <ChevronDown size={12} className="text-text-secondary" /> : <ChevronRight size={12} className="text-text-secondary" />}
+        <span className="text-green-500 text-xs font-bold">✓</span>
+      </button>
+    );
+  }
+
+  // Open flags remain — show severity badge with open count only
+  const worst = worstSeverity(openFlags)!;
   const dot = SEVERITY_DOT[worst];
   return (
     <button onClick={onClick} className="inline-flex items-center gap-1">
@@ -281,7 +318,7 @@ function FlagDot({
         : <ChevronRight size={12} className="text-text-secondary" />
       }
       <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-white text-[10px] font-bold ring-2 ${dot.bg} ${dot.ring}`}>
-        {flags.length}
+        {openFlags.length}
       </span>
     </button>
   );
