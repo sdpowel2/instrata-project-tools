@@ -176,14 +176,18 @@ export function runRules(
   const realEquip  = equipRows.filter(r => r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC');
 
   // ── HIGH: Project Margin Below Floor ─────────────────────────────────────
-  const totalPrice = equipRows.reduce((s, r) => s + (r.unitPrice ?? 0) * (r.quantity ?? 0), 0);
-  const totalCost  = equipRows.reduce((s, r) => s + (r.unitCost  ?? 0) * (r.quantity ?? 0), 0);
+  // Includes both equipment and labor rows so the margin reflects the full
+  // project (blended equipment + labor), not just the equipment sell.
+  const allBillable = [...equipRows, ...laborRows];
+  const totalPrice  = allBillable.reduce((s, r) => s + (r.unitPrice ?? 0) * (r.quantity ?? 0), 0);
+  const totalCost   = allBillable.reduce((s, r) => s + (r.unitCost  ?? 0) * (r.quantity ?? 0), 0);
   if (totalPrice > 0) {
     const margin = ((totalPrice - totalCost) / totalPrice) * 100;
     if (margin < config.marginFloorProject) {
       flag('PROJECT_MARGIN_BELOW_FLOOR', 'high', 'margin',
         'Project Margin Below Floor',
-        `Project margin is ${margin.toFixed(1)}%, below the configured ${config.marginFloorProject}% floor.`);
+        `Project margin is ${margin.toFixed(1)}%, below the configured ${config.marginFloorProject}% floor. ` +
+        `(Equipment + Labor — Cost: $${totalCost.toFixed(0)} / Price: $${totalPrice.toFixed(0)})`);
     }
   }
 
@@ -311,9 +315,10 @@ export function runRules(
   }
 
   // ── MODERATE: Phase / Location Margin Below Floor ─────────────────────────
-  // Group by top-level location (floor/area before the first ": ")
+  // Group by top-level location (floor/area before the first ": ").
+  // Includes labor rows so per-area margin reflects blended equipment + labor.
   const locationGroups = new Map<string, { price: number; cost: number }>();
-  for (const r of equipRows) {
+  for (const r of allBillable) {
     const topLevel = r.location.split(':')[0].trim() || 'Unknown';
     const g = locationGroups.get(topLevel) ?? { price: 0, cost: 0 };
     g.price += (r.unitPrice ?? 0) * (r.quantity ?? 0);
