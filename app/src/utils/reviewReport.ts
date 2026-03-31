@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import type { ReviewFlag, ReviewRun } from '../types';
+import type { CsvRow } from './reviewEngine';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,35 @@ function severityLabel(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/** Build a map from model number (lowercase) → list of locations with quantities */
+function buildLocationMap(csvRows: CsvRow[]): Map<string, { location: string; qty: number }[]> {
+  const map = new Map<string, { location: string; qty: number }[]>();
+  for (const r of csvRows) {
+    if (r.itemType.toLowerCase() !== 'product') continue;
+    if (!r.modelNumber || r.modelNumber === 'S&H' || r.modelNumber === 'MISC') continue;
+    const key = r.modelNumber.trim().toLowerCase();
+    const loc = r.location || 'Unassigned';
+    const qty = r.quantity ?? 0;
+    const arr = map.get(key) ?? [];
+    arr.push({ location: loc, qty });
+    map.set(key, arr);
+  }
+  // Also handle labor refs (format: "laborType @ location")
+  for (const r of csvRows) {
+    if (r.itemType.toLowerCase() !== 'labor') continue;
+    const types = r.laborTypes?.length ? r.laborTypes : [r.modelNumber || ''];
+    const loc = r.location || 'Unassigned';
+    for (const lt of types) {
+      if (!lt) continue;
+      const compoundKey = `${lt.trim()} @ ${loc}`.toLowerCase();
+      const arr = map.get(compoundKey) ?? [];
+      arr.push({ location: loc, qty: r.quantity ?? 1 });
+      map.set(compoundKey, arr);
+    }
+  }
+  return map;
+}
+
 // ─── PDF Builder ─────────────────────────────────────────────────────────────
 
 interface ReportOptions {
@@ -22,11 +52,13 @@ interface ReportOptions {
   projectNumber: string;
   run: ReviewRun;
   flags: ReviewFlag[];
+  csvRows: CsvRow[];
   action: 'approved' | 'changes_requested';
 }
 
 export function generateReviewSummaryPdf(opts: ReportOptions): void {
-  const { projectName, projectNumber, run, flags, action } = opts;
+  const { projectName, projectNumber, run, flags, csvRows, action } = opts;
+  const locationMap = buildLocationMap(csvRows);
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 15;
@@ -115,7 +147,9 @@ export function generateReviewSummaryPdf(opts: ReportOptions): void {
       // Estimate space needed
       const descLines = doc.splitTextToSize(flag.description, contentWidth - 10);
       const commentLines = flag.managerComment ? doc.splitTextToSize(`Note: ${flag.managerComment}`, contentWidth - 10) : [];
-      const needed = 14 + descLines.length * 3.5 + commentLines.length * 3.5;
+      const refKey = flag.lineItemRef?.trim().toLowerCase() ?? '';
+      const locCount = (locationMap.get(refKey) ?? []).length;
+      const needed = 14 + descLines.length * 3.5 + commentLines.length * 3.5 + locCount * 3;
       checkPageBreak(needed);
 
       // Severity + flag name
@@ -131,13 +165,38 @@ export function generateReviewSummaryPdf(opts: ReportOptions): void {
       doc.text(flag.flagName, margin + 2 + sevWidth, y);
       y += 4;
 
-      // Line item ref
+      // Line item ref + occurrence count and locations
       if (flag.lineItemRef) {
+        const refKey = flag.lineItemRef.trim().toLowerCase();
+        const locations = locationMap.get(refKey) ?? [];
+        const totalQty = locations.reduce((s, l) => s + l.qty, 0);
+
         doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(120);
-        doc.text(flag.lineItemRef, margin + 4, y);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(80);
+        const refLabel = totalQty > 0
+          ? `${flag.lineItemRef}  —  ${locations.length} location${locations.length !== 1 ? 's' : ''}, qty ${totalQty}`
+          : flag.lineItemRef;
+        doc.text(refLabel, margin + 4, y);
         y += 3.5;
+
+        // Show each location with sub-location breakdown
+        if (locations.length > 0) {
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7);
+          doc.setTextColor(110);
+          for (const loc of locations) {
+            checkPageBreak(4);
+            // Parse sub-locations from colon-separated location string
+            const segments = loc.location.split(':').map(s => s.trim()).filter(Boolean);
+            const locLabel = segments.length > 1
+              ? segments.join('  ›  ')
+              : loc.location;
+            doc.text(`  •  ${locLabel}  (qty ${loc.qty})`, margin + 6, y);
+            y += 3;
+          }
+          y += 1;
+        }
       }
 
       // Description

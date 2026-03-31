@@ -358,6 +358,7 @@ export function AutoReviewPage() {
           projectNumber: project.number,
           run: latestRun,
           flags,
+          csvRows,
           action: newStatus,
         });
       } catch (err) {
