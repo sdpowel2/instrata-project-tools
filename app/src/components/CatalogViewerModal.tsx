@@ -44,7 +44,7 @@ export function CatalogViewerModal({ open, onClose }: CatalogViewerModalProps) {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Debounce search input
   useEffect(() => {

@@ -262,11 +262,6 @@ function LaborRatesSection() {
     setRates(prev => prev.map(r => r.id === id ? { ...r, hoursCeiling: val ?? undefined } : r));
   };
 
-  const handleUpdateRate = async (id: string, rate: string) => {
-    const val = rate ? parseFloat(rate) : 0;
-    await supabase.from('labor_rates').update({ rate_per_hour: val }).eq('id', id);
-    setRates(prev => prev.map(r => r.id === id ? { ...r, ratePerHour: val } : r));
-  };
 
   const handleUpdateCostRate = async (id: string, val: string) => {
     const n = val ? parseFloat(val) : 0;

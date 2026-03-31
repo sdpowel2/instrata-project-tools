@@ -1,6 +1,6 @@
 import { useState, useMemo, Fragment } from 'react';
 import {
-  AlertCircle, AlertTriangle, Info, ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight,
   Search, Filter, MapPin, DollarSign, Wrench,
 } from 'lucide-react';
 import type { ReviewFlag, ReviewFlagStatus } from '../types';
@@ -386,7 +386,7 @@ function LocationNodeView({
   const sectionTotal = node.equipCost + node.laborCost;
   const sectionPrice = node.equipPrice + node.laborPrice;
   const style = depthStyle(node.depth);
-  const hasOwnRows = node.equipRows.length > 0 || node.laborRows.length > 0;
+
 
   // Filter own rows by search text
   let filteredEquip = node.equipRows;

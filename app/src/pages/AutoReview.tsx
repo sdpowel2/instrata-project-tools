@@ -217,7 +217,7 @@ function CsvDropZone({
   dragOver:     boolean;
   busy:         boolean;
   emptyLabel:   string;
-  fileInputRef: React.RefObject<HTMLInputElement>;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
   onDragOver:   () => void;
   onDragLeave:  () => void;
   onDrop:       (file: File) => void;
