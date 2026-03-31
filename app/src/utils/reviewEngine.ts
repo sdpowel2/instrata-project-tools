@@ -252,18 +252,20 @@ export function runRules(
   // ── HIGH: Labor Row Missing Rate in D-Tools ───────────────────────────────
   // A dedicated Labor row has hours but no labor unit cost set — means the
   // engineer left the rate blank in D-Tools, so it contributes $0 to the project.
+  // line_item_ref is location-qualified so the flag only appears on the specific
+  // labor row in the specific location that has the issue.
   const seenMissingRate = new Set<string>();
   for (const r of laborRows.filter(r => !r.nonBillable)) {
     if ((r.laborHours ?? 0) > 0 && !(r.laborUnitCost ?? 0) && !(r.fixedLaborCost ?? 0)) {
       const types = r.laborTypes.length ? r.laborTypes : [r.modelNumber || 'Unknown'];
       for (const lt of types) {
-        const key = `${lt}::${r.location}`;
-        if (!seenMissingRate.has(key)) {
-          seenMissingRate.add(key);
+        const dedup = `${lt}::${r.location}`;
+        if (!seenMissingRate.has(dedup)) {
+          seenMissingRate.add(dedup);
           flag('LABOR_MISSING_RATE', 'high', 'labor',
             'Labor Row Missing Rate',
             `"${lt}" in "${r.location}" has ${r.laborHours} hours but no unit cost/price set in D-Tools — contributes $0 to the project.`,
-            lt);
+            `${lt} @ ${r.location}`);
         }
       }
     }
@@ -272,39 +274,58 @@ export function runRules(
   // ── HIGH: Labor Row With No Hours and No Fixed Cost ───────────────────────
   // A dedicated Labor row that contributes nothing ($0 hours, $0 fixed).
   // Skipped for Mobilization which is sometimes intentionally $0.
+  // Deduplicated by labor type + location; line_item_ref is location-qualified.
+  const seenZeroContrib = new Set<string>();
   for (const r of laborRows.filter(r => !r.nonBillable)) {
     const types = r.laborTypes.length ? r.laborTypes : [];
     const isMobilization = types.some(t => t.toLowerCase() === 'mobilization');
     if (!isMobilization && !(r.laborHours ?? 0) && !(r.fixedLaborCost ?? 0)) {
-      if (r.laborTypes.length || r.modelNumber) {
-        flag('LABOR_ZERO_CONTRIBUTION', 'high', 'labor',
-          'Labor Row With Zero Contribution',
-          `Labor item "${r.modelNumber || r.laborTypes.join(', ')}" in "${r.location}" has no hours and no fixed cost — verify in D-Tools.`,
-          r.modelNumber || r.laborTypes[0] || null);
+      const label = r.modelNumber || r.laborTypes.join(', ');
+      if (label) {
+        const dedup = `${label.toLowerCase()}::${r.location}`;
+        if (!seenZeroContrib.has(dedup)) {
+          seenZeroContrib.add(dedup);
+          flag('LABOR_ZERO_CONTRIBUTION', 'high', 'labor',
+            'Labor Row With Zero Contribution',
+            `Labor item "${label}" in "${r.location}" has no hours and no fixed cost — verify in D-Tools.`,
+            `${label} @ ${r.location}`);
+        }
       }
     }
   }
 
   // ── HIGH: Zero or Null Quantity ───────────────────────────────────────────
+  // Deduplicated: one flag per unique model, not per CSV row.
+  const seenZeroQty = new Set<string>();
   for (const r of realEquip) {
     if (r.quantity === null || r.quantity === 0) {
+      const ref = r.modelNumber || r.description;
+      const dedup = `${ref.toLowerCase()}`;
+      if (seenZeroQty.has(dedup)) continue;
+      seenZeroQty.add(dedup);
       flag('ZERO_OR_NULL_QUANTITY', 'high', 'data',
         'Zero or Null Quantity',
-        `Equipment line "${r.modelNumber || r.description}" has a quantity of ${r.quantity ?? 'blank'}.`,
-        r.modelNumber || r.description);
+        `Equipment line "${ref}" has a quantity of ${r.quantity ?? 'blank'}.`,
+        ref);
     }
   }
 
   // ── HIGH: Zero Unit Price ─────────────────────────────────────────────────
   // Skipped for owner-furnished items ($0 price is expected and correct).
+  // Deduplicated: one flag per unique model, not per CSV row.
   const freeModels = new Set(config.freeItemModels.map(m => m.toLowerCase().trim()));
+  const seenZeroPrice = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
     if ((r.unitPrice === null || r.unitPrice === 0) && !freeModels.has(r.modelNumber.toLowerCase())) {
+      const ref = r.modelNumber || r.description;
+      const dedup = `${ref.toLowerCase()}`;
+      if (seenZeroPrice.has(dedup)) continue;
+      seenZeroPrice.add(dedup);
       flag('ZERO_UNIT_PRICE', 'high', 'data',
         'Zero Unit Price',
-        `Equipment line "${r.modelNumber || r.description}" has a unit price of $0.`,
-        r.modelNumber || r.description);
+        `Equipment line "${ref}" has a unit price of $0.`,
+        ref);
     }
   }
 
@@ -312,14 +333,20 @@ export function runRules(
   // Owner-furnished items carry $0 product cost/price — that's expected.
   // But labor (installation) should still be captured on the row.
   // Flag any owner-furnished Product row that has no embedded labor hours.
+  // Deduplicated: one flag per unique model.
+  const seenOFNoLabor = new Set<string>();
   for (const r of realEquip) {
     if (!r.ownerFurnished) continue;
     if (!(r.laborHours ?? 0)) {
+      const ref = r.modelNumber || r.description;
+      const dedup = `${ref.toLowerCase()}`;
+      if (seenOFNoLabor.has(dedup)) continue;
+      seenOFNoLabor.add(dedup);
       flag('OWNER_FURNISHED_NO_LABOR', 'high', 'labor',
         'Owner-Furnished Item Missing Labor',
-        `"${r.modelNumber || r.description}" in "${r.location}" is marked owner-furnished but has no embedded labor hours. ` +
-        `Verify that install labor is captured on a dedicated labor row for this location.`,
-        r.modelNumber || r.description);
+        `"${ref}" is marked owner-furnished but has no embedded labor hours. ` +
+        `Verify that install labor is captured on a dedicated labor row.`,
+        ref);
     }
   }
 
@@ -328,6 +355,9 @@ export function runRules(
 
   // ── MODERATE: Cost Deviation from Catalog ────────────────────────────────
   // Compare BoM unit cost against catalog cost (preferred) or list_price (fallback).
+  // Deduplicated: one flag per unique model. If the same model has different costs
+  // in different locations, they'll be separate CSV rows with separate unit costs —
+  // only the first deviation is flagged (same model = same catalog reference).
   const catalogCostMap = new Map<string, { value: number; label: string }>();
   for (const c of catalog) {
     const key = c.model_number.trim().toLowerCase();
@@ -337,12 +367,16 @@ export function runRules(
       catalogCostMap.set(key, { value: c.list_price, label: 'catalog list price' });
     }
   }
+  const seenCostDev = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;  // $0 cost is intentional; catalog comparison not meaningful
-    const cat = catalogCostMap.get(r.modelNumber.trim().toLowerCase());
+    const modelKey = r.modelNumber.trim().toLowerCase();
+    if (seenCostDev.has(modelKey)) continue;
+    const cat = catalogCostMap.get(modelKey);
     if (cat && r.unitCost !== null) {
       const dev = (Math.abs(r.unitCost - cat.value) / cat.value) * 100;
       if (dev > config.costDeviationPct) {
+        seenCostDev.add(modelKey);
         flag('COST_DEVIATION_FROM_CATALOG', 'moderate', 'pricing',
           'Cost Deviation from Catalog',
           `"${r.modelNumber}" unit cost ($${r.unitCost.toFixed(2)}) deviates ${dev.toFixed(1)}% from ${cat.label} ($${cat.value.toFixed(2)}), exceeding the ${config.costDeviationPct}% threshold.`,
@@ -396,10 +430,15 @@ export function runRules(
 
   // ── LOW: Model Not in Catalog ─────────────────────────────────────────────
   // Skipped for owner-furnished items — we're not pricing them, so catalog presence is irrelevant.
+  // Deduplicated: one flag per unique model.
   const catalogModels = new Set(catalog.map(c => c.model_number.trim().toLowerCase()));
+  const seenNotInCatalog = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
-    if (r.modelNumber && !catalogModels.has(r.modelNumber.trim().toLowerCase())) {
+    const modelKey = r.modelNumber.trim().toLowerCase();
+    if (seenNotInCatalog.has(modelKey)) continue;
+    if (r.modelNumber && !catalogModels.has(modelKey)) {
+      seenNotInCatalog.add(modelKey);
       flag('MODEL_NOT_IN_CATALOG', 'low', 'catalog',
         'Model Not in Catalog',
         `"${r.modelNumber}" was not found in the product catalog. Pricing cannot be verified.`,
@@ -408,12 +447,18 @@ export function runRules(
   }
 
   // ── LOW: Missing Room / Location ──────────────────────────────────────────
+  // Deduplicated: one flag per unique model.
+  const seenMissingRoom = new Set<string>();
   for (const r of realEquip) {
     if (!r.location || r.location === 'Labor and Services') {
+      const ref = r.modelNumber || r.description;
+      const dedup = ref.toLowerCase();
+      if (seenMissingRoom.has(dedup)) continue;
+      seenMissingRoom.add(dedup);
       flag('MISSING_ROOM_LOCATION', 'low', 'data',
         'Missing Room / Location',
-        `Equipment line "${r.modelNumber || r.description}" has no room or location assigned.`,
-        r.modelNumber || r.description);
+        `Equipment line "${ref}" has no room or location assigned.`,
+        ref);
     }
   }
 
