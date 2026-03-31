@@ -63,15 +63,14 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find siblings: other flags with the same rule type (ruleId + flagName).
-  // Each flag is deduplicated per model, so siblings are OTHER models with the
-  // same issue type (e.g. all "Cost Deviation" flags, all "Not in Catalog" flags).
-  // This enables bulk resolve/waive across the entire project for the same issue type.
+  // Find siblings: other flags with the same rule + same item (lineItemRef).
+  // This groups all flags for the SAME model (e.g. all "Not in Catalog" flags
+  // for Core110f specifically), not all flags of that rule type across every model.
   const identicalSiblings = allFlags
     ? allFlags.filter(f =>
         f.id !== flag.id &&
         f.ruleId === flag.ruleId &&
-        f.flagName === flag.flagName,
+        f.lineItemRef === flag.lineItemRef,
       )
     : [];
   // Only show bulk actions when there are open/actionable siblings
