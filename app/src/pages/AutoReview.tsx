@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle2, MinusCircle, MessageSquare, ChevronDown,
   ChevronUp, Clock, RefreshCw, ThumbsUp, AlertCircle, Info, Loader2,
+  Upload, FileSpreadsheet,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -171,15 +172,23 @@ function FlagCard({
 
 export function AutoReviewPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const { session } = useAuth();
+  const { session, isAdmin } = useAuth();
   const reviewRuns = useStore(s => s.reviewRuns);
   const updateRunStatus = useStore(s => s.updateRunStatus);
   const updateFlagStatus = useStore(s => s.updateFlagStatus);
   const fetchProjectFlags = useStore(s => s.fetchProjectFlags);
+  const createReviewRunFromCsv = useStore(s => s.createReviewRunFromCsv);
 
   const [flags, setFlags] = useState<ReviewFlag[]>([]);
   const [loadingFlags, setLoadingFlags] = useState(false);
   const [updatingRun, setUpdatingRun] = useState(false);
+
+  // ── CSV Upload state ───────────────────────────────────────────────────────
+  const [uploadDragOver, setUploadDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ flagCount: number } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Get all runs for this project, most recent first
   const projectRuns = reviewRuns
@@ -219,6 +228,30 @@ export function AutoReviewPage() {
     setUpdatingRun(false);
   };
 
+  // ── CSV upload handler ─────────────────────────────────────────────────────
+  const handleCsvFile = useCallback(async (file: File) => {
+    if (!projectId) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setUploadError('Please upload a .csv file.');
+      return;
+    }
+    setUploading(true);
+    setUploadError(null);
+    setUploadResult(null);
+    try {
+      const csvText = await file.text();
+      const result = await createReviewRunFromCsv(projectId, csvText);
+      setUploadResult({ flagCount: result.flagCount });
+      // Load flags for the newly created run
+      await loadFlags(result.runId);
+    } catch (err: any) {
+      setUploadError(err?.message ?? 'Failed to process CSV. Please try again.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [projectId, createReviewRunFromCsv, loadFlags]);
+
   // ── Counts ────────────────────────────────────────────────────────────────
   const counts = {
     high:     flags.filter(f => f.severity === 'high').length,
@@ -250,8 +283,60 @@ export function AutoReviewPage() {
 
   if (!latestRun) {
     return (
-      <div className="p-8 max-w-2xl">
-        <EmptyReviewState message="No review has been triggered yet. Export the D-Tools BoM as a CSV, attach it to the Monday board item, and set the status to 'Review'." />
+      <div className="p-6 max-w-4xl">
+        {/* Still show upload section even when no runs exist yet */}
+        {isAdmin && (
+          <div className="mb-5">
+            <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2">
+              Upload D-Tools Export
+            </h2>
+            <div
+              onDragOver={e => { e.preventDefault(); setUploadDragOver(true); }}
+              onDragLeave={() => setUploadDragOver(false)}
+              onDrop={e => {
+                e.preventDefault();
+                setUploadDragOver(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleCsvFile(file);
+              }}
+              onClick={() => !uploading && fileInputRef.current?.click()}
+              className={`relative border-2 border-dashed rounded-xl px-6 py-5 flex items-center gap-4 cursor-pointer transition-colors ${
+                uploadDragOver ? 'border-navy bg-navy/5' : 'border-border hover:border-navy/40 hover:bg-surface/50'
+              } ${uploading ? 'pointer-events-none opacity-60' : ''}`}
+            >
+              <input ref={fileInputRef} type="file" accept=".csv" className="hidden"
+                onChange={e => { const file = e.target.files?.[0]; if (file) handleCsvFile(file); }}
+              />
+              {uploading
+                ? <Loader2 size={22} className="text-navy animate-spin flex-shrink-0" />
+                : <FileSpreadsheet size={22} className="flex-shrink-0 text-text-secondary/50" />}
+              <div>
+                <p className="text-sm font-medium text-text-primary">
+                  {uploading ? 'Processing CSV — running rules engine & rebuilding BoM…' : 'Upload D-Tools CSV to start the first review run'}
+                </p>
+                {!uploading && <p className="text-xs text-text-secondary mt-0.5">Drag & drop or click to browse · .csv files only</p>}
+              </div>
+              {!uploading && <Upload size={16} className="ml-auto text-text-secondary/40 flex-shrink-0" />}
+            </div>
+            {uploadResult && !uploading && (
+              <div className="mt-2 flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-4 py-2">
+                <CheckCircle2 size={15} />
+                Review run created — <span className="font-semibold">{uploadResult.flagCount} flag{uploadResult.flagCount !== 1 ? 's' : ''}</span> generated. BoM rebuilt.
+              </div>
+            )}
+            {uploadError && (
+              <div className="mt-2 flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
+                <AlertCircle size={15} />
+                {uploadError}
+              </div>
+            )}
+          </div>
+        )}
+        <EmptyReviewState message={
+          isAdmin
+            ? 'No review runs yet. Upload the D-Tools CSV export above to run the first review and build the project BoM.'
+            : 'No review has been run on this project yet. A manager will upload the D-Tools CSV to begin the review process.'
+        } />
       </div>
     );
   }
@@ -264,6 +349,83 @@ export function AutoReviewPage() {
 
   return (
     <div className="p-6 max-w-4xl">
+
+      {/* ── CSV Upload (admin only) ───────────────────────────────────────── */}
+      {isAdmin && (
+        <div className="mb-5">
+          <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2">
+            Upload D-Tools Export
+          </h2>
+
+          {/* Drop zone */}
+          <div
+            onDragOver={e => { e.preventDefault(); setUploadDragOver(true); }}
+            onDragLeave={() => setUploadDragOver(false)}
+            onDrop={e => {
+              e.preventDefault();
+              setUploadDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) handleCsvFile(file);
+            }}
+            onClick={() => !uploading && fileInputRef.current?.click()}
+            className={`relative border-2 border-dashed rounded-xl px-6 py-5 flex items-center gap-4 cursor-pointer transition-colors ${
+              uploadDragOver
+                ? 'border-navy bg-navy/5'
+                : 'border-border hover:border-navy/40 hover:bg-surface/50'
+            } ${uploading ? 'pointer-events-none opacity-60' : ''}`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) handleCsvFile(file);
+              }}
+            />
+            {uploading ? (
+              <Loader2 size={22} className="text-navy animate-spin flex-shrink-0" />
+            ) : (
+              <FileSpreadsheet size={22} className={`flex-shrink-0 ${uploadDragOver ? 'text-navy' : 'text-text-secondary/50'}`} />
+            )}
+            <div>
+              <p className="text-sm font-medium text-text-primary">
+                {uploading
+                  ? 'Processing CSV — running rules engine & rebuilding BoM…'
+                  : uploadDragOver
+                  ? 'Drop the CSV here'
+                  : latestRun
+                  ? 'Upload revised D-Tools CSV to start a new review run'
+                  : 'Upload D-Tools CSV to start the first review run'}
+              </p>
+              {!uploading && (
+                <p className="text-xs text-text-secondary mt-0.5">
+                  Drag & drop or click to browse · .csv files only
+                </p>
+              )}
+            </div>
+            {!uploading && (
+              <Upload size={16} className="ml-auto text-text-secondary/40 flex-shrink-0" />
+            )}
+          </div>
+
+          {/* Upload result / error */}
+          {uploadResult && !uploading && (
+            <div className="mt-2 flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-4 py-2">
+              <CheckCircle2 size={15} />
+              Review run created — <span className="font-semibold">{uploadResult.flagCount} flag{uploadResult.flagCount !== 1 ? 's' : ''}</span> generated. BoM rebuilt.
+            </div>
+          )}
+          {uploadError && (
+            <div className="mt-2 flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
+              <AlertCircle size={15} />
+              {uploadError}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Run header */}
       <div className="bg-white rounded-xl border border-border shadow-sm p-5 mb-5">
         <div className="flex items-start justify-between gap-4">

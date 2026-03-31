@@ -8,6 +8,9 @@ import type {
   ReviewRun, ReviewFlag, ReviewRunStatus, ReviewFlagStatus,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import {
+  parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
+} from '../utils/reviewEngine';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -503,6 +506,7 @@ interface AppState {
   fetchProjectFlags: (runId: string) => Promise<ReviewFlag[]>;
   updateRunStatus: (runId: string, status: ReviewRunStatus, reviewedBy?: string) => Promise<void>;
   updateFlagStatus: (flagId: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
+  createReviewRunFromCsv: (projectId: string, csvText: string) => Promise<{ runId: string; flagCount: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,5 +1281,165 @@ export const useStore = create<AppState>((set, get) => ({
     if (status === 'resolved' || status === 'waived') updates.resolved_at = new Date().toISOString();
     const { error } = await supabase.from('review_flags').update(updates).eq('id', flagId);
     if (error) console.error('[review] updateFlagStatus error:', error);
+  },
+
+  createReviewRunFromCsv: async (projectId, csvText) => {
+    if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+    console.log('[review] Starting createReviewRunFromCsv for project', projectId);
+
+    // 0. Verify the project exists in Supabase before doing anything
+    const { data: projectCheck, error: projectCheckError } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', projectId)
+      .maybeSingle();
+
+    if (projectCheckError) {
+      console.error('[review] Project lookup error:', projectCheckError);
+      throw new Error(`Project lookup failed: ${projectCheckError.message}`);
+    }
+    if (!projectCheck) {
+      throw new Error('This project has not been saved to the database yet. Please ensure the project was created via Monday.com before running a review.');
+    }
+    console.log('[review] Project confirmed in DB');
+
+    // 1. Fetch review config, labor rates, and product catalog in parallel
+    const [configRes, laborRes, catalogRes] = await Promise.all([
+      supabase.from('review_config').select('key,value'),
+      supabase.from('labor_rates').select('labor_type,hours_ceiling').eq('is_active', true),
+      supabase.from('product_catalog').select('model_number,list_price'),
+    ]);
+
+    console.log('[review] Config rows:', configRes.data?.length ?? 0,
+      '| Labor rates:', laborRes.data?.length ?? 0,
+      '| Catalog items:', catalogRes.data?.length ?? 0);
+
+    const configMap: Record<string, string> = {};
+    for (const r of configRes.data ?? []) configMap[r.key] = r.value;
+    const reviewConfig = buildReviewConfig(configMap);
+    const laborRates   = laborRes.data ?? [];
+    const catalog      = catalogRes.data ?? [];
+
+    // 2. Parse CSV and run rules engine
+    const rawRows = parseCsv(csvText);
+    const rows    = rawRows.map(mapRow);
+    console.log('[review] CSV parsed:', rawRows.length, 'rows →',
+      rows.filter(r => r.itemType === 'Product').length, 'products,',
+      rows.filter(r => r.itemType === 'Labor').length, 'labor rows');
+    let flags = runRules(rows, reviewConfig, laborRates, catalog);
+    console.log('[review] Rules engine generated', flags.length, 'flags');
+
+    // 3. Get prior runs for run_number and diff
+    const { data: priorRuns, error: priorRunsError } = await supabase
+      .from('review_runs')
+      .select('id,run_number,status')
+      .eq('project_id', projectId)
+      .order('run_number', { ascending: false })
+      .limit(1);
+
+    if (priorRunsError) console.warn('[review] Could not fetch prior runs:', priorRunsError.message);
+
+    const latestPrior    = priorRuns?.[0];
+    const runNumber      = latestPrior ? latestPrior.run_number + 1 : 1;
+    const isResubmission = latestPrior?.status === 'changes_requested';
+    console.log('[review] Run number:', runNumber, '| Resubmission:', isResubmission);
+
+    // 4. Diff against prior run flags if this is a resubmission
+    if (isResubmission && latestPrior) {
+      const { data: priorFlags } = await supabase
+        .from('review_flags')
+        .select('rule_id,line_item_ref,id')
+        .eq('review_run_id', latestPrior.id);
+
+      if (priorFlags?.length) {
+        flags = applyDiff(flags, priorFlags);
+        const newKeys = new Set(flags.map(f => `${f.rule_id}::${f.line_item_ref ?? ''}`));
+        const resolvedIds = priorFlags
+          .filter(pf => !newKeys.has(`${pf.rule_id}::${pf.line_item_ref ?? ''}`))
+          .map((pf: any) => pf.id);
+        if (resolvedIds.length) {
+          await supabase.from('review_flags').update({ diff_status: 'resolved' }).in('id', resolvedIds);
+        }
+      } else {
+        flags = flags.map(f => ({ ...f, diff_status: 'new' as const }));
+      }
+    }
+
+    // 5. Rebuild BoM — delete existing items, insert fresh from CSV
+    const { error: deleteError } = await supabase
+      .from('project_bom_items')
+      .delete()
+      .eq('project_id', projectId);
+    if (deleteError) console.warn('[review] BoM delete warning:', deleteError.message);
+
+    const bomRows = buildBomRows(rows, projectId);
+    console.log('[review] BoM rows to insert:', bomRows.length);
+
+    let newBomData: any[] = [];
+    if (bomRows.length > 0) {
+      const { data: bomInsert, error: bomError } = await supabase
+        .from('project_bom_items')
+        .insert(bomRows)
+        .select();
+      if (bomError) console.warn('[review] BoM insert warning:', bomError.message);
+      newBomData = bomInsert ?? [];
+    }
+    console.log('[review] BoM rebuilt with', newBomData.length, 'items');
+
+    // 6. Insert review_run record
+    console.log('[review] Inserting review_run...');
+    const { data: runData, error: runError } = await supabase
+      .from('review_runs')
+      .insert({
+        project_id:   projectId,
+        run_number:   runNumber,
+        csv_snapshot: csvText,
+        status:       'pending_review',
+        triggered_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+
+    if (runError || !runData) {
+      console.error('[review] review_runs insert failed:', runError);
+      throw new Error(runError?.message ?? 'Failed to insert review run — check browser console for details');
+    }
+    console.log('[review] review_run created:', runData.id);
+
+    // 7. Insert flags
+    if (flags.length > 0) {
+      const flagRows = flags.map(f => ({
+        review_run_id: runData.id,
+        rule_id:       f.rule_id,
+        severity:      f.severity,
+        category:      f.category,
+        flag_name:     f.flag_name,
+        description:   f.description,
+        line_item_ref: f.line_item_ref,
+        diff_status:   f.diff_status,
+        status:        'open',
+      }));
+      const { error: flagError } = await supabase.from('review_flags').insert(flagRows);
+      if (flagError) console.error('[review] Failed to insert flags:', flagError);
+      else console.log('[review] Inserted', flagRows.length, 'flags');
+    }
+
+    // 8. Update local store state
+    const newRun: ReviewRun = {
+      id: runData.id, projectId, runNumber,
+      triggeredAt: new Date().toISOString(),
+      status: 'pending_review',
+      createdAt: new Date().toISOString(),
+    };
+    set(s => ({
+      projectBoM: [
+        ...s.projectBoM.filter(b => b.projectId !== projectId),
+        ...(newBomData ?? []).map(rowToBoMItem),
+      ],
+      reviewRuns: [newRun, ...s.reviewRuns],
+    }));
+
+    return { runId: runData.id, flagCount: flags.length };
   },
 }));
