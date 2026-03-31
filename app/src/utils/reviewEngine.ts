@@ -306,61 +306,55 @@ export function runRules(
   }
 
   // ── HIGH: Zero or Null Quantity ───────────────────────────────────────────
-  // One flag per row, location-qualified so each can be individually resolved.
-  // Deduplicated per model+location to avoid duplicates within the same location.
+  // Deduplicated: one flag per unique model. The flag shows on every row with
+  // that model; resolving it resolves all appearances.
   const seenZeroQty = new Set<string>();
   for (const r of realEquip) {
     if (r.quantity === null || r.quantity === 0) {
       const ref = r.modelNumber || r.description;
-      const loc = r.location || 'Unassigned';
-      const dedup = `${ref.toLowerCase()}::${loc}`;
-      if (seenZeroQty.has(dedup)) continue;
-      seenZeroQty.add(dedup);
+      if (seenZeroQty.has(ref.toLowerCase())) continue;
+      seenZeroQty.add(ref.toLowerCase());
       flag('ZERO_OR_NULL_QUANTITY', 'high', 'data',
         'Zero or Null Quantity',
         `Equipment line "${ref}" has a quantity of ${r.quantity ?? 'blank'}.`,
-        `${ref} @ ${loc}`);
+        ref);
     }
   }
 
   // ── HIGH: Zero Unit Price ─────────────────────────────────────────────────
   // Skipped for owner-furnished items ($0 price is expected and correct).
-  // One flag per row, location-qualified.
+  // Deduplicated: one flag per unique model.
   const freeModels = new Set(config.freeItemModels.map(m => m.toLowerCase().trim()));
   const seenZeroPrice = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
     if ((r.unitPrice === null || r.unitPrice === 0) && !freeModels.has(r.modelNumber.toLowerCase())) {
       const ref = r.modelNumber || r.description;
-      const loc = r.location || 'Unassigned';
-      const dedup = `${ref.toLowerCase()}::${loc}`;
-      if (seenZeroPrice.has(dedup)) continue;
-      seenZeroPrice.add(dedup);
+      if (seenZeroPrice.has(ref.toLowerCase())) continue;
+      seenZeroPrice.add(ref.toLowerCase());
       flag('ZERO_UNIT_PRICE', 'high', 'data',
         'Zero Unit Price',
         `Equipment line "${ref}" has a unit price of $0.`,
-        `${ref} @ ${loc}`);
+        ref);
     }
   }
 
   // ── HIGH: Owner-Furnished Item Missing Labor ───────────────────────────────
   // Owner-furnished items carry $0 product cost/price — that's expected.
   // But labor (installation) should still be captured on the row.
-  // One flag per row, location-qualified.
+  // Deduplicated: one flag per unique model.
   const seenOFNoLabor = new Set<string>();
   for (const r of realEquip) {
     if (!r.ownerFurnished) continue;
     if (!(r.laborHours ?? 0)) {
       const ref = r.modelNumber || r.description;
-      const loc = r.location || 'Unassigned';
-      const dedup = `${ref.toLowerCase()}::${loc}`;
-      if (seenOFNoLabor.has(dedup)) continue;
-      seenOFNoLabor.add(dedup);
+      if (seenOFNoLabor.has(ref.toLowerCase())) continue;
+      seenOFNoLabor.add(ref.toLowerCase());
       flag('OWNER_FURNISHED_NO_LABOR', 'high', 'labor',
         'Owner-Furnished Item Missing Labor',
         `"${ref}" is marked owner-furnished but has no embedded labor hours. ` +
         `Verify that install labor is captured on a dedicated labor row.`,
-        `${ref} @ ${loc}`);
+        ref);
     }
   }
 
@@ -369,8 +363,7 @@ export function runRules(
 
   // ── MODERATE: Cost Deviation from Catalog ────────────────────────────────
   // Compare BoM unit cost against catalog cost (preferred) or list_price (fallback).
-  // One flag per row, location-qualified. Same model with same deviation in
-  // multiple locations creates separate flags that can be bulk-resolved.
+  // Deduplicated: one flag per unique model.
   const catalogCostMap = new Map<string, { value: number; label: string }>();
   for (const c of catalog) {
     const key = c.model_number.trim().toLowerCase();
@@ -384,18 +377,17 @@ export function runRules(
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
     if (isMiscItem(r)) continue;
-    const loc = r.location || 'Unassigned';
-    const dedup = `${r.modelNumber.trim().toLowerCase()}::${loc}`;
-    if (seenCostDev.has(dedup)) continue;
-    const cat = catalogCostMap.get(r.modelNumber.trim().toLowerCase());
+    const modelKey = r.modelNumber.trim().toLowerCase();
+    if (seenCostDev.has(modelKey)) continue;
+    const cat = catalogCostMap.get(modelKey);
     if (cat && r.unitCost !== null) {
       const dev = (Math.abs(r.unitCost - cat.value) / cat.value) * 100;
       if (dev > config.costDeviationPct) {
-        seenCostDev.add(dedup);
+        seenCostDev.add(modelKey);
         flag('COST_DEVIATION_FROM_CATALOG', 'moderate', 'pricing',
           'Cost Deviation from Catalog',
           `"${r.modelNumber}" unit cost ($${r.unitCost.toFixed(2)}) deviates ${dev.toFixed(1)}% from ${cat.label} ($${cat.value.toFixed(2)}), exceeding the ${config.costDeviationPct}% threshold.`,
-          `${r.modelNumber} @ ${loc}`);
+          r.modelNumber);
       }
     }
   }
@@ -474,21 +466,20 @@ export function runRules(
 
   // ── LOW: Model Not in Catalog ─────────────────────────────────────────────
   // Skipped for owner-furnished items — we're not pricing them, so catalog presence is irrelevant.
-  // One flag per row, location-qualified.
+  // Deduplicated: one flag per unique model.
   const catalogModels = new Set(catalog.map(c => c.model_number.trim().toLowerCase()));
   const seenNotInCatalog = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
     if (isMiscItem(r)) continue;
-    const loc = r.location || 'Unassigned';
-    const dedup = `${r.modelNumber.trim().toLowerCase()}::${loc}`;
-    if (seenNotInCatalog.has(dedup)) continue;
-    if (r.modelNumber && !catalogModels.has(r.modelNumber.trim().toLowerCase())) {
-      seenNotInCatalog.add(dedup);
+    const modelKey = r.modelNumber.trim().toLowerCase();
+    if (seenNotInCatalog.has(modelKey)) continue;
+    if (r.modelNumber && !catalogModels.has(modelKey)) {
+      seenNotInCatalog.add(modelKey);
       flag('MODEL_NOT_IN_CATALOG', 'low', 'catalog',
         'Model Not in Catalog',
         `"${r.modelNumber}" was not found in the product catalog. Pricing cannot be verified.`,
-        `${r.modelNumber} @ ${loc}`);
+        r.modelNumber);
     }
   }
 

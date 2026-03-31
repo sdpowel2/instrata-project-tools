@@ -62,20 +62,16 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find identical siblings across the ENTIRE quote (different flag IDs, same issue).
-  // lineItemRef is location-qualified (e.g. "MODEL @ Location"), so extract the base
-  // model/item by splitting on " @ " to match the same item across all locations.
-  // Matches on ruleId + description (exact same issue) + same base item.
-  const baseRef = (flag.lineItemRef ?? '').split(' @ ')[0].trim().toLowerCase();
+  // Find siblings: other flags with the same rule type (ruleId + flagName).
+  // Each flag is deduplicated per model, so siblings are OTHER models with the
+  // same issue type (e.g. all "Cost Deviation" flags, all "Not in Catalog" flags).
+  // This enables bulk resolve/waive across the entire project for the same issue type.
   const identicalSiblings = allFlags
-    ? allFlags.filter(f => {
-        if (f.id === flag.id) return false;
-        if (f.ruleId !== flag.ruleId) return false;
-        if (f.description !== flag.description) return false;
-        // Same base item (model/labor type before " @ ")
-        const otherBase = (f.lineItemRef ?? '').split(' @ ')[0].trim().toLowerCase();
-        return otherBase === baseRef;
-      })
+    ? allFlags.filter(f =>
+        f.id !== flag.id &&
+        f.ruleId === flag.ruleId &&
+        f.flagName === flag.flagName,
+      )
     : [];
   // Only show bulk actions when there are open/actionable siblings
   const openSiblings = identicalSiblings.filter(f => f.status === 'open' || f.status === 'commented');
@@ -120,7 +116,7 @@ export function FlagCard({
             )}
             {identicalSiblings.length > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-navy/10 text-navy font-medium">
-                {identicalSiblings.length + 1} identical
+                {openSiblings.length + 1} of this type open
               </span>
             )}
             <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_STYLE[flag.status]}`}>
@@ -202,25 +198,25 @@ export function FlagCard({
             {saving && <Loader2 size={14} className="animate-spin text-text-secondary" />}
           </div>
 
-          {/* Bulk actions for identical flags */}
+          {/* Bulk actions — resolve/waive all flags of this type across the project */}
           {hasBulkTargets && (
             <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-black/5">
               <span className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">
-                All {openSiblings.length + 1} identical:
+                All "{flag.flagName}" flags:
               </span>
               <button
                 onClick={() => saveAll('resolved')}
                 disabled={saving}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-green-600/80 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
               >
-                <CheckCircle2 size={12} /> Resolve All ({openSiblings.length + 1})
+                <CheckCircle2 size={12} /> Resolve All {openSiblings.length + 1} Open
               </button>
               <button
                 onClick={() => saveAll('waived')}
                 disabled={saving}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-purple-600/80 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
               >
-                <MinusCircle size={12} /> Waive All ({openSiblings.length + 1})
+                <MinusCircle size={12} /> Waive All {openSiblings.length + 1} Open
               </button>
             </div>
           )}

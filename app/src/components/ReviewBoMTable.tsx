@@ -25,21 +25,9 @@ type FilterMode = 'all' | 'flagged';
 
 // ─── Flag matching helpers ───────────────────────────────────────────────────
 
-/** Get flags for an equipment row by model + location compound key */
+/** Get flags for an equipment row by model number */
 function getFlagsForEquip(row: CsvRow, flagsByRef: Map<string, ReviewFlag[]>): ReviewFlag[] {
-  const results: ReviewFlag[] = [];
-  const model = row.modelNumber.trim();
-  const loc = row.location || 'Unassigned';
-  // Location-qualified lookup (matches engine's "model @ location" format)
-  const locKey = `${model} @ ${loc}`.toLowerCase();
-  const locFlags = flagsByRef.get(locKey);
-  if (locFlags) results.push(...locFlags);
-  // Also check plain model key for backward compatibility and rules that
-  // don't use location-qualified refs (e.g. MISSING_ROOM_LOCATION)
-  const plainFlags = flagsByRef.get(model.toLowerCase());
-  if (plainFlags) results.push(...plainFlags);
-  // Deduplicate by flag ID
-  return [...new Map(results.map(f => [f.id, f])).values()];
+  return flagsByRef.get(row.modelNumber.trim().toLowerCase()) ?? [];
 }
 
 /** Get flags for a labor row by labor type + location compound key */
