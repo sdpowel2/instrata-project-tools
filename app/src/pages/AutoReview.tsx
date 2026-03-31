@@ -157,7 +157,7 @@ export function FlagCard({
             />
           </div>
 
-          {/* Action buttons */}
+          {/* Action buttons — individual resolve/waive for this flag */}
           <div className="flex items-center gap-2 flex-wrap">
             {flag.status !== 'resolved' && (
               <button
@@ -207,25 +207,52 @@ export function FlagCard({
             {saving && <Loader2 size={14} className="animate-spin text-text-secondary" />}
           </div>
 
-          {/* Bulk actions — resolve/waive all flags of this type across the project */}
+          {/* Per-product: resolve/waive across all locations for THIS item */}
+          {!!(locationCount && locationCount > 1) && (
+            <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-black/5">
+              <span className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">
+                All {locationCount} locations for {flag.lineItemRef}:
+              </span>
+              {flag.status !== 'resolved' && (
+                <button
+                  onClick={() => save('resolved')}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-green-600/90 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  <CheckCircle2 size={12} /> Resolve All Locations ({locationCount})
+                </button>
+              )}
+              {flag.status !== 'waived' && (
+                <button
+                  onClick={() => save('waived')}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-purple-600/90 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
+                >
+                  <MinusCircle size={12} /> Waive All Locations ({locationCount})
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Cross-product: resolve/waive all flags of this type across the project */}
           {hasBulkTargets && (
             <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-black/5">
               <span className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">
-                All identical flags:
+                All {openSiblings.length + 1} "{flag.flagName}" flags:
               </span>
               <button
                 onClick={() => saveAll('resolved')}
                 disabled={saving}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-green-600/80 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-green-600/70 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
               >
-                <CheckCircle2 size={12} /> Resolve All {openSiblings.length + 1} Open
+                <CheckCircle2 size={12} /> Resolve All {openSiblings.length + 1} Similar
               </button>
               <button
                 onClick={() => saveAll('waived')}
                 disabled={saving}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-purple-600/80 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
               >
-                <MinusCircle size={12} /> Waive All {openSiblings.length + 1} Open
+                <MinusCircle size={12} /> Waive All {openSiblings.length + 1} Similar
               </button>
             </div>
           )}
