@@ -1307,18 +1307,30 @@ export const useStore = create<AppState>((set, get) => ({
     // 1. Fetch review config and product catalog.
     //    Labor cost/price now comes directly from the CSV columns — no separate
     //    labor rates table needed for the rules engine.
-    const [configRes, catalogRes] = await Promise.all([
-      supabase.from('review_config').select('key,value'),
-      supabase.from('product_catalog').select('model_number,list_price'),
-    ]);
+    // Fetch review config
+    const configRes = await supabase.from('review_config').select('key,value');
+
+    // Fetch full product catalog (paginated — Supabase defaults to 1000 row limit)
+    const catalog: { model_number: string; cost: number | null; list_price: number | null }[] = [];
+    const PAGE = 5000;
+    let from = 0;
+    while (true) {
+      const { data } = await supabase
+        .from('product_catalog')
+        .select('model_number,cost,list_price')
+        .range(from, from + PAGE - 1);
+      if (!data || data.length === 0) break;
+      catalog.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
 
     console.log('[review] Config rows:', configRes.data?.length ?? 0,
-      '| Catalog items:', catalogRes.data?.length ?? 0);
+      '| Catalog items:', catalog.length);
 
     const configMap: Record<string, string> = {};
     for (const r of configRes.data ?? []) configMap[r.key] = r.value;
     const reviewConfig = buildReviewConfig(configMap);
-    const catalog      = catalogRes.data ?? [];
 
     // 2. Parse CSV and run rules engine
     const rawRows = parseCsv(csvText);

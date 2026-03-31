@@ -61,7 +61,10 @@ export interface ProductCatalogItem {
   modelNumber: string;
   description: string;
   listPrice?: number;
+  cost?: number;
+  unitOfMeasure: string;
   category: string;
+  priceDate?: string;
   lastUpdated?: string;
   createdAt: string;
 }

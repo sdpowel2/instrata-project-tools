@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Upload, Search } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { CatalogImportModal } from '../components/CatalogImportModal';
+import { CatalogViewerModal } from '../components/CatalogViewerModal';
 import type { LaborRate, ReviewConfigEntry } from '../types';
 
 interface Profile {
@@ -435,82 +437,22 @@ function LaborRatesSection() {
 // ─── Product Catalog Import Section ──────────────────────────────────────────
 
 function ProductCatalogSection() {
-  const [file, setFile] = useState<File | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<{ inserted: number; skipped: number } | null>(null);
-  const [error, setError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [result, setResult] = useState<number | null>(null);
   const [catalogCount, setCatalogCount] = useState<number | null>(null);
 
-  useEffect(() => {
+  const refreshCount = () => {
     supabase.from('product_catalog').select('id', { count: 'exact', head: true }).then(({ count }) => {
       setCatalogCount(count ?? 0);
     });
-  }, [result]);
+  };
 
-  const handleImport = async () => {
-    if (!file) return;
-    setImporting(true);
-    setError('');
-    setResult(null);
+  useEffect(() => { refreshCount(); }, []);
 
-    try {
-      const text = await file.text();
-      const lines = text.replace(/\r\n/g, '\n').split('\n').filter(Boolean);
-      if (lines.length < 2) throw new Error('CSV must have a header row and at least one data row.');
-
-      const parseRow = (line: string): string[] => {
-        const fields: string[] = [];
-        let field = ''; let inQ = false;
-        for (let i = 0; i < line.length; i++) {
-          const c = line[i];
-          if (inQ) { if (c === '"' && line[i+1] === '"') { field += '"'; i++; } else if (c === '"') { inQ = false; } else { field += c; } }
-          else { if (c === '"') { inQ = true; } else if (c === ',') { fields.push(field.trim()); field = ''; } else { field += c; } }
-        }
-        fields.push(field.trim());
-        return fields;
-      };
-
-      const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
-      const getIdx = (...names: string[]) => names.map(n => headers.indexOf(n)).find(i => i >= 0) ?? -1;
-
-      const mfgIdx   = getIdx('manufacturer');
-      const modelIdx = getIdx('model number', 'model_number', 'model#', 'model');
-      const descIdx  = getIdx('description');
-      const priceIdx = getIdx('msrp', 'list price', 'list_price', 'price');
-      const catIdx   = getIdx('category');
-
-      if (mfgIdx < 0 || modelIdx < 0) throw new Error('CSV must have "Manufacturer" and "Model Number" columns.');
-
-      const rows = [];
-      for (let i = 1; i < lines.length; i++) {
-        const vals = parseRow(lines[i]);
-        const mfg   = vals[mfgIdx]?.trim();
-        const model = vals[modelIdx]?.trim();
-        if (!mfg || !model) continue;
-        const rawPrice = priceIdx >= 0 ? vals[priceIdx]?.replace(/[$,]/g, '').trim() : '';
-        const price = rawPrice ? parseFloat(rawPrice) : null;
-        rows.push({
-          manufacturer: mfg, model_number: model,
-          description:  descIdx >= 0 ? (vals[descIdx] ?? '') : '',
-          list_price:   isNaN(price as any) ? null : price,
-          category:     catIdx >= 0 ? (vals[catIdx] ?? '') : '',
-        });
-      }
-
-      // Upsert in batches of 100
-      let inserted = 0;
-      for (let i = 0; i < rows.length; i += 100) {
-        const batch = rows.slice(i, i + 100);
-        const { error: err } = await supabase.from('product_catalog')
-          .upsert(batch, { onConflict: 'manufacturer,model_number', ignoreDuplicates: false });
-        if (err) throw new Error(err.message);
-        inserted += batch.length;
-      }
-      setResult({ inserted, skipped: 0 });
-    } catch (err: any) {
-      setError(err.message ?? 'Import failed');
-    }
-    setImporting(false);
+  const handleComplete = (count: number) => {
+    setResult(count);
+    refreshCount();
   };
 
   return (
@@ -523,40 +465,43 @@ function ProductCatalogSection() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-text-primary mb-1.5">
-          Import from CSV
-        </label>
         <p className="text-xs text-text-secondary mb-3">
-          Expected columns: <code className="bg-surface px-1 rounded">Manufacturer</code>, <code className="bg-surface px-1 rounded">Model Number</code>, <code className="bg-surface px-1 rounded">Description</code>, <code className="bg-surface px-1 rounded">MSRP</code>, <code className="bg-surface px-1 rounded">Category</code>. Existing items are updated.
+          Import products from a CSV or Excel file. You'll map columns to the right fields before importing.
+          Existing items (matched by manufacturer + model) are updated automatically.
         </p>
-        <input
-          type="file"
-          accept=".csv"
-          onChange={e => { setFile(e.target.files?.[0] ?? null); setResult(null); setError(''); }}
-          className="block w-full text-sm text-text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-border file:text-sm file:bg-surface hover:file:bg-gray-100 transition-colors"
-        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setResult(null); setModalOpen(true); }}
+            className="btn-primary flex items-center gap-2"
+          >
+            <Upload size={14} /> Import from CSV
+          </button>
+          {catalogCount !== null && catalogCount > 0 && (
+            <button
+              onClick={() => setViewerOpen(true)}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Search size={14} /> Open Catalog
+            </button>
+          )}
+        </div>
       </div>
 
-      {file && (
-        <button
-          onClick={handleImport}
-          disabled={importing}
-          className="btn-primary flex items-center gap-2 disabled:opacity-50"
-        >
-          {importing ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : 'Import Catalog'}
-        </button>
+      {result !== null && (
+        <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          Import complete — {result.toLocaleString()} items processed.
+        </div>
       )}
 
-      {result && (
-        <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-          Import complete — {result.inserted} items processed.
-        </div>
-      )}
-      {error && (
-        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-          {error}
-        </div>
-      )}
+      <CatalogImportModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onComplete={handleComplete}
+      />
+      <CatalogViewerModal
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+      />
     </div>
   );
 }

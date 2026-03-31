@@ -67,6 +67,7 @@ export interface LaborRate {
 
 export interface CatalogItem {
   model_number: string;
+  cost:         number | null;
   list_price:   number | null;
 }
 
@@ -326,19 +327,25 @@ export function runRules(
   // Monday pre-sales board does not have these columns yet.
 
   // ── MODERATE: Cost Deviation from Catalog ────────────────────────────────
-  const catalogMap = new Map<string, number>();
+  // Compare BoM unit cost against catalog cost (preferred) or list_price (fallback).
+  const catalogCostMap = new Map<string, { value: number; label: string }>();
   for (const c of catalog) {
-    if (c.list_price !== null) catalogMap.set(c.model_number.toLowerCase(), c.list_price);
+    const key = c.model_number.trim().toLowerCase();
+    if (c.cost !== null && c.cost > 0) {
+      catalogCostMap.set(key, { value: c.cost, label: 'catalog cost' });
+    } else if (c.list_price !== null && c.list_price > 0) {
+      catalogCostMap.set(key, { value: c.list_price, label: 'catalog list price' });
+    }
   }
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;  // $0 cost is intentional; catalog comparison not meaningful
-    const catPrice = catalogMap.get(r.modelNumber.toLowerCase());
-    if (catPrice !== undefined && catPrice > 0 && r.unitCost !== null) {
-      const dev = (Math.abs(r.unitCost - catPrice) / catPrice) * 100;
+    const cat = catalogCostMap.get(r.modelNumber.trim().toLowerCase());
+    if (cat && r.unitCost !== null) {
+      const dev = (Math.abs(r.unitCost - cat.value) / cat.value) * 100;
       if (dev > config.costDeviationPct) {
         flag('COST_DEVIATION_FROM_CATALOG', 'moderate', 'pricing',
           'Cost Deviation from Catalog',
-          `"${r.modelNumber}" unit cost ($${r.unitCost.toFixed(2)}) deviates ${dev.toFixed(1)}% from catalog price ($${catPrice.toFixed(2)}), exceeding the ${config.costDeviationPct}% threshold.`,
+          `"${r.modelNumber}" unit cost ($${r.unitCost.toFixed(2)}) deviates ${dev.toFixed(1)}% from ${cat.label} ($${cat.value.toFixed(2)}), exceeding the ${config.costDeviationPct}% threshold.`,
           r.modelNumber);
       }
     }
@@ -389,10 +396,10 @@ export function runRules(
 
   // ── LOW: Model Not in Catalog ─────────────────────────────────────────────
   // Skipped for owner-furnished items — we're not pricing them, so catalog presence is irrelevant.
-  const catalogModels = new Set(catalog.map(c => c.model_number.toLowerCase()));
+  const catalogModels = new Set(catalog.map(c => c.model_number.trim().toLowerCase()));
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
-    if (r.modelNumber && !catalogModels.has(r.modelNumber.toLowerCase())) {
+    if (r.modelNumber && !catalogModels.has(r.modelNumber.trim().toLowerCase())) {
       flag('MODEL_NOT_IN_CATALOG', 'low', 'catalog',
         'Model Not in Catalog',
         `"${r.modelNumber}" was not found in the product catalog. Pricing cannot be verified.`,
