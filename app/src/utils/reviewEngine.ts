@@ -388,8 +388,10 @@ export function runRules(
   }
 
   // ── LOW: Model Not in Catalog ─────────────────────────────────────────────
+  // Skipped for owner-furnished items — we're not pricing them, so catalog presence is irrelevant.
   const catalogModels = new Set(catalog.map(c => c.model_number.toLowerCase()));
   for (const r of realEquip) {
+    if (r.ownerFurnished) continue;
     if (r.modelNumber && !catalogModels.has(r.modelNumber.toLowerCase())) {
       flag('MODEL_NOT_IN_CATALOG', 'low', 'catalog',
         'Model Not in Catalog',
