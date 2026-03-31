@@ -1356,24 +1356,15 @@ export const useStore = create<AppState>((set, get) => ({
     const isResubmission = latestPrior?.status === 'changes_requested';
     console.log('[review] Run number:', runNumber, '| Resubmission:', isResubmission);
 
-    // 4. Diff against prior run flags if this is a resubmission
-    // Also fetch full prior flag details to carry forward resolved/waived status.
+    // 4a. Always fetch prior run flags to carry forward resolved/waived status
     let priorFlagMap: Map<string, { status: string; description: string; manager_comment: string | null; resolved_by: string | null; resolved_at: string | null }> | null = null;
-    if (isResubmission && latestPrior) {
+    if (latestPrior) {
       const { data: priorFlags } = await supabase
         .from('review_flags')
         .select('rule_id,line_item_ref,id,status,description,manager_comment,resolved_by,resolved_at')
         .eq('review_run_id', latestPrior.id);
 
       if (priorFlags?.length) {
-        flags = applyDiff(flags, priorFlags);
-        const newKeys = new Set(flags.map(f => `${f.rule_id}::${f.line_item_ref ?? ''}`));
-        const resolvedIds = priorFlags
-          .filter(pf => !newKeys.has(`${pf.rule_id}::${pf.line_item_ref ?? ''}`))
-          .map((pf: any) => pf.id);
-        if (resolvedIds.length) {
-          await supabase.from('review_flags').update({ diff_status: 'resolved' }).in('id', resolvedIds);
-        }
         // Build lookup for carrying forward resolved/waived status
         priorFlagMap = new Map();
         for (const pf of priorFlags) {
@@ -1386,8 +1377,18 @@ export const useStore = create<AppState>((set, get) => ({
             resolved_at: pf.resolved_at,
           });
         }
-      } else {
-        flags = flags.map(f => ({ ...f, diff_status: 'new' as const }));
+
+        // 4b. Apply diff labels only for formal resubmissions (changes_requested)
+        if (isResubmission) {
+          flags = applyDiff(flags, priorFlags);
+          const newKeys = new Set(flags.map(f => `${f.rule_id}::${f.line_item_ref ?? ''}`));
+          const resolvedIds = priorFlags
+            .filter(pf => !newKeys.has(`${pf.rule_id}::${pf.line_item_ref ?? ''}`))
+            .map((pf: any) => pf.id);
+          if (resolvedIds.length) {
+            await supabase.from('review_flags').update({ diff_status: 'resolved' }).in('id', resolvedIds);
+          }
+        }
       }
     }
 
@@ -1447,8 +1448,9 @@ export const useStore = create<AppState>((set, get) => ({
           diff_status:   f.diff_status,
           status:        'open',
         };
-        // Carry forward resolved/waived from prior run if the issue is unchanged
-        if (priorFlagMap && f.diff_status === 'recurring') {
+        // Carry forward resolved/waived from prior run if the issue is unchanged.
+        // Works for any re-run, not just formal resubmissions.
+        if (priorFlagMap) {
           const key = `${f.rule_id}::${f.line_item_ref ?? ''}`;
           const prior = priorFlagMap.get(key);
           if (prior && (prior.status === 'resolved' || prior.status === 'waived')

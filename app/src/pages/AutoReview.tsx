@@ -63,13 +63,12 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find siblings: other flags with the same rule + same item (lineItemRef).
-  // This groups all flags for the SAME model (e.g. all "Not in Catalog" flags
-  // for Core110f specifically), not all flags of that rule type across every model.
-  const identicalSiblings = allFlags
+  // Find siblings: all other flags for the SAME item (lineItemRef) regardless
+  // of rule type. So "Resolve All" on a Core110f resolves its "Not in Catalog"
+  // AND "Cost Deviation" flags together — every issue for that specific product.
+  const identicalSiblings = (allFlags && flag.lineItemRef)
     ? allFlags.filter(f =>
         f.id !== flag.id &&
-        f.ruleId === flag.ruleId &&
         f.lineItemRef === flag.lineItemRef,
       )
     : [];
@@ -116,7 +115,7 @@ export function FlagCard({
             )}
             {identicalSiblings.length > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-navy/10 text-navy font-medium">
-                {openSiblings.length + 1} of this type open
+                {identicalSiblings.length + 1} flags for this item
               </span>
             )}
             <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_STYLE[flag.status]}`}>
@@ -202,7 +201,7 @@ export function FlagCard({
           {hasBulkTargets && (
             <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-black/5">
               <span className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">
-                All "{flag.flagName}" flags:
+                All flags for {flag.lineItemRef}:
               </span>
               <button
                 onClick={() => saveAll('resolved')}
