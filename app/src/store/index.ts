@@ -11,6 +11,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
 } from '../utils/reviewEngine';
+import type { LaborRate as EngLaborRate } from '../utils/reviewEngine';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -506,7 +507,7 @@ interface AppState {
   fetchProjectFlags: (runId: string) => Promise<ReviewFlag[]>;
   updateRunStatus: (runId: string, status: ReviewRunStatus, reviewedBy?: string) => Promise<void>;
   updateFlagStatus: (flagId: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
-  createReviewRunFromCsv: (projectId: string, csvText: string) => Promise<{ runId: string; flagCount: number }>;
+  createReviewRunFromCsv: (projectId: string, csvText: string, laborRateOverrides?: EngLaborRate[]) => Promise<{ runId: string; flagCount: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,7 +1284,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (error) console.error('[review] updateFlagStatus error:', error);
   },
 
-  createReviewRunFromCsv: async (projectId, csvText) => {
+  createReviewRunFromCsv: async (projectId, csvText, laborRateOverrides?) => {
     if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
     console.log('[review] Starting createReviewRunFromCsv for project', projectId);
@@ -1304,15 +1305,18 @@ export const useStore = create<AppState>((set, get) => ({
     }
     console.log('[review] Project confirmed in DB');
 
-    // 1. Fetch review config, labor rates, and product catalog in parallel
-    const [configRes, laborRes, catalogRes] = await Promise.all([
+    // 1. Fetch review config and product catalog; labor rates come from
+    //    caller overrides (modal) or fall back to the DB table.
+    const [configRes, catalogRes, laborRes] = await Promise.all([
       supabase.from('review_config').select('key,value'),
-      supabase.from('labor_rates').select('labor_type,cost_per_hour,price_per_hour,hours_ceiling').eq('is_active', true),
       supabase.from('product_catalog').select('model_number,list_price'),
+      laborRateOverrides
+        ? Promise.resolve({ data: laborRateOverrides, error: null })
+        : supabase.from('labor_rates').select('labor_type,cost_per_hour,price_per_hour,hours_ceiling').eq('is_active', true),
     ]);
 
     console.log('[review] Config rows:', configRes.data?.length ?? 0,
-      '| Labor rates:', laborRes.data?.length ?? 0,
+      '| Labor rates:', laborRes.data?.length ?? 0, laborRateOverrides ? '(override)' : '(db)',
       '| Catalog items:', catalogRes.data?.length ?? 0);
 
     const configMap: Record<string, string> = {};

@@ -3,11 +3,13 @@ import { useParams } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle2, MinusCircle, MessageSquare, ChevronDown,
   ChevronUp, Clock, RefreshCw, ThumbsUp, AlertCircle, Info, Loader2,
-  Upload, FileSpreadsheet,
+  Upload, FileSpreadsheet, PlayCircle,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { parseCsv, mapRow } from '../utils/reviewEngine';
+import { Modal } from '../components/Modal';
 import type { ReviewFlag, ReviewFlagStatus, ReviewRunStatus } from '../types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -168,6 +170,178 @@ function FlagCard({
   );
 }
 
+// ─── Shared CSV Drop Zone ─────────────────────────────────────────────────────
+
+function CsvDropZone({
+  dragOver, busy, busyLabel, emptyLabel, fileInputRef, onDragOver, onDragLeave, onDrop, onChange,
+}: {
+  dragOver:     boolean;
+  busy:         boolean;
+  busyLabel:    string;
+  emptyLabel:   string;
+  fileInputRef: React.RefObject<HTMLInputElement>;
+  onDragOver:   () => void;
+  onDragLeave:  () => void;
+  onDrop:       (file: File) => void;
+  onChange:     (file: File) => void;
+}) {
+  return (
+    <div
+      onDragOver={e => { e.preventDefault(); onDragOver(); }}
+      onDragLeave={onDragLeave}
+      onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) onDrop(f); }}
+      onClick={() => !busy && fileInputRef.current?.click()}
+      className={`relative border-2 border-dashed rounded-xl px-6 py-5 flex items-center gap-4 cursor-pointer transition-colors ${
+        dragOver ? 'border-navy bg-navy/5' : 'border-border hover:border-navy/40 hover:bg-surface/50'
+      } ${busy ? 'pointer-events-none opacity-60' : ''}`}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv"
+        className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onChange(f); }}
+      />
+      {busy
+        ? <Loader2 size={22} className="text-navy animate-spin flex-shrink-0" />
+        : <FileSpreadsheet size={22} className={`flex-shrink-0 ${dragOver ? 'text-navy' : 'text-text-secondary/50'}`} />
+      }
+      <div>
+        <p className="text-sm font-medium text-text-primary">
+          {busy ? busyLabel : emptyLabel}
+        </p>
+        {!busy && <p className="text-xs text-text-secondary mt-0.5">Drag & drop or click to browse · .csv files only</p>}
+      </div>
+      {!busy && <Upload size={16} className="ml-auto text-text-secondary/40 flex-shrink-0" />}
+    </div>
+  );
+}
+
+// ─── Labor Rates Modal ────────────────────────────────────────────────────────
+
+export interface ModalRate {
+  labor_type:     string;
+  cost_per_hour:  number;
+  price_per_hour: number;
+  hours_ceiling:  number | null;
+}
+
+function LaborRatesModal({
+  open, rates, onClose, onRun, running,
+}: {
+  open: boolean;
+  rates: ModalRate[];
+  onClose: () => void;
+  onRun: (rates: ModalRate[]) => void;
+  running: boolean;
+}) {
+  const [local, setLocal] = useState<ModalRate[]>([]);
+
+  useEffect(() => { setLocal(rates); }, [rates]);
+
+  const update = (idx: number, field: 'cost_per_hour' | 'price_per_hour', val: string) => {
+    const n = val !== '' ? parseFloat(val) : 0;
+    setLocal(prev => prev.map((r, i) => i === idx ? { ...r, [field]: isNaN(n) ? 0 : n } : r));
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Review Labor Rates Before Running" wide>
+      <div>
+        <p className="text-sm text-text-secondary mb-4">
+          Rates are pre-populated from Settings. Adjust cost and price per hour for any
+          union requirements or project-specific agreements, then hit <strong>Run Review</strong>.
+        </p>
+
+        {local.length === 0 ? (
+          <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 mb-4">
+            No active labor rates found. Add them in <strong>Settings → Labor Rates</strong> first.
+            The review will still run, but labor margin rules won't fire.
+          </div>
+        ) : (
+          <div className="border border-border rounded-lg overflow-hidden mb-5">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-navy text-white text-left">
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider">Labor Type</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-right w-32">Cost / hr</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-right w-32">Price / hr</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-center w-20">Margin</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {local.map((rate, idx) => {
+                  const margin = rate.price_per_hour > 0
+                    ? Math.round((rate.price_per_hour - rate.cost_per_hour) / rate.price_per_hour * 100)
+                    : null;
+                  const marginColor = margin === null
+                    ? 'text-text-secondary'
+                    : margin >= 30 ? 'text-green-700'
+                    : margin >= 20 ? 'text-amber-600'
+                    : 'text-red-600';
+
+                  return (
+                    <tr key={rate.labor_type} className={idx % 2 === 1 ? 'bg-surface/30' : ''}>
+                      <td className="px-3 py-2 font-medium text-text-primary">{rate.labor_type}</td>
+
+                      {/* Cost / hr */}
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <span className="text-xs text-text-secondary">$</span>
+                          <input
+                            type="number"
+                            defaultValue={rate.cost_per_hour || ''}
+                            placeholder="0"
+                            onBlur={e => update(idx, 'cost_per_hour', e.target.value)}
+                            className="w-20 text-xs border border-border rounded px-2 py-1 text-right focus:outline-none focus:ring-1 focus:ring-navy/20"
+                          />
+                        </div>
+                      </td>
+
+                      {/* Price / hr */}
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <span className="text-xs text-text-secondary">$</span>
+                          <input
+                            type="number"
+                            defaultValue={rate.price_per_hour || ''}
+                            placeholder="0"
+                            onBlur={e => update(idx, 'price_per_hour', e.target.value)}
+                            className="w-20 text-xs border border-border rounded px-2 py-1 text-right focus:outline-none focus:ring-1 focus:ring-navy/20"
+                          />
+                        </div>
+                      </td>
+
+                      {/* Margin */}
+                      <td className={`px-3 py-2 text-center text-xs font-semibold ${marginColor}`}>
+                        {margin !== null ? `${margin}%` : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2 border-t border-border">
+          <button onClick={onClose} disabled={running} className="btn-secondary text-sm">
+            Cancel
+          </button>
+          <button
+            onClick={() => onRun(local)}
+            disabled={running}
+            className="btn-primary text-sm flex items-center gap-2 disabled:opacity-60"
+          >
+            {running
+              ? <><Loader2 size={14} className="animate-spin" /> Running review…</>
+              : <><PlayCircle size={14} /> Run Review</>}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function AutoReviewPage() {
@@ -184,11 +358,17 @@ export function AutoReviewPage() {
   const [updatingRun, setUpdatingRun] = useState(false);
 
   // ── CSV Upload state ───────────────────────────────────────────────────────
-  const [uploadDragOver, setUploadDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<{ flagCount: number } | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadDragOver, setUploadDragOver]     = useState(false);
+  const [uploading, setUploading]               = useState(false);
+  const [loadingRates, setLoadingRates]         = useState(false);
+  const [uploadResult, setUploadResult]         = useState<{ flagCount: number } | null>(null);
+  const [uploadError, setUploadError]           = useState<string | null>(null);
+  const fileInputRef                            = useRef<HTMLInputElement>(null);
+
+  // ── Labor Rates Modal state ────────────────────────────────────────────────
+  const [pendingCsv, setPendingCsv]             = useState<{ text: string; name: string } | null>(null);
+  const [showRatesModal, setShowRatesModal]     = useState(false);
+  const [modalRates, setModalRates]             = useState<ModalRate[]>([]);
 
   // Get all runs for this project, most recent first
   const projectRuns = reviewRuns
@@ -228,29 +408,72 @@ export function AutoReviewPage() {
     setUpdatingRun(false);
   };
 
-  // ── CSV upload handler ─────────────────────────────────────────────────────
+  // ── Phase 1: validate CSV + fetch rates → open modal ──────────────────────
   const handleCsvFile = useCallback(async (file: File) => {
     if (!projectId) return;
     if (!file.name.toLowerCase().endsWith('.csv')) {
       setUploadError('Please upload a .csv file.');
       return;
     }
+    setUploadError(null);
+    setUploadResult(null);
+
+    // Quick local validation — make sure it's a D-Tools export with product rows
+    const csvText = await file.text();
+    const rows    = parseCsv(csvText).map(mapRow);
+    if (!rows.some(r => r.itemType.toLowerCase() === 'product')) {
+      setUploadError('No product rows found. Make sure this is a D-Tools AV Package Items export.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // Fetch active labor rates to pre-populate the modal
+    setLoadingRates(true);
+    const { data: rateData, error: rateError } = await supabase
+      .from('labor_rates')
+      .select('labor_type, cost_per_hour, price_per_hour, hours_ceiling')
+      .eq('is_active', true)
+      .order('labor_type');
+    setLoadingRates(false);
+
+    if (rateError) {
+      setUploadError(`Could not load labor rates: ${rateError.message}`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // Stage the CSV and open the rates modal
+    setPendingCsv({ text: csvText, name: file.name });
+    setModalRates((rateData ?? []).map(r => ({
+      labor_type:    r.labor_type,
+      cost_per_hour:  r.cost_per_hour  ?? 0,
+      price_per_hour: r.price_per_hour ?? 0,
+      hours_ceiling:  r.hours_ceiling  ?? null,
+    })));
+    setShowRatesModal(true);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [projectId]);
+
+  // ── Phase 2: run review with (possibly edited) rates ──────────────────────
+  const handleRunReview = useCallback(async (rates: ModalRate[]) => {
+    if (!projectId || !pendingCsv) return;
     setUploading(true);
     setUploadError(null);
     setUploadResult(null);
     try {
-      const csvText = await file.text();
-      const result = await createReviewRunFromCsv(projectId, csvText);
+      const result = await createReviewRunFromCsv(projectId, pendingCsv.text, rates);
+      setShowRatesModal(false);
       setUploadResult({ flagCount: result.flagCount });
-      // Load flags for the newly created run
       await loadFlags(result.runId);
     } catch (err: any) {
+      setShowRatesModal(false);
       setUploadError(err?.message ?? 'Failed to process CSV. Please try again.');
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      setPendingCsv(null);
+      setModalRates([]);
     }
-  }, [projectId, createReviewRunFromCsv, loadFlags]);
+  }, [projectId, pendingCsv, createReviewRunFromCsv, loadFlags]);
 
   // ── Counts ────────────────────────────────────────────────────────────────
   const counts = {
@@ -284,40 +507,31 @@ export function AutoReviewPage() {
   if (!latestRun) {
     return (
       <div className="p-6 max-w-4xl">
+        <LaborRatesModal
+          open={showRatesModal}
+          rates={modalRates}
+          onClose={() => { setShowRatesModal(false); setPendingCsv(null); setModalRates([]); }}
+          onRun={handleRunReview}
+          running={uploading}
+        />
+
         {/* Still show upload section even when no runs exist yet */}
         {isAdmin && (
           <div className="mb-5">
             <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2">
               Upload D-Tools Export
             </h2>
-            <div
-              onDragOver={e => { e.preventDefault(); setUploadDragOver(true); }}
+            <CsvDropZone
+              dragOver={uploadDragOver}
+              busy={uploading || loadingRates}
+              busyLabel={loadingRates ? 'Loading labor rates…' : 'Processing CSV — running rules engine & rebuilding BoM…'}
+              emptyLabel="Upload D-Tools CSV to start the first review run"
+              fileInputRef={fileInputRef}
+              onDragOver={() => setUploadDragOver(true)}
               onDragLeave={() => setUploadDragOver(false)}
-              onDrop={e => {
-                e.preventDefault();
-                setUploadDragOver(false);
-                const file = e.dataTransfer.files?.[0];
-                if (file) handleCsvFile(file);
-              }}
-              onClick={() => !uploading && fileInputRef.current?.click()}
-              className={`relative border-2 border-dashed rounded-xl px-6 py-5 flex items-center gap-4 cursor-pointer transition-colors ${
-                uploadDragOver ? 'border-navy bg-navy/5' : 'border-border hover:border-navy/40 hover:bg-surface/50'
-              } ${uploading ? 'pointer-events-none opacity-60' : ''}`}
-            >
-              <input ref={fileInputRef} type="file" accept=".csv" className="hidden"
-                onChange={e => { const file = e.target.files?.[0]; if (file) handleCsvFile(file); }}
-              />
-              {uploading
-                ? <Loader2 size={22} className="text-navy animate-spin flex-shrink-0" />
-                : <FileSpreadsheet size={22} className="flex-shrink-0 text-text-secondary/50" />}
-              <div>
-                <p className="text-sm font-medium text-text-primary">
-                  {uploading ? 'Processing CSV — running rules engine & rebuilding BoM…' : 'Upload D-Tools CSV to start the first review run'}
-                </p>
-                {!uploading && <p className="text-xs text-text-secondary mt-0.5">Drag & drop or click to browse · .csv files only</p>}
-              </div>
-              {!uploading && <Upload size={16} className="ml-auto text-text-secondary/40 flex-shrink-0" />}
-            </div>
+              onDrop={file => { setUploadDragOver(false); handleCsvFile(file); }}
+              onChange={handleCsvFile}
+            />
             {uploadResult && !uploading && (
               <div className="mt-2 flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-4 py-2">
                 <CheckCircle2 size={15} />
@@ -350,65 +564,31 @@ export function AutoReviewPage() {
   return (
     <div className="p-6 max-w-4xl">
 
+      <LaborRatesModal
+        open={showRatesModal}
+        rates={modalRates}
+        onClose={() => { setShowRatesModal(false); setPendingCsv(null); setModalRates([]); }}
+        onRun={handleRunReview}
+        running={uploading}
+      />
+
       {/* ── CSV Upload (admin only) ───────────────────────────────────────── */}
       {isAdmin && (
         <div className="mb-5">
           <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2">
             Upload D-Tools Export
           </h2>
-
-          {/* Drop zone */}
-          <div
-            onDragOver={e => { e.preventDefault(); setUploadDragOver(true); }}
+          <CsvDropZone
+            dragOver={uploadDragOver}
+            busy={uploading || loadingRates}
+            busyLabel={loadingRates ? 'Loading labor rates…' : 'Processing CSV — running rules engine & rebuilding BoM…'}
+            emptyLabel={uploadDragOver ? 'Drop the CSV here' : 'Upload revised D-Tools CSV to start a new review run'}
+            fileInputRef={fileInputRef}
+            onDragOver={() => setUploadDragOver(true)}
             onDragLeave={() => setUploadDragOver(false)}
-            onDrop={e => {
-              e.preventDefault();
-              setUploadDragOver(false);
-              const file = e.dataTransfer.files?.[0];
-              if (file) handleCsvFile(file);
-            }}
-            onClick={() => !uploading && fileInputRef.current?.click()}
-            className={`relative border-2 border-dashed rounded-xl px-6 py-5 flex items-center gap-4 cursor-pointer transition-colors ${
-              uploadDragOver
-                ? 'border-navy bg-navy/5'
-                : 'border-border hover:border-navy/40 hover:bg-surface/50'
-            } ${uploading ? 'pointer-events-none opacity-60' : ''}`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={e => {
-                const file = e.target.files?.[0];
-                if (file) handleCsvFile(file);
-              }}
-            />
-            {uploading ? (
-              <Loader2 size={22} className="text-navy animate-spin flex-shrink-0" />
-            ) : (
-              <FileSpreadsheet size={22} className={`flex-shrink-0 ${uploadDragOver ? 'text-navy' : 'text-text-secondary/50'}`} />
-            )}
-            <div>
-              <p className="text-sm font-medium text-text-primary">
-                {uploading
-                  ? 'Processing CSV — running rules engine & rebuilding BoM…'
-                  : uploadDragOver
-                  ? 'Drop the CSV here'
-                  : latestRun
-                  ? 'Upload revised D-Tools CSV to start a new review run'
-                  : 'Upload D-Tools CSV to start the first review run'}
-              </p>
-              {!uploading && (
-                <p className="text-xs text-text-secondary mt-0.5">
-                  Drag & drop or click to browse · .csv files only
-                </p>
-              )}
-            </div>
-            {!uploading && (
-              <Upload size={16} className="ml-auto text-text-secondary/40 flex-shrink-0" />
-            )}
-          </div>
+            onDrop={file => { setUploadDragOver(false); handleCsvFile(file); }}
+            onChange={handleCsvFile}
+          />
 
           {/* Upload result / error */}
           {uploadResult && !uploading && (
