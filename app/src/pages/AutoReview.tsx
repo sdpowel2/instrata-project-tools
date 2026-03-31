@@ -9,6 +9,10 @@ import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
 import { isSupabaseConfigured } from '../lib/supabase';
 import type { ReviewFlag, ReviewFlagStatus, ReviewRunStatus } from '../types';
+import { ReviewQuoteView } from '../components/ReviewBoMTable';
+import { parseCsv, mapRow } from '../utils/reviewEngine';
+import type { CsvRow } from '../utils/reviewEngine';
+import { supabase } from '../lib/supabase';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -43,7 +47,7 @@ const RUN_STATUS_STYLE: Record<ReviewRunStatus, string> = {
 
 // ─── Flag Card ────────────────────────────────────────────────────────────────
 
-function FlagCard({
+export function FlagCard({
   flag,
   onUpdateStatus,
 }: {
@@ -226,6 +230,7 @@ export function AutoReviewPage() {
   const createReviewRunFromCsv = useStore(s => s.createReviewRunFromCsv);
 
   const [flags, setFlags] = useState<ReviewFlag[]>([]);
+  const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
   const [loadingFlags, setLoadingFlags] = useState(false);
   const [updatingRun, setUpdatingRun] = useState(false);
 
@@ -245,7 +250,25 @@ export function AutoReviewPage() {
 
   const loadFlags = useCallback(async (runId: string) => {
     setLoadingFlags(true);
-    const fetched = await fetchProjectFlags(runId);
+    const [fetched] = await Promise.all([
+      fetchProjectFlags(runId),
+      // Fetch CSV snapshot and parse into CsvRow[]
+      (async () => {
+        try {
+          const { data } = await supabase
+            .from('review_runs')
+            .select('csv_snapshot')
+            .eq('id', runId)
+            .single();
+          if (data?.csv_snapshot) {
+            const rows = parseCsv(data.csv_snapshot).map(mapRow);
+            setCsvRows(rows);
+          }
+        } catch (err) {
+          console.warn('[review] Failed to fetch CSV snapshot:', err);
+        }
+      })(),
+    ]);
     setFlags(fetched);
     setLoadingFlags(false);
   }, [fetchProjectFlags]);
@@ -288,6 +311,8 @@ export function AutoReviewPage() {
       const csvText = await file.text();
       const result  = await createReviewRunFromCsv(projectId, csvText);
       setUploadResult({ flagCount: result.flagCount });
+      // Parse CSV rows locally (skip re-fetching snapshot we just uploaded)
+      setCsvRows(parseCsv(csvText).map(mapRow));
       await loadFlags(result.runId);
     } catch (err: any) {
       setUploadError(err?.message ?? 'Failed to process CSV. Please try again.');
@@ -317,6 +342,11 @@ export function AutoReviewPage() {
   const diffResolved  = flags.filter(f => f.diffStatus === 'resolved').length;
   const isResubmission = projectRuns.length > 1 && latestRun && (diffNew + diffRecurring + diffResolved) > 0;
 
+  // Partition flags: project-level (shown at top) vs item-level (shown inline in quote)
+  const PROJECT_LEVEL_RULES = new Set(['PROJECT_MARGIN_BELOW_FLOOR', 'LABOR_MARGIN_BELOW_FLOOR']);
+  const projectFlags = flags.filter(f => !f.lineItemRef || PROJECT_LEVEL_RULES.has(f.ruleId));
+  const itemFlags    = flags.filter(f => f.lineItemRef && !PROJECT_LEVEL_RULES.has(f.ruleId));
+
   // ── Empty state ───────────────────────────────────────────────────────────
   if (!isSupabaseConfigured()) {
     return (
@@ -328,7 +358,7 @@ export function AutoReviewPage() {
 
   if (!latestRun) {
     return (
-      <div className="p-6 max-w-4xl">
+      <div className="p-6 max-w-6xl">
         {/* Still show upload section even when no runs exist yet */}
         {isAdmin && (
           <div className="mb-5">
@@ -368,14 +398,8 @@ export function AutoReviewPage() {
     );
   }
 
-  const grouped = {
-    high:     flags.filter(f => f.severity === 'high'),
-    moderate: flags.filter(f => f.severity === 'moderate'),
-    low:      flags.filter(f => f.severity === 'low'),
-  };
-
   return (
-    <div className="p-6 max-w-4xl">
+    <div className="p-6 max-w-6xl">
 
       {/* ── CSV Upload (admin only) ───────────────────────────────────────── */}
       {isAdmin && (
@@ -486,12 +510,12 @@ export function AutoReviewPage() {
         </div>
       )}
 
-      {/* Flags */}
+      {/* Flags & Quote */}
       {loadingFlags ? (
         <div className="flex items-center gap-2 text-text-secondary py-8 justify-center">
-          <Loader2 size={18} className="animate-spin" /> Loading flags...
+          <Loader2 size={18} className="animate-spin" /> Loading review…
         </div>
-      ) : flags.length === 0 ? (
+      ) : flags.length === 0 && csvRows.length === 0 ? (
         <div className="text-center py-12 text-text-secondary">
           <CheckCircle2 size={32} className="mx-auto mb-3 text-green-500" />
           <p className="font-medium text-text-primary">No flags generated</p>
@@ -499,21 +523,19 @@ export function AutoReviewPage() {
         </div>
       ) : (
         <div className="space-y-5">
-          {(['high', 'moderate', 'low'] as const).map(severity => {
-            const group = grouped[severity];
-            if (group.length === 0) return null;
-            const style = SEVERITY_STYLE[severity];
-            return (
-              <section key={severity}>
-                <h3 className={`text-xs font-bold uppercase tracking-widest mb-2 ${style.text}`}>
-                  {severity} — {group.length} flag{group.length !== 1 ? 's' : ''}
-                </h3>
-                {group.map(flag => (
-                  <FlagCard key={flag.id} flag={flag} onUpdateStatus={handleFlagUpdate} />
-                ))}
-              </section>
-            );
-          })}
+          {/* Project-level flags (collapsible) */}
+          {projectFlags.length > 0 && (
+            <GlobalFlagsSection flags={projectFlags} onUpdateStatus={handleFlagUpdate} />
+          )}
+
+          {/* Full quote view — location-grouped with inline flags */}
+          {csvRows.length > 0 && (
+            <ReviewQuoteView
+              csvRows={csvRows}
+              flags={itemFlags}
+              onUpdateStatus={handleFlagUpdate}
+            />
+          )}
         </div>
       )}
 
@@ -535,6 +557,48 @@ export function AutoReviewPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function GlobalFlagsSection({
+  flags,
+  onUpdateStatus,
+}: {
+  flags: ReviewFlag[];
+  onUpdateStatus: (id: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const highCount = flags.filter(f => f.severity === 'high').length;
+  const modCount  = flags.filter(f => f.severity === 'moderate').length;
+  const lowCount  = flags.filter(f => f.severity === 'low').length;
+
+  return (
+    <section>
+      <button
+        onClick={() => setCollapsed(v => !v)}
+        className="flex items-center gap-2 mb-2 group w-full text-left"
+      >
+        {collapsed
+          ? <ChevronDown size={14} className="text-text-secondary" />
+          : <ChevronUp size={14} className="text-text-secondary" />
+        }
+        <h3 className="text-xs font-bold uppercase tracking-widest text-text-secondary">
+          Project & Labor Flags — {flags.length}
+        </h3>
+        <span className="text-xs text-text-secondary ml-1">
+          {highCount > 0 && <span className="text-red-600 mr-1">{highCount} high</span>}
+          {modCount > 0 && <span className="text-amber-600 mr-1">{modCount} moderate</span>}
+          {lowCount > 0 && <span className="text-blue-600">{lowCount} low</span>}
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="space-y-1">
+          {flags.map(flag => (
+            <FlagCard key={flag.id} flag={flag} onUpdateStatus={onUpdateStatus} />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
