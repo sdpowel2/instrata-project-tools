@@ -6,12 +6,15 @@
 //   Item Type | Manufacturer | Model | Quantity | Location | Part Number |
 //   Short Description | Unit Cost | Unit Price | Margin | Labor Types |
 //   Unit Labor Hours | Fixed Labor Cost | Fixed Labor Price |
-//   Labor Unit Cost | Labor Unit Price | Component ID
+//   Labor Unit Cost | Labor Unit Price | Owner Furnished Equipment | Non-Billable |
+//   Component ID
 //
 // Rules:
 //   - Item Type = "Product" → equipment row (may carry embedded labor hours)
 //   - Item Type = "Labor"   → dedicated labor row (variable or fixed)
 //   - Labor Types can be comma-separated (e.g. "Install, Cabling")
+//   - Owner Furnished = true → $0 cost/price expected; labor still required
+//   - Non-Billable = true   → excluded from all rules and margin math
 //   - Part Number and Component ID are skipped
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -32,6 +35,8 @@ export interface CsvRow {
   fixedLaborPrice: number | null;  // "Fixed Labor Price" — fixed $ price, no hours
   laborUnitCost:   number | null;  // "Labor Unit Cost"   — $/hr incl. non-productive factor
   laborUnitPrice:  number | null;  // "Labor Unit Price"  — $/hr incl. non-productive factor
+  ownerFurnished:  boolean;  // "Owner Furnished Equipment" — $0 cost/price OK; labor still required
+  nonBillable:     boolean;  // "Non-Billable"    — excluded from all rules and margin math
 }
 
 export interface EngineFlag {
@@ -120,6 +125,11 @@ function toNum(v: string | undefined): number | null {
   return isNaN(n) ? null : n;
 }
 
+function toBool(v: string | undefined): boolean {
+  const s = (v ?? '').trim().toLowerCase();
+  return s === 'yes' || s === 'true' || s === '1' || s === 'x';
+}
+
 // Maps a raw D-Tools CSV row to a typed CsvRow.
 export function mapRow(raw: Record<string, string>): CsvRow {
   const marginRaw = toNum(raw['margin']);
@@ -144,6 +154,8 @@ export function mapRow(raw: Record<string, string>): CsvRow {
     fixedLaborPrice: toNum(raw['fixed labor price']),
     laborUnitCost:   toNum(raw['labor unit cost']),
     laborUnitPrice:  toNum(raw['labor unit price']),
+    ownerFurnished:  toBool(raw['owner furnished equipment']),
+    nonBillable:     toBool(raw['non-billable']),
   };
 }
 
@@ -186,8 +198,12 @@ export function runRules(
   const equipRows = rows.filter(r => r.itemType.toLowerCase() === 'product');
   const laborRows = rows.filter(r => r.itemType.toLowerCase() === 'labor');
 
-  // realEquip: exclude S&H and MISC from item-level rules (kept in margin via equipRows)
-  const realEquip = equipRows.filter(r => r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC');
+  // realEquip: exclude S&H, MISC, and non-billable rows from item-level rules and margin math.
+  // Owner-furnished rows ARE included (so location/quantity checks still fire), but
+  // pricing-specific rules (ZERO_UNIT_PRICE, COST_DEVIATION) skip them individually.
+  const realEquip = equipRows.filter(r =>
+    r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC' && !r.nonBillable,
+  );
 
   // ── Pre-compute total labor cost/price directly from CSV columns ──────────
   // Two sources:
@@ -200,6 +216,7 @@ export function runRules(
   // Labor Types can be comma-separated — handled per item where needed.
   let totalLaborCost = 0, totalLaborPrice = 0;
   for (const r of rows) {
+    if (r.nonBillable) continue;  // non-billable rows carry $0 cost everywhere — skip entirely
     const qty = r.quantity ?? 1;
     // Variable labor (dedicated Labor rows OR embedded on Product rows)
     if ((r.laborHours ?? 0) > 0 && (r.laborUnitCost ?? 0) > 0) {
@@ -235,7 +252,7 @@ export function runRules(
   // A dedicated Labor row has hours but no labor unit cost set — means the
   // engineer left the rate blank in D-Tools, so it contributes $0 to the project.
   const seenMissingRate = new Set<string>();
-  for (const r of laborRows) {
+  for (const r of laborRows.filter(r => !r.nonBillable)) {
     if ((r.laborHours ?? 0) > 0 && !(r.laborUnitCost ?? 0) && !(r.fixedLaborCost ?? 0)) {
       const types = r.laborTypes.length ? r.laborTypes : [r.modelNumber || 'Unknown'];
       for (const lt of types) {
@@ -254,7 +271,7 @@ export function runRules(
   // ── HIGH: Labor Row With No Hours and No Fixed Cost ───────────────────────
   // A dedicated Labor row that contributes nothing ($0 hours, $0 fixed).
   // Skipped for Mobilization which is sometimes intentionally $0.
-  for (const r of laborRows) {
+  for (const r of laborRows.filter(r => !r.nonBillable)) {
     const types = r.laborTypes.length ? r.laborTypes : [];
     const isMobilization = types.some(t => t.toLowerCase() === 'mobilization');
     if (!isMobilization && !(r.laborHours ?? 0) && !(r.fixedLaborCost ?? 0)) {
@@ -278,12 +295,29 @@ export function runRules(
   }
 
   // ── HIGH: Zero Unit Price ─────────────────────────────────────────────────
+  // Skipped for owner-furnished items ($0 price is expected and correct).
   const freeModels = new Set(config.freeItemModels.map(m => m.toLowerCase().trim()));
   for (const r of realEquip) {
+    if (r.ownerFurnished) continue;
     if ((r.unitPrice === null || r.unitPrice === 0) && !freeModels.has(r.modelNumber.toLowerCase())) {
       flag('ZERO_UNIT_PRICE', 'high', 'data',
         'Zero Unit Price',
         `Equipment line "${r.modelNumber || r.description}" has a unit price of $0.`,
+        r.modelNumber || r.description);
+    }
+  }
+
+  // ── HIGH: Owner-Furnished Item Missing Labor ───────────────────────────────
+  // Owner-furnished items carry $0 product cost/price — that's expected.
+  // But labor (installation) should still be captured on the row.
+  // Flag any owner-furnished Product row that has no embedded labor hours.
+  for (const r of realEquip) {
+    if (!r.ownerFurnished) continue;
+    if (!(r.laborHours ?? 0)) {
+      flag('OWNER_FURNISHED_NO_LABOR', 'high', 'labor',
+        'Owner-Furnished Item Missing Labor',
+        `"${r.modelNumber || r.description}" in "${r.location}" is marked owner-furnished but has no embedded labor hours. ` +
+        `Verify that install labor is captured on a dedicated labor row for this location.`,
         r.modelNumber || r.description);
     }
   }
@@ -297,6 +331,7 @@ export function runRules(
     if (c.list_price !== null) catalogMap.set(c.model_number.toLowerCase(), c.list_price);
   }
   for (const r of realEquip) {
+    if (r.ownerFurnished) continue;  // $0 cost is intentional; catalog comparison not meaningful
     const catPrice = catalogMap.get(r.modelNumber.toLowerCase());
     if (catPrice !== undefined && catPrice > 0 && r.unitCost !== null) {
       const dev = (Math.abs(r.unitCost - catPrice) / catPrice) * 100;
