@@ -136,7 +136,9 @@ function buildLocationTree(
 
   for (const r of csvRows) {
     if (r.nonBillable) continue;
-    if (r.modelNumber === 'S&H' || r.modelNumber === 'MISC') continue;
+    if (r.modelNumber === 'MISC') continue;
+    // S&H rows are included in the quote view so dollar totals match D-Tools;
+    // they are still excluded from review rules in reviewEngine.ts.
     const fullLoc = (r.location || 'Unassigned').trim() || 'Unassigned';
     if (!leafMap.has(fullLoc)) leafMap.set(fullLoc, { equip: [], labor: [] });
     const bucket = leafMap.get(fullLoc)!;
