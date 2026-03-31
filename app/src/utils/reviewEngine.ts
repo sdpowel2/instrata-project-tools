@@ -5,27 +5,33 @@
 // D-Tools CSV headers (exact):
 //   Item Type | Manufacturer | Model | Quantity | Location | Part Number |
 //   Short Description | Unit Cost | Unit Price | Margin | Labor Types |
-//   Unit Labor Hours | Component ID
+//   Unit Labor Hours | Fixed Labor Cost | Fixed Labor Price |
+//   Labor Unit Cost | Labor Unit Price | Component ID
 //
 // Rules:
-//   - Item Type = "Product" → equipment row
-//   - Item Type = "Labor"   → labor row
+//   - Item Type = "Product" → equipment row (may carry embedded labor hours)
+//   - Item Type = "Labor"   → dedicated labor row (variable or fixed)
+//   - Labor Types can be comma-separated (e.g. "Install, Cabling")
 //   - Part Number and Component ID are skipped
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface CsvRow {
-  itemType:     string;   // "Product" | "Labor"
-  manufacturer: string;
-  modelNumber:  string;   // "Model" column
-  description:  string;   // "Short Description" column
-  quantity:     number | null;
-  location:     string;   // room / location
-  unitCost:     number | null;
-  unitPrice:    number | null;
-  marginPct:    number | null;  // "Margin" column × 100 (stored as 0.15 → 15)
-  laborType:    string;   // "Labor Types" column
-  laborHours:   number | null;  // "Unit Labor Hours" column
+  itemType:        string;   // "Product" | "Labor"
+  manufacturer:    string;
+  modelNumber:     string;   // "Model" column
+  description:     string;   // "Short Description" column
+  quantity:        number | null;
+  location:        string;   // room / location
+  unitCost:        number | null;
+  unitPrice:       number | null;
+  marginPct:       number | null;  // "Margin" column × 100 (stored as 0.15 → 15)
+  laborTypes:      string[];  // "Labor Types" column — split on comma, may be multi-value
+  laborHours:      number | null;  // "Unit Labor Hours" — UNIT hours (multiply by qty)
+  fixedLaborCost:  number | null;  // "Fixed Labor Cost"  — fixed $ cost, no hours
+  fixedLaborPrice: number | null;  // "Fixed Labor Price" — fixed $ price, no hours
+  laborUnitCost:   number | null;  // "Labor Unit Cost"   — $/hr incl. non-productive factor
+  laborUnitPrice:  number | null;  // "Labor Unit Price"  — $/hr incl. non-productive factor
 }
 
 export interface EngineFlag {
@@ -117,18 +123,27 @@ function toNum(v: string | undefined): number | null {
 // Maps a raw D-Tools CSV row to a typed CsvRow.
 export function mapRow(raw: Record<string, string>): CsvRow {
   const marginRaw = toNum(raw['margin']);
+  // Labor Types can be comma-separated — split and trim each value, drop blanks
+  const laborTypesRaw = (raw['labor types'] ?? '').trim();
+  const laborTypes = laborTypesRaw
+    ? laborTypesRaw.split(',').map(t => t.trim()).filter(Boolean)
+    : [];
   return {
-    itemType:    (raw['item type'] ?? '').trim(),
-    manufacturer:(raw['manufacturer'] ?? '').trim(),
-    modelNumber: (raw['model'] ?? '').trim(),
-    description: (raw['short description'] ?? '').trim(),
-    quantity:    toNum(raw['quantity']),
-    location:    (raw['location'] ?? '').trim(),
-    unitCost:    toNum(raw['unit cost']),
-    unitPrice:   toNum(raw['unit price']),
-    marginPct:   marginRaw !== null ? marginRaw * 100 : null,
-    laborType:   (raw['labor types'] ?? '').trim(),
-    laborHours:  toNum(raw['unit labor hours']),
+    itemType:        (raw['item type']         ?? '').trim(),
+    manufacturer:    (raw['manufacturer']       ?? '').trim(),
+    modelNumber:     (raw['model']              ?? '').trim(),
+    description:     (raw['short description']  ?? '').trim(),
+    quantity:        toNum(raw['quantity']),
+    location:        (raw['location']           ?? '').trim(),
+    unitCost:        toNum(raw['unit cost']),
+    unitPrice:       toNum(raw['unit price']),
+    marginPct:       marginRaw !== null ? marginRaw * 100 : null,
+    laborTypes,
+    laborHours:      toNum(raw['unit labor hours']),
+    fixedLaborCost:  toNum(raw['fixed labor cost']),
+    fixedLaborPrice: toNum(raw['fixed labor price']),
+    laborUnitCost:   toNum(raw['labor unit cost']),
+    laborUnitPrice:  toNum(raw['labor unit price']),
   };
 }
 
@@ -156,10 +171,9 @@ export function inferCategory(description: string, model: string): ItemCategory 
 // ─── Rules Engine ─────────────────────────────────────────────────────────────
 
 export function runRules(
-  rows:        CsvRow[],
-  config:      ReviewConfig,
-  laborRates:  LaborRate[],
-  catalog:     CatalogItem[],
+  rows:    CsvRow[],
+  config:  ReviewConfig,
+  catalog: CatalogItem[],
 ): EngineFlag[] {
   const flags: EngineFlag[] = [];
 
@@ -168,54 +182,87 @@ export function runRules(
     flag_name: string, description: string, line_item_ref: string | null = null,
   ) => flags.push({ rule_id, severity, category, flag_name, description, line_item_ref, diff_status: null });
 
-  // Separate equipment (Product) rows from labor rows
-  const equipRows  = rows.filter(r => r.itemType.toLowerCase() === 'product');
-  const laborRows  = rows.filter(r => r.itemType.toLowerCase() === 'labor');
+  // Separate equipment (Product) rows from dedicated labor rows
+  const equipRows = rows.filter(r => r.itemType.toLowerCase() === 'product');
+  const laborRows = rows.filter(r => r.itemType.toLowerCase() === 'labor');
 
-  // Real product rows: exclude S&H and MISC from BoM rules (but keep in margin calc)
-  const realEquip  = equipRows.filter(r => r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC');
+  // realEquip: exclude S&H and MISC from item-level rules (kept in margin via equipRows)
+  const realEquip = equipRows.filter(r => r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC');
+
+  // ── Pre-compute total labor cost/price directly from CSV columns ──────────
+  // Two sources:
+  //   1. Dedicated Labor rows
+  //      • Variable: unit labor hours × labor unit cost/price × quantity
+  //      • Fixed:    fixed labor cost/price × quantity (e.g. finder's fees, equipment rental)
+  //   2. Embedded labor on Product rows
+  //      • unit labor hours × labor unit cost/price × quantity
+  //        (D-Tools lets you attach install hours to individual product line items)
+  // Labor Types can be comma-separated — handled per item where needed.
+  let totalLaborCost = 0, totalLaborPrice = 0;
+  for (const r of rows) {
+    const qty = r.quantity ?? 1;
+    // Variable labor (dedicated Labor rows OR embedded on Product rows)
+    if ((r.laborHours ?? 0) > 0 && (r.laborUnitCost ?? 0) > 0) {
+      totalLaborCost  += (r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty;
+      totalLaborPrice += (r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty;
+    }
+    // Fixed labor (dedicated Labor rows only)
+    if (r.itemType.toLowerCase() === 'labor' && (r.fixedLaborCost ?? 0) > 0) {
+      totalLaborCost  += (r.fixedLaborCost  ?? 0) * qty;
+      totalLaborPrice += (r.fixedLaborPrice ?? 0) * qty;
+    }
+  }
 
   // ── HIGH: Project Margin Below Floor ─────────────────────────────────────
-  // Includes both equipment and labor rows so the margin reflects the full
-  // project (blended equipment + labor), not just the equipment sell.
-  const allBillable = [...equipRows, ...laborRows];
-  const totalPrice  = allBillable.reduce((s, r) => s + (r.unitPrice ?? 0) * (r.quantity ?? 0), 0);
-  const totalCost   = allBillable.reduce((s, r) => s + (r.unitCost  ?? 0) * (r.quantity ?? 0), 0);
-  if (totalPrice > 0) {
-    const margin = ((totalPrice - totalCost) / totalPrice) * 100;
+  // Equipment cost/price: realEquip rows (unit cost/price × qty, excl S&H/MISC).
+  // Labor cost/price: computed above from CSV columns directly.
+  const equipCost  = realEquip.reduce((s, r) => s + (r.unitCost  ?? 0) * (r.quantity ?? 0), 0);
+  const equipPrice = realEquip.reduce((s, r) => s + (r.unitPrice ?? 0) * (r.quantity ?? 0), 0);
+  const projectCost  = equipCost  + totalLaborCost;
+  const projectPrice = equipPrice + totalLaborPrice;
+  if (projectPrice > 0) {
+    const margin = ((projectPrice - projectCost) / projectPrice) * 100;
     if (margin < config.marginFloorProject) {
       flag('PROJECT_MARGIN_BELOW_FLOOR', 'high', 'margin',
         'Project Margin Below Floor',
         `Project margin is ${margin.toFixed(1)}%, below the configured ${config.marginFloorProject}% floor. ` +
-        `(Equipment + Labor — Cost: $${totalCost.toFixed(0)} / Price: $${totalPrice.toFixed(0)})`);
+        `(Equip: $${equipCost.toFixed(0)} cost / $${equipPrice.toFixed(0)} price · ` +
+        `Labor: $${totalLaborCost.toFixed(0)} cost / $${totalLaborPrice.toFixed(0)} price)`);
     }
   }
 
-  // ── HIGH: Unmatched Labor Type ────────────────────────────────────────────
-  const knownTypes = new Set(laborRates.map(r => r.labor_type.toLowerCase()));
-  const seenTypes  = new Set<string>();
+  // ── HIGH: Labor Row Missing Rate in D-Tools ───────────────────────────────
+  // A dedicated Labor row has hours but no labor unit cost set — means the
+  // engineer left the rate blank in D-Tools, so it contributes $0 to the project.
+  const seenMissingRate = new Set<string>();
   for (const r of laborRows) {
-    if (!r.laborType) continue;
-    const lt = r.laborType.toLowerCase();
-    if (!seenTypes.has(lt)) {
-      seenTypes.add(lt);
-      if (!knownTypes.has(lt)) {
-        flag('UNMATCHED_LABOR_TYPE', 'high', 'labor',
-          'Unmatched Labor Type',
-          `Labor type "${r.laborType}" has no matching entry in the labor rate table.`,
-          r.laborType);
+    if ((r.laborHours ?? 0) > 0 && !(r.laborUnitCost ?? 0) && !(r.fixedLaborCost ?? 0)) {
+      const types = r.laborTypes.length ? r.laborTypes : [r.modelNumber || 'Unknown'];
+      for (const lt of types) {
+        const key = `${lt}::${r.location}`;
+        if (!seenMissingRate.has(key)) {
+          seenMissingRate.add(key);
+          flag('LABOR_MISSING_RATE', 'high', 'labor',
+            'Labor Row Missing Rate',
+            `"${lt}" in "${r.location}" has ${r.laborHours} hours but no unit cost/price set in D-Tools — contributes $0 to the project.`,
+            lt);
+        }
       }
     }
   }
 
-  // ── HIGH: Labor Row With Zero Hours ──────────────────────────────────────
+  // ── HIGH: Labor Row With No Hours and No Fixed Cost ───────────────────────
+  // A dedicated Labor row that contributes nothing ($0 hours, $0 fixed).
+  // Skipped for Mobilization which is sometimes intentionally $0.
   for (const r of laborRows) {
-    if (r.laborType && r.laborType.toLowerCase() !== 'mobilization') {
-      if (r.laborHours === null || r.laborHours === 0) {
-        flag('LABOR_ZERO_HOURS', 'high', 'labor',
-          'Labor Row With Zero Hours',
-          `Labor type "${r.laborType}" in "${r.location}" has 0 hours logged.`,
-          r.laborType);
+    const types = r.laborTypes.length ? r.laborTypes : [];
+    const isMobilization = types.some(t => t.toLowerCase() === 'mobilization');
+    if (!isMobilization && !(r.laborHours ?? 0) && !(r.fixedLaborCost ?? 0)) {
+      if (r.laborTypes.length || r.modelNumber) {
+        flag('LABOR_ZERO_CONTRIBUTION', 'high', 'labor',
+          'Labor Row With Zero Contribution',
+          `Labor item "${r.modelNumber || r.laborTypes.join(', ')}" in "${r.location}" has no hours and no fixed cost — verify in D-Tools.`,
+          r.modelNumber || r.laborTypes[0] || null);
       }
     }
   }
@@ -262,47 +309,8 @@ export function runRules(
     }
   }
 
-  // ── MODERATE: Labor Hours Exceed Ceiling ──────────────────────────────────
-  const ceilingMap = new Map<string, number>();
-  for (const rate of laborRates) {
-    if (rate.hours_ceiling !== null) ceilingMap.set(rate.labor_type.toLowerCase(), rate.hours_ceiling);
-  }
-  // Sum hours per labor type across all labor rows
-  const hoursByType = new Map<string, number>();
-  for (const r of laborRows) {
-    if (r.laborType && r.laborHours) {
-      const lt = r.laborType.toLowerCase();
-      hoursByType.set(lt, (hoursByType.get(lt) ?? 0) + r.laborHours);
-    }
-  }
-  for (const [lt, totalHours] of hoursByType) {
-    const ceil = ceilingMap.get(lt);
-    if (ceil !== undefined && totalHours > ceil) {
-      flag('LABOR_HOURS_EXCEED_CEILING', 'moderate', 'labor',
-        'Labor Hours Exceed Ceiling',
-        `Labor type "${lt}" has ${totalHours.toFixed(1)} total hours, exceeding the configured ceiling of ${ceil} hours.`,
-        lt);
-    }
-  }
-
   // ── MODERATE: Labor Margin Below Floor ───────────────────────────────────
-  // Uses cost_per_hour and price_per_hour from labor_rates × hours per type
-  const laborRateMap = new Map<string, { cost: number; price: number }>();
-  for (const rate of laborRates) {
-    laborRateMap.set(rate.labor_type.toLowerCase(), {
-      cost:  rate.cost_per_hour  ?? 0,
-      price: rate.price_per_hour ?? 0,
-    });
-  }
-  let totalLaborCost = 0, totalLaborPrice = 0;
-  for (const r of laborRows) {
-    if (!r.laborType || !r.laborHours) continue;
-    const rate = laborRateMap.get(r.laborType.toLowerCase());
-    if (rate) {
-      totalLaborCost  += r.laborHours * rate.cost;
-      totalLaborPrice += r.laborHours * rate.price;
-    }
-  }
+  // Uses totalLaborCost/Price computed above directly from CSV columns.
   if (totalLaborPrice > 0) {
     const laborMargin = ((totalLaborPrice - totalLaborCost) / totalLaborPrice) * 100;
     if (laborMargin < config.marginFloorLabor) {
@@ -314,15 +322,22 @@ export function runRules(
     }
   }
 
-  // ── MODERATE: Phase / Location Margin Below Floor ─────────────────────────
-  // Group by top-level location (floor/area before the first ": ").
-  // Includes labor rows so per-area margin reflects blended equipment + labor.
+  // ── MODERATE: Area Margin Below Floor ─────────────────────────────────────
+  // Groups by top-level location (everything before the first ": ").
+  // Includes both equipment cost/price AND embedded labor on product rows,
+  // since embedded labor is already attributed to the product's location.
   const locationGroups = new Map<string, { price: number; cost: number }>();
-  for (const r of allBillable) {
+  for (const r of realEquip) {
     const topLevel = r.location.split(':')[0].trim() || 'Unknown';
     const g = locationGroups.get(topLevel) ?? { price: 0, cost: 0 };
-    g.price += (r.unitPrice ?? 0) * (r.quantity ?? 0);
-    g.cost  += (r.unitCost  ?? 0) * (r.quantity ?? 0);
+    const qty = r.quantity ?? 0;
+    g.cost  += (r.unitCost  ?? 0) * qty;
+    g.price += (r.unitPrice ?? 0) * qty;
+    // Add embedded labor (product rows with labor hours attached)
+    if ((r.laborHours ?? 0) > 0 && (r.laborUnitCost ?? 0) > 0) {
+      g.cost  += (r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty;
+      g.price += (r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty;
+    }
     locationGroups.set(topLevel, g);
   }
   for (const [area, { price, cost }] of locationGroups) {

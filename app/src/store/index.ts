@@ -11,7 +11,6 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
 } from '../utils/reviewEngine';
-import type { LaborRate as EngLaborRate } from '../utils/reviewEngine';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -507,7 +506,7 @@ interface AppState {
   fetchProjectFlags: (runId: string) => Promise<ReviewFlag[]>;
   updateRunStatus: (runId: string, status: ReviewRunStatus, reviewedBy?: string) => Promise<void>;
   updateFlagStatus: (flagId: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
-  createReviewRunFromCsv: (projectId: string, csvText: string, laborRateOverrides?: EngLaborRate[]) => Promise<{ runId: string; flagCount: number }>;
+  createReviewRunFromCsv: (projectId: string, csvText: string) => Promise<{ runId: string; flagCount: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,7 +1283,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (error) console.error('[review] updateFlagStatus error:', error);
   },
 
-  createReviewRunFromCsv: async (projectId, csvText, laborRateOverrides?) => {
+  createReviewRunFromCsv: async (projectId, csvText) => {
     if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
     console.log('[review] Starting createReviewRunFromCsv for project', projectId);
@@ -1305,24 +1304,20 @@ export const useStore = create<AppState>((set, get) => ({
     }
     console.log('[review] Project confirmed in DB');
 
-    // 1. Fetch review config and product catalog; labor rates come from
-    //    caller overrides (modal) or fall back to the DB table.
-    const [configRes, catalogRes, laborRes] = await Promise.all([
+    // 1. Fetch review config and product catalog.
+    //    Labor cost/price now comes directly from the CSV columns — no separate
+    //    labor rates table needed for the rules engine.
+    const [configRes, catalogRes] = await Promise.all([
       supabase.from('review_config').select('key,value'),
       supabase.from('product_catalog').select('model_number,list_price'),
-      laborRateOverrides
-        ? Promise.resolve({ data: laborRateOverrides, error: null })
-        : supabase.from('labor_rates').select('labor_type,cost_per_hour,price_per_hour,hours_ceiling').eq('is_active', true),
     ]);
 
     console.log('[review] Config rows:', configRes.data?.length ?? 0,
-      '| Labor rates:', laborRes.data?.length ?? 0, laborRateOverrides ? '(override)' : '(db)',
       '| Catalog items:', catalogRes.data?.length ?? 0);
 
     const configMap: Record<string, string> = {};
     for (const r of configRes.data ?? []) configMap[r.key] = r.value;
     const reviewConfig = buildReviewConfig(configMap);
-    const laborRates   = laborRes.data ?? [];
     const catalog      = catalogRes.data ?? [];
 
     // 2. Parse CSV and run rules engine
@@ -1331,7 +1326,7 @@ export const useStore = create<AppState>((set, get) => ({
     console.log('[review] CSV parsed:', rawRows.length, 'rows →',
       rows.filter(r => r.itemType === 'Product').length, 'products,',
       rows.filter(r => r.itemType === 'Labor').length, 'labor rows');
-    let flags = runRules(rows, reviewConfig, laborRates, catalog);
+    let flags = runRules(rows, reviewConfig, catalog);
     console.log('[review] Rules engine generated', flags.length, 'flags');
 
     // 3. Get prior runs for run_number and diff
