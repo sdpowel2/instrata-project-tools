@@ -51,12 +51,10 @@ const RUN_STATUS_STYLE: Record<ReviewRunStatus, string> = {
 export function FlagCard({
   flag,
   onUpdateStatus,
-  allFlags,
   locationCount,
 }: {
   flag: ReviewFlag;
   onUpdateStatus: (id: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
-  allFlags?: ReviewFlag[];
   /** Number of locations this flag's item appears in across the project */
   locationCount?: number;
 }) {
@@ -66,33 +64,9 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find sibling flags of the same type across the project — same ruleId +
-  // same flagName. Groups all "Model Not in Catalog" flags together, all
-  // "Cost Deviation" flags together, etc. Each can still be individually
-  // resolved, but "Resolve All" handles the whole batch at once.
-  const identicalSiblings = allFlags
-    ? allFlags.filter(f =>
-        f.id !== flag.id &&
-        f.ruleId === flag.ruleId &&
-        f.flagName === flag.flagName,
-      )
-    : [];
-  // Only show bulk actions when there are open/actionable siblings
-  const openSiblings = identicalSiblings.filter(f => f.status === 'open' || f.status === 'commented');
-  const hasBulkTargets = openSiblings.length > 0;
-
   const save = async (status: ReviewFlagStatus, comment?: string) => {
     setSaving(true);
     await onUpdateStatus(flag.id, status, (comment ?? commentText) || undefined);
-    setSaving(false);
-  };
-
-  const saveAll = async (status: ReviewFlagStatus) => {
-    setSaving(true);
-    const comment = commentText || undefined;
-    // Update this flag + all identical open siblings
-    const targets = [flag, ...openSiblings];
-    await Promise.all(targets.map(f => onUpdateStatus(f.id, status, comment)));
     setSaving(false);
   };
 
@@ -121,11 +95,6 @@ export function FlagCard({
             {locationCount && locationCount > 1 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
                 {locationCount} locations
-              </span>
-            )}
-            {identicalSiblings.length > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-navy/10 text-navy font-medium">
-                {identicalSiblings.length + 1} identical
               </span>
             )}
             <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_STYLE[flag.status]}`}>
@@ -234,28 +203,6 @@ export function FlagCard({
             </div>
           )}
 
-          {/* Cross-product: resolve/waive all flags of this type across the project */}
-          {hasBulkTargets && (
-            <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-black/5">
-              <span className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">
-                All {openSiblings.length + 1} "{flag.flagName}" flags:
-              </span>
-              <button
-                onClick={() => saveAll('resolved')}
-                disabled={saving}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-green-600/70 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-              >
-                <CheckCircle2 size={12} /> Resolve All {openSiblings.length + 1} Similar
-              </button>
-              <button
-                onClick={() => saveAll('waived')}
-                disabled={saving}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-purple-600/80 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
-              >
-                <MinusCircle size={12} /> Waive All {openSiblings.length + 1} Similar
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>
