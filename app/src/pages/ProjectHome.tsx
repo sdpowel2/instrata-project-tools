@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useParams, useNavigate, NavLink, Outlet } from 'react-router-dom';
-import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft, Users, ShieldCheck } from 'lucide-react';
+import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, ArrowLeft, Users, ShieldCheck, Settings } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { ProjectMembersModal } from '../components/ProjectMembersModal';
+import { ProjectSettingsModal } from '../components/ProjectSettingsModal';
 import { isSupabaseConfigured } from '../lib/supabase';
 
 const tabs = [
@@ -20,6 +21,7 @@ export function ProjectHome() {
   const navigate = useNavigate();
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   if (!project) {
     return <div className="p-8 text-text-secondary">Project not found.</div>;
@@ -44,6 +46,13 @@ export function ProjectHome() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSettingsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-navy border border-border rounded-lg hover:bg-surface transition-colors"
+            >
+              <Settings size={14} />
+              Settings
+            </button>
             {isSupabaseConfigured() && (
               <button
                 onClick={() => setTeamModalOpen(true)}
@@ -83,6 +92,13 @@ export function ProjectHome() {
       <div className="flex-1 overflow-y-auto">
         <Outlet />
       </div>
+
+      {/* Project settings modal */}
+      <ProjectSettingsModal
+        open={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        project={project}
+      />
 
       {/* Project members modal */}
       <ProjectMembersModal

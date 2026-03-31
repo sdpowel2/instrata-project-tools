@@ -330,6 +330,7 @@ function LocationNodeView({
   searchText,
   filterMode,
   nonMiscMaterialsCost,
+  allFlags,
 }: {
   node: LocationNode;
   expandedSections: Set<string>;
@@ -341,6 +342,7 @@ function LocationNodeView({
   searchText: string;
   filterMode: FilterMode;
   nonMiscMaterialsCost: number;
+  allFlags: ReviewFlag[];
 }) {
   // All sections collapsed by default; expanded when in the set
   const isCollapsed = !expandedSections.has(node.fullPath);
@@ -522,7 +524,7 @@ function LocationNodeView({
                           <td colSpan={EQUIP_COLS} className="bg-surface/30 px-3 py-2 border-t border-border/50">
                             <div className="max-w-3xl space-y-1">
                               {rowFlags.map(f => (
-                                <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} />
+                                <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} allFlags={allFlags} />
                               ))}
                             </div>
                           </td>
@@ -598,7 +600,7 @@ function LocationNodeView({
                             <td colSpan={LABOR_COLS} className="bg-surface/30 px-3 py-2 border-t border-border/50">
                               <div className="max-w-3xl space-y-1">
                                 {rowFlags.map(f => (
-                                  <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} />
+                                  <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} allFlags={allFlags} />
                                 ))}
                               </div>
                             </td>
@@ -615,7 +617,7 @@ function LocationNodeView({
           {/* Area margin flag (top-level only) */}
           {node.areaFlag && (
             <div className="px-3 py-2 border-t border-border/50 bg-amber-50/50">
-              <FlagCard flag={node.areaFlag} onUpdateStatus={onUpdateStatus} />
+              <FlagCard flag={node.areaFlag} onUpdateStatus={onUpdateStatus} allFlags={allFlags} />
             </div>
           )}
 
@@ -633,6 +635,7 @@ function LocationNodeView({
               searchText={searchText}
               filterMode={filterMode}
               nonMiscMaterialsCost={nonMiscMaterialsCost}
+              allFlags={allFlags}
             />
           ))}
         </div>
@@ -782,6 +785,7 @@ export function ReviewQuoteView({
               searchText={searchText}
               filterMode={filterMode}
               nonMiscMaterialsCost={nonMiscMaterialsCost}
+              allFlags={flags}
             />
           ))}
         </div>
