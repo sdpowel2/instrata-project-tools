@@ -52,10 +52,13 @@ export function FlagCard({
   flag,
   onUpdateStatus,
   allFlags,
+  locationCount,
 }: {
   flag: ReviewFlag;
   onUpdateStatus: (id: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
   allFlags?: ReviewFlag[];
+  /** Number of locations this flag's item appears in across the project */
+  locationCount?: number;
 }) {
   const [expanded, setExpanded] = useState(flag.status === 'open');
   const [commentText, setCommentText] = useState(flag.managerComment ?? '');
@@ -63,13 +66,15 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find siblings: all other flags for the SAME item (lineItemRef) regardless
-  // of rule type. So "Resolve All" on a Core110f resolves its "Not in Catalog"
-  // AND "Cost Deviation" flags together — every issue for that specific product.
-  const identicalSiblings = (allFlags && flag.lineItemRef)
+  // Find truly identical flags across DIFFERENT items — same ruleId + same
+  // description text (same exact issue). This lets you bulk-resolve e.g.
+  // "Model Not in Catalog" for Speaker-A AND Speaker-B if the descriptions match,
+  // but NOT if the pricing variance differs between them.
+  const identicalSiblings = allFlags
     ? allFlags.filter(f =>
         f.id !== flag.id &&
-        f.lineItemRef === flag.lineItemRef,
+        f.ruleId === flag.ruleId &&
+        f.description === flag.description,
       )
     : [];
   // Only show bulk actions when there are open/actionable siblings
@@ -113,9 +118,14 @@ export function FlagCard({
                 {flag.diffStatus}
               </span>
             )}
+            {locationCount && locationCount > 1 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                {locationCount} locations
+              </span>
+            )}
             {identicalSiblings.length > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-navy/10 text-navy font-medium">
-                {identicalSiblings.length + 1} flags for this item
+                {identicalSiblings.length + 1} identical
               </span>
             )}
             <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_STYLE[flag.status]}`}>
@@ -201,7 +211,7 @@ export function FlagCard({
           {hasBulkTargets && (
             <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-black/5">
               <span className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">
-                All flags for {flag.lineItemRef}:
+                All identical flags:
               </span>
               <button
                 onClick={() => saveAll('resolved')}

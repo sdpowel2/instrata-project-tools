@@ -368,6 +368,7 @@ function LocationNodeView({
   filterMode,
   nonMiscMaterialsCost,
   allFlags,
+  locationCountMap,
 }: {
   node: LocationNode;
   expandedSections: Set<string>;
@@ -380,6 +381,7 @@ function LocationNodeView({
   filterMode: FilterMode;
   nonMiscMaterialsCost: number;
   allFlags: ReviewFlag[];
+  locationCountMap: Map<string, Set<string>>;
 }) {
   // All sections collapsed by default; expanded when in the set
   const isCollapsed = !expandedSections.has(node.fullPath);
@@ -561,7 +563,8 @@ function LocationNodeView({
                           <td colSpan={EQUIP_COLS} className="bg-surface/30 px-3 py-2 border-t border-border/50">
                             <div className="max-w-3xl space-y-1">
                               {rowFlags.map(f => (
-                                <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} allFlags={allFlags} />
+                                <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} allFlags={allFlags}
+                                  locationCount={f.lineItemRef ? (locationCountMap.get(f.lineItemRef.trim().toLowerCase())?.size ?? 0) : 0} />
                               ))}
                             </div>
                           </td>
@@ -637,7 +640,8 @@ function LocationNodeView({
                             <td colSpan={LABOR_COLS} className="bg-surface/30 px-3 py-2 border-t border-border/50">
                               <div className="max-w-3xl space-y-1">
                                 {rowFlags.map(f => (
-                                  <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} allFlags={allFlags} />
+                                  <FlagCard key={f.id} flag={f} onUpdateStatus={onUpdateStatus} allFlags={allFlags}
+                                    locationCount={f.lineItemRef ? (locationCountMap.get(f.lineItemRef.trim().toLowerCase())?.size ?? 0) : 0} />
                                 ))}
                               </div>
                             </td>
@@ -654,7 +658,7 @@ function LocationNodeView({
           {/* Area margin flag (top-level only) */}
           {node.areaFlag && (
             <div className="px-3 py-2 border-t border-border/50 bg-amber-50/50">
-              <FlagCard flag={node.areaFlag} onUpdateStatus={onUpdateStatus} allFlags={allFlags} />
+              <FlagCard flag={node.areaFlag} onUpdateStatus={onUpdateStatus} allFlags={allFlags} locationCount={0} />
             </div>
           )}
 
@@ -673,6 +677,7 @@ function LocationNodeView({
               filterMode={filterMode}
               nonMiscMaterialsCost={nonMiscMaterialsCost}
               allFlags={allFlags}
+              locationCountMap={locationCountMap}
             />
           ))}
         </div>
@@ -737,6 +742,20 @@ export function ReviewQuoteView({
       cost += (r.unitCost ?? 0) * (r.quantity ?? 0);
     }
     return cost;
+  }, [csvRows]);
+
+  // Location count per model (how many distinct locations each model appears in)
+  const locationCountMap = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const r of csvRows) {
+      if (r.itemType.toLowerCase() !== 'product') continue;
+      if (!r.modelNumber || r.modelNumber === 'S&H' || r.modelNumber === 'MISC') continue;
+      const key = r.modelNumber.trim().toLowerCase();
+      const locs = map.get(key) ?? new Set<string>();
+      locs.add(r.location || 'Unassigned');
+      map.set(key, locs);
+    }
+    return map;
   }, [csvRows]);
 
   const toggleExpand = (key: string) => {
@@ -823,6 +842,7 @@ export function ReviewQuoteView({
               filterMode={filterMode}
               nonMiscMaterialsCost={nonMiscMaterialsCost}
               allFlags={flags}
+              locationCountMap={locationCountMap}
             />
           ))}
         </div>
