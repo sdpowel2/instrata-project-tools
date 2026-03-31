@@ -66,15 +66,15 @@ export function FlagCard({
   const style = SEVERITY_STYLE[flag.severity];
   const SeverityIcon = style.icon;
 
-  // Find truly identical flags across DIFFERENT items — same ruleId + same
-  // description text (same exact issue). This lets you bulk-resolve e.g.
-  // "Model Not in Catalog" for Speaker-A AND Speaker-B if the descriptions match,
-  // but NOT if the pricing variance differs between them.
+  // Find sibling flags of the same type across the project — same ruleId +
+  // same flagName. Groups all "Model Not in Catalog" flags together, all
+  // "Cost Deviation" flags together, etc. Each can still be individually
+  // resolved, but "Resolve All" handles the whole batch at once.
   const identicalSiblings = allFlags
     ? allFlags.filter(f =>
         f.id !== flag.id &&
         f.ruleId === flag.ruleId &&
-        f.description === flag.description,
+        f.flagName === flag.flagName,
       )
     : [];
   // Only show bulk actions when there are open/actionable siblings
