@@ -54,8 +54,19 @@ export interface ReviewConfig {
   marginFloorPhase:     number;
   marginFloorLabor:     number;
   costDeviationPct:     number;
+  miscMaterialsFloor:   number;   // min % of materials cost for misc items (default 3)
+  miscMaterialsCeiling: number;   // max % of materials cost for misc items (default 5)
   preferredVendors:     string[];
   freeItemModels:       string[];
+}
+
+/** Returns true if a product row is a miscellaneous/MHCC line item */
+export function isMiscItem(r: CsvRow): boolean {
+  const m = r.modelNumber.trim().toLowerCase();
+  const d = r.description.toLowerCase();
+  return m === 'mhcc' || m === 'misc' || m === 'miscellaneous'
+    || d.includes('miscellaneous cables') || d.includes('miscellaneous hardware')
+    || d.includes('misc cables') || d.includes('misc hardware');
 }
 
 export interface LaborRate {
@@ -370,6 +381,7 @@ export function runRules(
   const seenCostDev = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;  // $0 cost is intentional; catalog comparison not meaningful
+    if (isMiscItem(r)) continue;     // misc items won't be in catalog — handled by MISC rule
     const modelKey = r.modelNumber.trim().toLowerCase();
     if (seenCostDev.has(modelKey)) continue;
     const cat = catalogCostMap.get(modelKey);
@@ -428,6 +440,35 @@ export function runRules(
     }
   }
 
+  // ── MODERATE: Miscellaneous Materials Out of Range ──────────────────────────
+  // Total misc item cost should be 3-5% of non-misc materials cost.
+  // Misc items: MHCC, MISC, Miscellaneous, etc.
+  let miscCost = 0;
+  let nonMiscMaterialsCost = 0;
+  for (const r of realEquip) {
+    if (r.nonBillable) continue;
+    if (r.modelNumber === 'S&H') continue;
+    const qty = r.quantity ?? 0;
+    const cost = (r.unitCost ?? 0) * qty;
+    if (isMiscItem(r)) {
+      miscCost += cost;
+    } else {
+      nonMiscMaterialsCost += cost;
+    }
+  }
+  if (nonMiscMaterialsCost > 0 && miscCost > 0) {
+    const miscPct = (miscCost / nonMiscMaterialsCost) * 100;
+    if (miscPct < config.miscMaterialsFloor || miscPct > config.miscMaterialsCeiling) {
+      const direction = miscPct < config.miscMaterialsFloor ? 'below' : 'above';
+      const threshold = miscPct < config.miscMaterialsFloor ? config.miscMaterialsFloor : config.miscMaterialsCeiling;
+      flag('MISC_MATERIALS_OUT_OF_RANGE', 'moderate', 'pricing',
+        'Miscellaneous Materials Out of Range',
+        `Miscellaneous items total $${miscCost.toFixed(0)} (${miscPct.toFixed(2)}% of $${nonMiscMaterialsCost.toFixed(0)} materials cost), ` +
+        `${direction} the ${threshold}% ${direction === 'below' ? 'floor' : 'ceiling'}. Expected range: ${config.miscMaterialsFloor}–${config.miscMaterialsCeiling}%.`,
+        'MHCC');
+    }
+  }
+
   // ── LOW: Model Not in Catalog ─────────────────────────────────────────────
   // Skipped for owner-furnished items — we're not pricing them, so catalog presence is irrelevant.
   // Deduplicated: one flag per unique model.
@@ -435,6 +476,7 @@ export function runRules(
   const seenNotInCatalog = new Set<string>();
   for (const r of realEquip) {
     if (r.ownerFurnished) continue;
+    if (isMiscItem(r)) continue;  // misc items won't be in catalog — handled by MISC rule
     const modelKey = r.modelNumber.trim().toLowerCase();
     if (seenNotInCatalog.has(modelKey)) continue;
     if (r.modelNumber && !catalogModels.has(modelKey)) {
@@ -524,11 +566,13 @@ export function buildBomRows(rows: CsvRow[], projectId: string): BomRowInput[] {
 
 export function buildReviewConfig(configMap: Record<string, string>): ReviewConfig {
   return {
-    marginFloorProject: parseFloat(configMap['margin_floor_project'] ?? '30'),
-    marginFloorPhase:   parseFloat(configMap['margin_floor_phase']   ?? '25'),
-    marginFloorLabor:   parseFloat(configMap['margin_floor_labor']   ?? '25'),
-    costDeviationPct:   parseFloat(configMap['cost_deviation_pct']   ?? '15'),
-    preferredVendors:   (configMap['preferred_vendors'] ?? '').split(',').map(s => s.trim()).filter(Boolean),
-    freeItemModels:     (configMap['free_item_models']  ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    marginFloorProject:  parseFloat(configMap['margin_floor_project']    ?? '30'),
+    marginFloorPhase:    parseFloat(configMap['margin_floor_phase']      ?? '25'),
+    marginFloorLabor:    parseFloat(configMap['margin_floor_labor']      ?? '25'),
+    costDeviationPct:    parseFloat(configMap['cost_deviation_pct']      ?? '15'),
+    miscMaterialsFloor:  parseFloat(configMap['misc_materials_floor']    ?? '3'),
+    miscMaterialsCeiling:parseFloat(configMap['misc_materials_ceiling']  ?? '5'),
+    preferredVendors:    (configMap['preferred_vendors'] ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    freeItemModels:      (configMap['free_item_models']  ?? '').split(',').map(s => s.trim()).filter(Boolean),
   };
 }

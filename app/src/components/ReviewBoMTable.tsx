@@ -4,7 +4,7 @@ import {
   Search, Filter, MapPin, DollarSign, Wrench,
 } from 'lucide-react';
 import type { ReviewFlag, ReviewFlagStatus } from '../types';
-import type { CsvRow } from '../utils/reviewEngine';
+import { type CsvRow, isMiscItem } from '../utils/reviewEngine';
 import { FlagCard } from '../pages/AutoReview';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -329,6 +329,7 @@ function LocationNodeView({
   onUpdateStatus,
   searchText,
   filterMode,
+  nonMiscMaterialsCost,
 }: {
   node: LocationNode;
   expandedSections: Set<string>;
@@ -339,6 +340,7 @@ function LocationNodeView({
   onUpdateStatus: (id: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
   searchText: string;
   filterMode: FilterMode;
+  nonMiscMaterialsCost: number;
 }) {
   // All sections collapsed by default; expanded when in the set
   const isCollapsed = !expandedSections.has(node.fullPath);
@@ -488,8 +490,24 @@ function LocationNodeView({
                           {row.manufacturer}
                           {row.ownerFurnished && <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">OFE</span>}
                         </td>
-                        <td className="px-2 py-1.5 text-text-primary font-mono truncate max-w-[140px]">{row.modelNumber}</td>
-                        <td className="px-2 py-1.5 text-text-secondary truncate max-w-[180px] hidden lg:table-cell">{row.description}</td>
+                        <td className="px-2 py-1.5 text-text-primary font-mono truncate max-w-[140px]">
+                          {row.modelNumber}
+                          {isMiscItem(row) && <span className="ml-1 text-[9px] bg-teal-100 text-teal-700 px-1 rounded">MISC</span>}
+                        </td>
+                        <td className="px-2 py-1.5 text-text-secondary truncate max-w-[180px] hidden lg:table-cell">
+                          {row.description}
+                          {isMiscItem(row) && nonMiscMaterialsCost > 0 && (
+                            <span className={`ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              (() => {
+                                const pct = (extCost / nonMiscMaterialsCost) * 100;
+                                if (pct < 3 || pct > 5) return 'bg-amber-100 text-amber-700';
+                                return 'bg-green-100 text-green-700';
+                              })()
+                            }`}>
+                              {((extCost / nonMiscMaterialsCost) * 100).toFixed(2)}% of materials
+                            </span>
+                          )}
+                        </td>
                         <td className="px-2 py-1.5 text-right font-medium">{qty}</td>
                         <td className="px-2 py-1.5 text-right text-text-secondary">{fmtUnit(row.unitCost ?? 0)}</td>
                         <td className="px-2 py-1.5 text-right font-medium">{fmt(extCost)}</td>
@@ -614,6 +632,7 @@ function LocationNodeView({
               onUpdateStatus={onUpdateStatus}
               searchText={searchText}
               filterMode={filterMode}
+              nonMiscMaterialsCost={nonMiscMaterialsCost}
             />
           ))}
         </div>
@@ -666,6 +685,19 @@ export function ReviewQuoteView({
     }
     return { equipCost: eC, equipPrice: eP, laborCost: lC, laborPrice: lP, totalCost: eC + lC, totalPrice: eP + lP };
   }, [tree]);
+
+  // Non-misc materials cost (for misc % calculation on MHCC rows)
+  const nonMiscMaterialsCost = useMemo(() => {
+    let cost = 0;
+    for (const r of csvRows) {
+      if (r.nonBillable) continue;
+      if (r.itemType.toLowerCase() !== 'product') continue;
+      if (r.modelNumber === 'S&H' || r.modelNumber === 'MISC') continue;
+      if (isMiscItem(r)) continue;
+      cost += (r.unitCost ?? 0) * (r.quantity ?? 0);
+    }
+    return cost;
+  }, [csvRows]);
 
   const toggleExpand = (key: string) => {
     setExpandedKeys(prev => {
@@ -749,6 +781,7 @@ export function ReviewQuoteView({
               onUpdateStatus={onUpdateStatus}
               searchText={searchText}
               filterMode={filterMode}
+              nonMiscMaterialsCost={nonMiscMaterialsCost}
             />
           ))}
         </div>
