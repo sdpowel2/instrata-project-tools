@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 
-export type StorageBucket = 'cutsheets' | 'as-builts' | 'manuals';
+export type StorageBucket = 'cutsheets' | 'as-builts' | 'manuals' | 'bid-leveling';
 
 /**
  * Upload a file to Supabase Storage.
@@ -81,7 +81,7 @@ export function isUrl(value: string): boolean {
  */
 export async function fetchFileBytes(url: string): Promise<Uint8Array> {
   // Check if this is a Supabase Storage URL for a known private bucket
-  const buckets: StorageBucket[] = ['cutsheets', 'as-builts'];
+  const buckets: StorageBucket[] = ['cutsheets', 'as-builts', 'bid-leveling'];
   for (const bucket of buckets) {
     const path = extractStoragePath(bucket, url);
     if (path) {

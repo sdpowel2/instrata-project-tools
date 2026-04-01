@@ -6,6 +6,7 @@ import type {
   ItemCategory,
   SubmittalItemLocation,
   ReviewRun, ReviewFlag, ReviewRunStatus, ReviewFlagStatus,
+  BidLevelingSession, BidLevelingMappingTemplate,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
@@ -423,6 +424,58 @@ function rowToReviewFlag(r: any): ReviewFlag {
   };
 }
 
+// --- Bid Leveling ---
+function rowToBidLevelingSession(r: any): BidLevelingSession {
+  return {
+    id: r.id, projectId: r.project_id,
+    bomCsvUrl: r.bom_csv_url ?? undefined,
+    templateXlsxUrl: r.template_xlsx_url ?? undefined,
+    mappingTemplateId: r.mapping_template_id ?? undefined,
+    cellMappingsSnapshot: r.cell_mappings_snapshot ?? undefined,
+    generatedXlsxUrl: r.generated_xlsx_url ?? undefined,
+    generationReport: r.generation_report ?? undefined,
+    status: r.status,
+    createdBy: r.created_by ?? undefined,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function bidLevelingSessionToRow(s: Partial<BidLevelingSession> & { createdBy?: string }): Record<string, any> {
+  const row: any = {};
+  if (s.id !== undefined) row.id = s.id;
+  if (s.projectId !== undefined) row.project_id = s.projectId;
+  if (s.bomCsvUrl !== undefined) row.bom_csv_url = s.bomCsvUrl;
+  if (s.templateXlsxUrl !== undefined) row.template_xlsx_url = s.templateXlsxUrl;
+  if (s.mappingTemplateId !== undefined) row.mapping_template_id = s.mappingTemplateId;
+  if (s.cellMappingsSnapshot !== undefined) row.cell_mappings_snapshot = s.cellMappingsSnapshot;
+  if (s.generatedXlsxUrl !== undefined) row.generated_xlsx_url = s.generatedXlsxUrl;
+  if (s.generationReport !== undefined) row.generation_report = s.generationReport;
+  if (s.status !== undefined) row.status = s.status;
+  if (s.createdBy !== undefined) row.created_by = s.createdBy;
+  if (s.createdAt !== undefined) row.created_at = s.createdAt;
+  if (s.updatedAt !== undefined) row.updated_at = s.updatedAt;
+  return row;
+}
+function rowToBidLevelingTemplate(r: any): BidLevelingMappingTemplate {
+  return {
+    id: r.id, name: r.name,
+    gcConsultantName: r.gc_consultant_name ?? undefined,
+    cellMappings: r.cell_mappings ?? [],
+    createdBy: r.created_by ?? undefined,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+function bidLevelingTemplateToRow(t: Partial<BidLevelingMappingTemplate> & { createdBy?: string }): Record<string, any> {
+  const row: any = {};
+  if (t.id !== undefined) row.id = t.id;
+  if (t.name !== undefined) row.name = t.name;
+  if (t.gcConsultantName !== undefined) row.gc_consultant_name = t.gcConsultantName;
+  if (t.cellMappings !== undefined) row.cell_mappings = t.cellMappings;
+  if (t.createdBy !== undefined) row.created_by = t.createdBy;
+  if (t.createdAt !== undefined) row.created_at = t.createdAt;
+  if (t.updatedAt !== undefined) row.updated_at = t.updatedAt;
+  return row;
+}
+
 // ---------------------------------------------------------------------------
 // Store Interface
 // ---------------------------------------------------------------------------
@@ -436,6 +489,8 @@ interface AppState {
   closeouts: CloseoutPackage[];
   manuals: OwnerManual[];
   reviewRuns: ReviewRun[];
+  bidLevelingSessions: BidLevelingSession[];
+  bidLevelingTemplates: BidLevelingMappingTemplate[];
 
   // Loading state
   isLoading: boolean;
@@ -507,6 +562,14 @@ interface AppState {
   updateRunStatus: (runId: string, status: ReviewRunStatus, reviewedBy?: string) => Promise<void>;
   updateFlagStatus: (flagId: string, status: ReviewFlagStatus, comment?: string) => Promise<void>;
   createReviewRunFromCsv: (projectId: string, csvText: string) => Promise<{ runId: string; flagCount: number }>;
+
+  // Bid Leveling actions
+  addBidLevelingSession: (s: Omit<BidLevelingSession, 'id' | 'createdAt' | 'updatedAt'>) => string;
+  updateBidLevelingSession: (id: string, s: Partial<BidLevelingSession>) => void;
+  deleteBidLevelingSession: (id: string) => void;
+  addBidLevelingTemplate: (t: Omit<BidLevelingMappingTemplate, 'id' | 'createdAt' | 'updatedAt'>) => string;
+  updateBidLevelingTemplate: (id: string, t: Partial<BidLevelingMappingTemplate>) => void;
+  deleteBidLevelingTemplate: (id: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +587,8 @@ export const useStore = create<AppState>((set, get) => ({
   closeouts: DB ? [] : seedCloseouts,
   manuals: DB ? [] : seedManuals,
   reviewRuns: [],
+  bidLevelingSessions: [],
+  bidLevelingTemplates: [],
 
   isLoading: DB,      // start loading if Supabase is configured
   isInitialized: !DB, // already initialized in demo mode
@@ -557,6 +622,9 @@ export const useStore = create<AppState>((set, get) => ({
         supabase.from('owner_manuals').select('*'),
         // Review runs — summary only (no csv_snapshot, no flags)
         supabase.from('review_runs').select('id,project_id,run_number,triggered_at,status,reviewed_by,reviewed_at,created_at').order('run_number', { ascending: false }),
+        // Bid Leveling
+        supabase.from('bid_leveling_sessions').select('*'),
+        supabase.from('bid_leveling_mapping_templates').select('*'),
       ]);
 
       const timeout = new Promise<never>((_, reject) =>
@@ -576,10 +644,12 @@ export const useStore = create<AppState>((set, get) => ({
         asBuiltDrawingsRes,
         manualsRes,
         reviewRunsRes,
+        bidLevelingSessionsRes,
+        bidLevelingTemplatesRes,
       ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, manualsRes, reviewRunsRes]) {
+      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
@@ -589,6 +659,8 @@ export const useStore = create<AppState>((set, get) => ({
       const rfis = (rfisRes.data ?? []).map(rowToRFI);
       const manuals = (manualsRes.data ?? []).map(rowToManual);
       const reviewRuns = (reviewRunsRes.data ?? []).map(rowToReviewRun);
+      const bidLevelingSessions = (bidLevelingSessionsRes.data ?? []).map(rowToBidLevelingSession);
+      const bidLevelingTemplates = (bidLevelingTemplatesRes.data ?? []).map(rowToBidLevelingTemplate);
 
       // Nest submittal items into submittals
       const submittalItems = (submittalItemsRes.data ?? []).map(rowToSubmittalItem);
@@ -644,6 +716,7 @@ export const useStore = create<AppState>((set, get) => ({
 
       set({
         projects, projectBoM, submittals, rfis, closeouts, manuals, reviewRuns,
+        bidLevelingSessions, bidLevelingTemplates,
         isLoading: false, isInitialized: true,
       });
     } catch (err) {
@@ -1485,5 +1558,83 @@ export const useStore = create<AppState>((set, get) => ({
     }));
 
     return { runId: runData.id, flagCount: flags.length };
+  },
+
+  // =========================================================================
+  // Bid Leveling actions
+  // =========================================================================
+
+  addBidLevelingSession: (s) => {
+    const id = genId();
+    const today = now();
+    const session: BidLevelingSession = { ...s, id, createdAt: today, updatedAt: today };
+    set((st) => ({ bidLevelingSessions: [...st.bidLevelingSessions, session] }));
+
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const row = bidLevelingSessionToRow({ ...session, createdBy: user?.id });
+      return supabase.from('bid_leveling_sessions').insert(row);
+    });
+    return id;
+  },
+
+  updateBidLevelingSession: (id, updates) => {
+    set((st) => ({
+      bidLevelingSessions: st.bidLevelingSessions.map((s) =>
+        s.id === id ? { ...s, ...updates, updatedAt: now() } : s,
+      ),
+    }));
+
+    dbExec(async () => {
+      const row = bidLevelingSessionToRow({ ...updates, updatedAt: now() });
+      return supabase.from('bid_leveling_sessions').update(row).eq('id', id);
+    });
+  },
+
+  deleteBidLevelingSession: (id) => {
+    set((st) => ({
+      bidLevelingSessions: st.bidLevelingSessions.filter((s) => s.id !== id),
+    }));
+
+    dbExec(async () => {
+      return supabase.from('bid_leveling_sessions').delete().eq('id', id);
+    });
+  },
+
+  addBidLevelingTemplate: (t) => {
+    const id = genId();
+    const today = now();
+    const template: BidLevelingMappingTemplate = { ...t, id, createdAt: today, updatedAt: today };
+    set((st) => ({ bidLevelingTemplates: [...st.bidLevelingTemplates, template] }));
+
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const row = bidLevelingTemplateToRow({ ...template, createdBy: user?.id });
+      return supabase.from('bid_leveling_mapping_templates').insert(row);
+    });
+    return id;
+  },
+
+  updateBidLevelingTemplate: (id, updates) => {
+    set((st) => ({
+      bidLevelingTemplates: st.bidLevelingTemplates.map((t) =>
+        t.id === id ? { ...t, ...updates, updatedAt: now() } : t,
+      ),
+    }));
+
+    dbExec(async () => {
+      const row = bidLevelingTemplateToRow({ ...updates, updatedAt: now() });
+      return supabase.from('bid_leveling_mapping_templates').update(row).eq('id', id);
+    });
+  },
+
+  deleteBidLevelingTemplate: (id) => {
+    set((st) => ({
+      bidLevelingTemplates: st.bidLevelingTemplates.filter((t) => t.id !== id),
+    }));
+
+    dbExec(async () => {
+      return supabase.from('bid_leveling_mapping_templates').delete().eq('id', id);
+    });
   },
 }));

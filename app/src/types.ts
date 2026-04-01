@@ -284,3 +284,47 @@ export interface ManualDevice {
   controlId?: string;
   sortOrder: number;
 }
+
+// ===================== BID LEVELING =====================
+
+export type BidLevelingStatus = 'draft' | 'mapped' | 'generated';
+
+export interface CellMapping {
+  sheet: string;
+  cell: string;
+  tag: string;
+}
+
+export interface BidLevelingMappingTemplate {
+  id: string;
+  name: string;
+  gcConsultantName?: string;
+  cellMappings: CellMapping[];
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GenerationReportEntry {
+  cell: string;
+  sheet: string;
+  tag: string;
+  value: number | string;
+  status: 'written' | 'skipped' | 'formula_overwritten';
+  note?: string;
+}
+
+export interface BidLevelingSession {
+  id: string;
+  projectId: string;
+  bomCsvUrl?: string;
+  templateXlsxUrl?: string;
+  mappingTemplateId?: string;
+  cellMappingsSnapshot?: CellMapping[];
+  generatedXlsxUrl?: string;
+  generationReport?: GenerationReportEntry[];
+  status: BidLevelingStatus;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}

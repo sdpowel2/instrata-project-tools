@@ -83,30 +83,33 @@ function parseLocationSegments(loc: string): string[] {
 }
 
 /** Compute own costs/flags for a node (not including children). */
+/** Round to the penny before accumulating — matches D-Tools row-level rounding. */
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 function computeNodeOwn(
   equip: CsvRow[],
   labor: CsvRow[],
   flagsByRef: Map<string, ReviewFlag[]>,
 ): { equipCost: number; equipPrice: number; laborCost: number; laborPrice: number; flagCount: number; worst: string | null } {
-  const equipCost  = equip.reduce((s, r) => s + (r.unitCost  ?? 0) * (r.quantity ?? 0), 0);
-  const equipPrice = equip.reduce((s, r) => s + (r.unitPrice ?? 0) * (r.quantity ?? 0), 0);
+  const equipCost  = equip.reduce((s, r) => s + round2((r.unitCost  ?? 0) * (r.quantity ?? 0)), 0);
+  const equipPrice = equip.reduce((s, r) => s + round2((r.unitPrice ?? 0) * (r.quantity ?? 0)), 0);
   let laborCost = 0, laborPrice = 0;
   for (const r of equip) {
     if ((r.laborHours ?? 0) > 0) {
       const qty = r.quantity ?? 1;
-      laborCost  += (r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty;
-      laborPrice += (r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty;
+      laborCost  += round2((r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty);
+      laborPrice += round2((r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty);
     }
   }
   for (const r of labor) {
     const qty = r.quantity ?? 1;
     if ((r.laborHours ?? 0) > 0) {
-      laborCost  += (r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty;
-      laborPrice += (r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty;
+      laborCost  += round2((r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty);
+      laborPrice += round2((r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty);
     }
     if ((r.fixedLaborCost ?? 0) > 0) {
-      laborCost  += (r.fixedLaborCost  ?? 0) * qty;
-      laborPrice += (r.fixedLaborPrice ?? 0) * qty;
+      laborCost  += round2((r.fixedLaborCost  ?? 0) * qty);
+      laborPrice += round2((r.fixedLaborPrice ?? 0) * qty);
     }
   }
   let flagCount = 0;
@@ -136,6 +139,7 @@ function buildLocationTree(
 
   for (const r of csvRows) {
     if (r.nonBillable) continue;
+    if (r.optional) continue;      // optional items excluded from project totals
     if (r.modelNumber === 'MISC') continue;
     // S&H rows are included in the quote view so dollar totals match D-Tools;
     // they are still excluded from review rules in reviewEngine.ts.
@@ -519,7 +523,7 @@ function LocationNodeView({
                     <Fragment key={rowKey}>
                       <tr className={`${idx % 2 === 1 ? 'bg-surface/30' : ''} ${
                         rowFlags.length > 0 ? 'cursor-pointer hover:bg-surface/60' : ''
-                      } ${expanded ? 'bg-surface/40' : ''} ${row.ownerFurnished ? 'opacity-70' : ''}`}
+                      } ${expanded ? 'bg-surface/40' : ''} ${row.ownerFurnished || row.optional ? 'opacity-70' : ''}`}
                         onClick={() => rowFlags.length > 0 && toggleExpand(rowKey)}
                       >
                         <td className="px-2 py-1.5 text-center">
@@ -528,6 +532,7 @@ function LocationNodeView({
                         <td className="px-2 py-1.5 text-text-primary font-medium truncate max-w-[120px]">
                           {row.manufacturer}
                           {row.ownerFurnished && <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">OFE</span>}
+                          {row.optional && <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded">OPT</span>}
                         </td>
                         <td className="px-2 py-1.5 text-text-primary font-mono truncate max-w-[140px]">
                           {row.modelNumber}
@@ -730,7 +735,7 @@ export function ReviewQuoteView({
   const nonMiscMaterialsCost = useMemo(() => {
     let cost = 0;
     for (const r of csvRows) {
-      if (r.nonBillable) continue;
+      if (r.nonBillable || r.optional) continue;
       if (r.itemType.toLowerCase() !== 'product') continue;
       if (r.modelNumber === 'S&H' || r.modelNumber === 'MISC') continue;
       if (isMiscItem(r)) continue;

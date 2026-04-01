@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
-  ClipboardCheck, BookOpen, Settings, ChevronRight, LogOut, ShieldCheck,
+  ClipboardCheck, BookOpen, Settings, ChevronRight, LogOut, ShieldCheck, Scale,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,6 +15,7 @@ const mainNav = [
 ];
 
 const moduleNav = [
+  { to: 'bid-leveling', icon: Scale, label: 'Bid Leveling' },
   { to: 'submittals', icon: FileText, label: 'Submittals' },
   { to: 'rfis', icon: MessageSquareWarning, label: 'RFIs' },
   { to: 'closeout', icon: ClipboardCheck, label: 'Closeout' },

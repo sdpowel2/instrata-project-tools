@@ -13,6 +13,7 @@ import { OwnerManualPage } from './pages/OwnerManual';
 import { SettingsPage } from './pages/SettingsPage';
 import { AutoReviewPage } from './pages/AutoReview';
 import { ReviewQueuePage } from './pages/ReviewQueue';
+import { BidLevelingPage } from './pages/BidLevelingPage';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="rfis" element={<RFIList />} />
                 <Route path="closeout" element={<CloseoutDashboard />} />
                 <Route path="manual" element={<OwnerManualPage />} />
+                <Route path="bid-leveling" element={<BidLevelingPage />} />
               </Route>
               <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="settings" element={<SettingsPage />} />

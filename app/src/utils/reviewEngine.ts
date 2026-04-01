@@ -7,7 +7,7 @@
 //   Short Description | Unit Cost | Unit Price | Margin | Labor Types |
 //   Unit Labor Hours | Fixed Labor Cost | Fixed Labor Price |
 //   Labor Unit Cost | Labor Unit Price | Owner Furnished Equipment | Non-Billable |
-//   Component ID
+//   Optional | Component ID
 //
 // Rules:
 //   - Item Type = "Product" → equipment row (may carry embedded labor hours)
@@ -15,6 +15,7 @@
 //   - Labor Types can be comma-separated (e.g. "Install, Cabling")
 //   - Owner Furnished = true → $0 cost/price expected; labor still required
 //   - Non-Billable = true   → excluded from all rules and margin math
+//   - Optional = true       → excluded from project totals and margin math
 //   - Part Number and Component ID are skipped
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ export interface CsvRow {
   laborUnitPrice:  number | null;  // "Labor Unit Price"  — $/hr incl. non-productive factor
   ownerFurnished:  boolean;  // "Owner Furnished Equipment" — $0 cost/price OK; labor still required
   nonBillable:     boolean;  // "Non-Billable"    — excluded from all rules and margin math
+  optional:        boolean;  // "Optional"        — excluded from project totals and margin math
 }
 
 export interface EngineFlag {
@@ -96,34 +98,54 @@ export interface BomRowInput {
 // ─── CSV Parser ───────────────────────────────────────────────────────────────
 
 export function parseCsv(text: string): Record<string, string>[] {
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (lines.length < 2) return [];
+  // Full RFC 4180 parser — handles multi-line quoted fields (e.g. D-Tools
+  // model names that contain line breaks like "Mac Studio,\nCurrent Model").
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!normalized.trim()) return [];
 
-  const parseRow = (line: string): string[] => {
-    const fields: string[] = [];
-    let field = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (inQuotes) {
-        if (ch === '"' && line[i + 1] === '"') { field += '"'; i++; }
-        else if (ch === '"') { inQuotes = false; }
-        else { field += ch; }
+  const allRows: string[][] = [];
+  let current: string[] = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < normalized.length; i++) {
+    const ch = normalized[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < normalized.length && normalized[i + 1] === '"') {
+          field += '"'; i++;            // escaped quote
+        } else {
+          inQuotes = false;             // end of quoted field
+        }
       } else {
-        if (ch === '"') { inQuotes = true; }
-        else if (ch === ',') { fields.push(field.trim()); field = ''; }
-        else { field += ch; }
+        field += ch;                    // include newlines inside quotes
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        current.push(field.trim());
+        field = '';
+      } else if (ch === '\n') {
+        current.push(field.trim());
+        if (current.length > 1 || current[0] !== '') allRows.push(current);
+        current = [];
+        field = '';
+      } else {
+        field += ch;
       }
     }
-    fields.push(field.trim());
-    return fields;
-  };
+  }
+  // Flush last row
+  current.push(field.trim());
+  if (current.length > 1 || current[0] !== '') allRows.push(current);
 
-  const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
+  if (allRows.length < 2) return [];
+
+  const headers = allRows[0].map(h => h.toLowerCase().trim());
   const rows: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const values = parseRow(lines[i]);
+  for (let i = 1; i < allRows.length; i++) {
+    const values = allRows[i];
     const row: Record<string, string> = {};
     headers.forEach((h, idx) => { row[h] = values[idx] ?? ''; });
     rows.push(row);
@@ -168,6 +190,7 @@ export function mapRow(raw: Record<string, string>): CsvRow {
     laborUnitPrice:  toNum(raw['labor unit price']),
     ownerFurnished:  toBool(raw['owner furnished equipment']),
     nonBillable:     toBool(raw['non-billable']),
+    optional:        toBool(raw['optional']),
   };
 }
 
@@ -210,11 +233,11 @@ export function runRules(
   const equipRows = rows.filter(r => r.itemType.toLowerCase() === 'product');
   const laborRows = rows.filter(r => r.itemType.toLowerCase() === 'labor');
 
-  // realEquip: exclude S&H, MISC, and non-billable rows from item-level rules and margin math.
+  // realEquip: exclude S&H, MISC, non-billable, and optional rows from item-level rules and margin math.
   // Owner-furnished rows ARE included (so location/quantity checks still fire), but
   // pricing-specific rules (ZERO_UNIT_PRICE, COST_DEVIATION) skip them individually.
   const realEquip = equipRows.filter(r =>
-    r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC' && !r.nonBillable,
+    r.modelNumber !== 'S&H' && r.modelNumber !== 'MISC' && !r.nonBillable && !r.optional,
   );
 
   // ── Pre-compute total labor cost/price directly from CSV columns ──────────
@@ -226,27 +249,30 @@ export function runRules(
   //      • unit labor hours × labor unit cost/price × quantity
   //        (D-Tools lets you attach install hours to individual product line items)
   // Labor Types can be comma-separated — handled per item where needed.
+  // Round each line item to the penny before accumulating — matches D-Tools
+  // row-level rounding and avoids floating-point drift across hundreds of rows.
+  const round2 = (n: number) => Math.round(n * 100) / 100;
   let totalLaborCost = 0, totalLaborPrice = 0;
   for (const r of rows) {
-    if (r.nonBillable) continue;  // non-billable rows carry $0 cost everywhere — skip entirely
+    if (r.nonBillable || r.optional) continue;  // non-billable/optional rows excluded from margin math
     const qty = r.quantity ?? 1;
     // Variable labor (dedicated Labor rows OR embedded on Product rows)
     if ((r.laborHours ?? 0) > 0 && (r.laborUnitCost ?? 0) > 0) {
-      totalLaborCost  += (r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty;
-      totalLaborPrice += (r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty;
+      totalLaborCost  += round2((r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty);
+      totalLaborPrice += round2((r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty);
     }
     // Fixed labor (dedicated Labor rows only)
     if (r.itemType.toLowerCase() === 'labor' && (r.fixedLaborCost ?? 0) > 0) {
-      totalLaborCost  += (r.fixedLaborCost  ?? 0) * qty;
-      totalLaborPrice += (r.fixedLaborPrice ?? 0) * qty;
+      totalLaborCost  += round2((r.fixedLaborCost  ?? 0) * qty);
+      totalLaborPrice += round2((r.fixedLaborPrice ?? 0) * qty);
     }
   }
 
   // ── HIGH: Project Margin Below Floor ─────────────────────────────────────
   // Equipment cost/price: realEquip rows (unit cost/price × qty, excl S&H/MISC).
   // Labor cost/price: computed above from CSV columns directly.
-  const equipCost  = realEquip.reduce((s, r) => s + (r.unitCost  ?? 0) * (r.quantity ?? 0), 0);
-  const equipPrice = realEquip.reduce((s, r) => s + (r.unitPrice ?? 0) * (r.quantity ?? 0), 0);
+  const equipCost  = realEquip.reduce((s, r) => s + round2((r.unitCost  ?? 0) * (r.quantity ?? 0)), 0);
+  const equipPrice = realEquip.reduce((s, r) => s + round2((r.unitPrice ?? 0) * (r.quantity ?? 0)), 0);
   const projectCost  = equipCost  + totalLaborCost;
   const projectPrice = equipPrice + totalLaborPrice;
   if (projectPrice > 0) {
@@ -414,12 +440,12 @@ export function runRules(
     const topLevel = r.location.split(':')[0].trim() || 'Unknown';
     const g = locationGroups.get(topLevel) ?? { price: 0, cost: 0 };
     const qty = r.quantity ?? 0;
-    g.cost  += (r.unitCost  ?? 0) * qty;
-    g.price += (r.unitPrice ?? 0) * qty;
+    g.cost  += round2((r.unitCost  ?? 0) * qty);
+    g.price += round2((r.unitPrice ?? 0) * qty);
     // Add embedded labor (product rows with labor hours attached)
     if ((r.laborHours ?? 0) > 0 && (r.laborUnitCost ?? 0) > 0) {
-      g.cost  += (r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty;
-      g.price += (r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty;
+      g.cost  += round2((r.laborHours ?? 0) * (r.laborUnitCost  ?? 0) * qty);
+      g.price += round2((r.laborHours ?? 0) * (r.laborUnitPrice ?? 0) * qty);
     }
     locationGroups.set(topLevel, g);
   }
@@ -444,7 +470,7 @@ export function runRules(
     if (r.nonBillable) continue;
     if (r.modelNumber === 'S&H') continue;
     const qty = r.quantity ?? 0;
-    const cost = (r.unitCost ?? 0) * qty;
+    const cost = round2((r.unitCost ?? 0) * qty);
     if (isMiscItem(r)) {
       miscCost += cost;
     } else {
