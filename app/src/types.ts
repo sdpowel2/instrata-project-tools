@@ -67,6 +67,60 @@ export interface ProductCatalogItem {
   priceDate?: string;
   lastUpdated?: string;
   createdAt: string;
+
+  // D-Tools extended fields
+  subcategory?: string;
+  phase?: string;
+  partNumber?: string;
+  systemName?: string;
+  productUrl?: string;
+  shortDescription?: string;
+  longDescription?: string;
+  tags?: string;
+  accountingItemName?: string;
+  laborTypes?: string;
+  unitLaborHours?: number;
+  unitPrice?: number;
+  margin?: number;
+  markup?: number;
+  mapPrice?: number;
+  purchaseCost?: number;
+  partnerSetCost?: boolean;
+  uomForPartnerCost?: string;
+  preferredVendor?: string;
+  alternateVendors?: string;
+  pricedFrom?: string;
+  partnerUpdatedOn?: string;
+  heightInches?: number;
+  widthInches?: number;
+  depthInches?: number;
+  weightLbs?: number;
+  rackMounted?: boolean;
+  rackUnits?: number;
+  amps?: number;
+  volts?: number;
+  watts?: number;
+  btu?: number;
+  poe?: boolean;
+  poeClass?: string;
+  orderUom?: string;
+  doNotOrder?: boolean;
+  bulkItem?: boolean;
+  includeInSubmittal?: boolean;
+  includeInServicePlan?: boolean;
+  ownerFurnished?: boolean;
+  taxable?: boolean;
+  discontinued?: boolean;
+  approved?: boolean;
+  taaCompliant?: boolean;
+  bulkWire?: boolean;
+  hasThumbnail?: boolean;
+  hasFiles?: boolean;
+  dtoolsCreatedOn?: string;
+  dtoolsCreatedBy?: string;
+  dtoolsUpdatedOn?: string;
+  dtoolsUpdatedBy?: string;
+  lastSyncedAt?: string;
 }
 export type ProjectBusinessUnit = 'Instrata SE' | 'Instrata SW' | 'Instrata NE' | 'Instrata MA';
 export type SubmittalStatus = 'Draft' | 'Submitted' | 'Approved' | 'Revise & Resubmit';
@@ -325,6 +379,46 @@ export interface BidLevelingSession {
   generationReport?: GenerationReportEntry[];
   status: BidLevelingStatus;
   createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ===================== PERSONAL OPS =====================
+
+export type EmailFlagStatus = 'active' | 'flagged' | 'deferred' | 'dismissed';
+export type SessionType = 'morning' | 'midday' | 'eod';
+
+export interface GraphEmail {
+  id: string;
+  subject: string;
+  from: { emailAddress: { name: string; address: string } };
+  receivedDateTime: string;
+  bodyPreview: string;
+  importance: 'low' | 'normal' | 'high';
+  isRead: boolean;
+  hasAttachments: boolean;
+  conversationId?: string;
+}
+
+export interface ScoredEmail extends GraphEmail {
+  urgencyScore: number;
+  urgencyReason: string;
+  draftReply: string | null;
+  flagStatus: EmailFlagStatus;
+  deferredTo?: SessionType;
+  firstSeenAt?: string;
+}
+
+export interface EmailFlag {
+  id: string;
+  userId: string;
+  messageId: string;
+  status: EmailFlagStatus;
+  urgencyScore: number | null;
+  urgencyReason: string | null;
+  sessionType: SessionType | null;
+  deferredTo: SessionType | null;
+  firstSeenAt: string;
   createdAt: string;
   updatedAt: string;
 }

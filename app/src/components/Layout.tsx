@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
-  ClipboardCheck, BookOpen, Settings, ChevronRight, LogOut, ShieldCheck, Scale,
+  ClipboardCheck, BookOpen, Settings, ChevronRight, LogOut, ShieldCheck, Scale, Mail,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,7 +25,7 @@ const moduleNav = [
 export function Layout() {
   const { projectId } = useParams();
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
-  const { user, signOut } = useAuth();
+  const { user, signOut, isAdmin } = useAuth();
 
   return (
     <div className="flex h-full">
@@ -56,6 +56,23 @@ export function Layout() {
               {item.label}
             </NavLink>
           ))}
+
+          {/* Admin-only: Personal Ops */}
+          {isAdmin && (
+            <NavLink
+              to="/personal-ops"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-white/10 text-white border-l-2 border-orange'
+                    : 'text-white/60 hover:text-white hover:bg-white/5'
+                }`
+              }
+            >
+              <Mail size={18} />
+              Personal Ops
+            </NavLink>
+          )}
 
           {/* Project module nav */}
           {project && (

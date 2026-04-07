@@ -14,6 +14,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AutoReviewPage } from './pages/AutoReview';
 import { ReviewQueuePage } from './pages/ReviewQueue';
 import { BidLevelingPage } from './pages/BidLevelingPage';
+import { PersonalOpsPage } from './pages/PersonalOpsPage';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -90,6 +91,7 @@ export default function App() {
                 <Route path="bid-leveling" element={<BidLevelingPage />} />
               </Route>
               <Route path="review-queue" element={<ReviewQueuePage />} />
+              <Route path="personal-ops" element={<PersonalOpsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Route>
