@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, Upload, Plus, Package } from 'lucide-react';
+import { FileText, MessageSquareWarning, ClipboardCheck, BookOpen, Upload, Plus, Package, RefreshCw, Info, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { useStore } from '../store';
 import { Modal } from '../components/Modal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
@@ -14,6 +14,7 @@ const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking',
 export function ProjectOverview() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const allSubmittals = useStore((s) => s.submittals);
   const allRfis = useStore((s) => s.rfis);
   const allCloseouts = useStore((s) => s.closeouts);
@@ -22,6 +23,9 @@ export function ProjectOverview() {
   const addBoMItem = useStore((s) => s.addBoMItem);
   const deleteBoMItem = useStore((s) => s.deleteBoMItem);
   const importBoMItems = useStore((s) => s.importBoMItems);
+  const syncDToolsBoM = useStore((s) => s.syncDToolsBoM);
+
+  const dtoolsBomStatus = project?.dtoolsBomStatus ?? '';
 
   const submittals = useMemo(() => allSubmittals.filter((x) => x.projectId === projectId), [allSubmittals, projectId]);
   const rfis = useMemo(() => allRfis.filter((x) => x.projectId === projectId), [allRfis, projectId]);
@@ -226,8 +230,27 @@ export function ProjectOverview() {
               <Package size={20} className="text-orange" />
             </div>
             <h3 className="text-lg font-semibold text-navy">Bill of Materials</h3>
+            {dtoolsBomStatus === 'found' && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+                <CheckCircle2 size={12} /> Imported from DTools
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            {isSupabaseConfigured() && (
+              <button
+                onClick={() => projectId && syncDToolsBoM(projectId)}
+                disabled={dtoolsBomStatus === 'loading'}
+                className="btn-secondary text-sm"
+                title="Search DTools for this project and import its BoM"
+              >
+                {dtoolsBomStatus === 'loading' ? (
+                  <><Loader2 size={14} className="animate-spin" /> Syncing...</>
+                ) : (
+                  <><RefreshCw size={14} /> Sync from DTools</>
+                )}
+              </button>
+            )}
             <button onClick={() => setShowCSVImport(true)} className="btn-secondary text-sm">
               <Upload size={14} /> Import CSV
             </button>
@@ -236,6 +259,27 @@ export function ProjectOverview() {
             </button>
           </div>
         </div>
+
+        {/* DTools status banners */}
+        {dtoolsBomStatus === 'not_found' && bomItems.length === 0 && (
+          <div className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+            <Info size={18} className="text-blue-600 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-blue-800">
+              <span className="font-medium">No similar DTools project found.</span>{' '}
+              Import a CSV or add items manually.
+            </div>
+          </div>
+        )}
+        {dtoolsBomStatus === 'error' && (
+          <div className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+            <AlertCircle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-red-800">
+              <span className="font-medium">DTools sync failed.</span>{' '}
+              Try again or import manually.
+            </div>
+          </div>
+        )}
+
         <div className="p-6">
           <BoMLocationView items={bomItems} onRemove={(itemId) => deleteBoMItem(itemId)} />
         </div>

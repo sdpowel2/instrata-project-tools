@@ -40,6 +40,8 @@ function rowToProject(r: any): Project {
     id: r.id, name: r.name, number: r.number, client: r.client,
     address: r.address, businessUnit: r.business_unit ?? '', status: r.status,
     mondayItemId: r.monday_item_id ?? undefined,
+    dtoolsProjectId: r.dtools_project_id ?? undefined,
+    dtoolsBomStatus: r.dtools_bom_status ?? '',
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -53,6 +55,8 @@ function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<stri
   if (p.businessUnit !== undefined) row.business_unit = p.businessUnit;
   if (p.status !== undefined) row.status = p.status;
   if (p.mondayItemId !== undefined) row.monday_item_id = p.mondayItemId;
+  if (p.dtoolsProjectId !== undefined) row.dtools_project_id = p.dtoolsProjectId;
+  if (p.dtoolsBomStatus !== undefined) row.dtools_bom_status = p.dtoolsBomStatus;
   if (p.createdAt !== undefined) row.created_at = p.createdAt;
   if (p.updatedAt !== undefined) row.updated_at = p.updatedAt;
   if ((p as any).createdBy !== undefined) row.created_by = (p as any).createdBy;
@@ -313,11 +317,11 @@ function dbExec(fn: () => PromiseLike<{ error: any }>): void {
 // ---------------------------------------------------------------------------
 
 const seedProjects: Project[] = [
-  { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', businessUnit: 'Instrata NE', status: 'Active', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
-  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'Active', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
-  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Pending Closeout', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
-  { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', businessUnit: 'Instrata NE', status: 'Closed', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
-  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'Active', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
+  { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', businessUnit: 'Instrata NE', status: 'Active', dtoolsBomStatus: '', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
+  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'Active', dtoolsBomStatus: '', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
+  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Pending Closeout', dtoolsBomStatus: '', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
+  { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', businessUnit: 'Instrata NE', status: 'Closed', dtoolsBomStatus: '', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
+  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'Active', dtoolsBomStatus: '', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
 ];
 
 const seedProjectBoM: ProjectBoMItem[] = [
@@ -503,6 +507,9 @@ interface AppState {
   addProject: (p: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => string;
   updateProject: (id: string, p: Partial<Project>) => void;
   deleteProject: (id: string) => void;
+
+  // DTools sync
+  syncDToolsBoM: (projectId: string) => Promise<void>;
 
   // Project BoM actions
   addBoMItem: (projectId: string, item: Omit<ProjectBoMItem, 'id' | 'projectId'>) => string;
@@ -771,6 +778,61 @@ export const useStore = create<AppState>((set, get) => ({
     // DB cascade deletes will handle child rows if FK ON DELETE CASCADE is set.
     // If not, we delete explicitly.
     dbExec(() => supabase.from('projects').delete().eq('id', id));
+  },
+
+  // =========================================================================
+  // DTools Sync
+  // =========================================================================
+  syncDToolsBoM: async (projectId) => {
+    const project = get().projects.find((p) => p.id === projectId);
+    if (!project || !project.number) return;
+
+    // Set loading state
+    set((s) => ({
+      projects: s.projects.map((p) => p.id === projectId ? { ...p, dtoolsBomStatus: 'loading' as const } : p),
+    }));
+
+    try {
+      const { data, error } = await supabase.functions.invoke('dtools-project-lookup', {
+        body: { projectId, projectNumber: project.number },
+      });
+
+      console.log('[DTools sync] response:', { data, error });
+
+      // supabase.functions.invoke sets error for non-2xx OR relay errors;
+      // also check if the data itself indicates an error
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      // Refresh project and BoM from Supabase
+      const [projRes, bomRes] = await Promise.all([
+        supabase.from('projects').select('*').eq('id', projectId).single(),
+        supabase.from('project_bom_items').select('*').eq('project_id', projectId),
+      ]);
+
+      if (projRes.data) {
+        const updated = rowToProject(projRes.data);
+        set((s) => ({
+          projects: s.projects.map((p) => p.id === projectId ? updated : p),
+        }));
+      }
+
+      if (bomRes.data) {
+        const newBom = bomRes.data.map(rowToBoMItem);
+        set((s) => ({
+          projectBoM: [
+            ...s.projectBoM.filter((b) => b.projectId !== projectId),
+            ...newBom,
+          ],
+        }));
+      }
+    } catch (err) {
+      console.error('[DTools sync failed]', err);
+      set((s) => ({
+        projects: s.projects.map((p) => p.id === projectId ? { ...p, dtoolsBomStatus: 'error' as const } : p),
+      }));
+      dbExec(() => supabase.from('projects').update({ dtools_bom_status: 'error' }).eq('id', projectId));
+    }
   },
 
   // =========================================================================

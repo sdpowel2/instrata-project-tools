@@ -6,7 +6,7 @@ import type { ProjectStatus, ProjectBusinessUnit } from '../types';
 export function ProjectNew() {
   const navigate = useNavigate();
   const addProject = useStore((s) => s.addProject);
-  const [form, setForm] = useState({ name: '', number: '', client: '', address: '', businessUnit: '' as ProjectBusinessUnit | '', status: 'Active' as ProjectStatus });
+  const [form, setForm] = useState({ name: '', number: '', client: '', address: '', businessUnit: '' as ProjectBusinessUnit | '', status: 'Active' as ProjectStatus, dtoolsBomStatus: '' as const });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

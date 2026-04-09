@@ -170,6 +170,9 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
   // Default manufacturer for sheets without a manufacturer column
   const [defaultMfg, setDefaultMfg] = useState('');
 
+  // Vendor name for the "Priced From" field (required)
+  const [vendor, setVendor] = useState('');
+
   // Derived: headers and data rows based on selected header row
   const headers = useMemo(() => allRows[headerRowIdx] ?? [], [allRows, headerRowIdx]);
   const rawRows = useMemo(() => {
@@ -189,6 +192,7 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
     setSheetNames([]);
     setActiveSheet('');
     setDefaultMfg('');
+    setVendor('');
   };
 
   const handleClose = () => { reset(); onClose(); };
@@ -312,12 +316,13 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
   };
 
   const mfgMapped = mapping.manufacturer !== undefined && mapping.manufacturer >= 0;
-  const requiredMet = TARGET_FIELDS
-    .filter(f => f.required)
-    .every(f => {
-      if (f.key === 'manufacturer') return mfgMapped || defaultMfg.trim() !== '';
-      return mapping[f.key] !== undefined && mapping[f.key] >= 0;
-    });
+  const requiredMet = vendor.trim() !== '' &&
+    TARGET_FIELDS
+      .filter(f => f.required)
+      .every(f => {
+        if (f.key === 'manufacturer') return mfgMapped || defaultMfg.trim() !== '';
+        return mapping[f.key] !== undefined && mapping[f.key] >= 0;
+      });
 
   // Sample values for a header column (first 3 non-empty from raw rows)
   const sampleValues = useCallback((colIdx: number): string[] => {
@@ -388,7 +393,12 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
       const getOpt = (row: string[], idx: number | undefined) =>
         idx !== undefined && idx >= 0 ? (row[idx] ?? '') : '';
 
-      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10); // YYYY-MM-DD for price_date
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const yyyy = now.getFullYear();
+      const pricedFrom = `${vendor.trim()} ${mm}/${dd}/${yyyy}`;
 
       // Deduplicate by manufacturer+model (last row wins) to avoid
       // "ON CONFLICT DO UPDATE cannot affect row a second time" errors
@@ -409,6 +419,7 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
           unit_of_measure: getOpt(raw, uomIdx),
           category: getOpt(raw, catIdx),
           price_date: today,
+          priced_from: pricedFrom,
         });
       }
       const rows = Array.from(deduped.values());
@@ -639,6 +650,41 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
               })}
             </div>
 
+            {/* Vendor / Priced From */}
+            {(() => {
+              const today = new Date();
+              const mm = String(today.getMonth() + 1).padStart(2, '0');
+              const dd = String(today.getDate()).padStart(2, '0');
+              const yyyy = today.getFullYear();
+              const formattedDate = `${mm}/${dd}/${yyyy}`;
+              const preview = vendor.trim() ? `${vendor.trim()} ${formattedDate}` : '';
+              return (
+                <div className="mt-5 pt-5 border-t border-border">
+                  <div className="grid grid-cols-[160px_1fr] gap-3 items-start">
+                    <div className="flex items-center gap-1.5 pt-1.5">
+                      <span className="text-sm font-medium text-text-primary">Vendor</span>
+                      <span className="text-[10px] font-semibold text-red-500">*</span>
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        value={vendor}
+                        onChange={e => setVendor(e.target.value)}
+                        placeholder="e.g. Extron, Crestron, Amazon"
+                        className="w-full text-sm border border-border rounded-lg px-3 py-1.5 bg-white focus:ring-2 focus:ring-navy/20 focus:border-navy transition-colors"
+                      />
+                      <p className="text-[11px] text-text-secondary mt-1">
+                        Used to populate the <span className="font-medium">Priced From</span> field.
+                        {preview
+                          ? <> Will be set to: <span className="font-medium text-text-primary">{preview}</span></>
+                          : ' Enter a vendor name to see the preview.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Navigation */}
             <div className="flex justify-between pt-5 mt-5 border-t border-border">
               <button
@@ -678,36 +724,57 @@ export function CatalogImportModal({ open, onClose, onComplete }: CatalogImportM
             <div className="border border-border rounded-lg overflow-hidden mb-4">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-navy text-white text-left">
-                      {TARGET_FIELDS.filter(f => (mapping[f.key] !== undefined && mapping[f.key] >= 0) || (f.key === 'manufacturer' && !mfgMapped && defaultMfg.trim())).map(f => (
-                        <th key={f.key} className="px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap">
-                          {f.label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {previewRows.map((row, idx) => {
-                      const mfg = row.manufacturer?.trim();
-                      const model = row.model_number?.trim();
-                      const isSkipped = !mfg || !model;
-                      return (
-                        <tr key={idx} className={`${idx % 2 === 1 ? 'bg-surface/30' : ''} ${isSkipped ? 'opacity-40' : ''}`}>
-                          {TARGET_FIELDS.filter(f => (mapping[f.key] !== undefined && mapping[f.key] >= 0) || (f.key === 'manufacturer' && !mfgMapped && defaultMfg.trim())).map(f => (
-                            <td key={f.key} className="px-3 py-2 text-text-primary whitespace-nowrap max-w-[220px] truncate">
-                              {(f.key === 'list_price' || f.key === 'cost') && row[f.key]
-                                ? (() => {
-                                    const n = parseFloat(row[f.key].replace(/[$,]/g, ''));
-                                    return isNaN(n) ? row[f.key] : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                                  })()
-                                : row[f.key] || '—'}
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
+                  {(() => {
+                    const previewNow = new Date();
+                    const pmm = String(previewNow.getMonth() + 1).padStart(2, '0');
+                    const pdd = String(previewNow.getDate()).padStart(2, '0');
+                    const pyyyy = previewNow.getFullYear();
+                    const previewPricedFrom = vendor.trim() ? `${vendor.trim()} ${pmm}/${pdd}/${pyyyy}` : '';
+                    const visibleFields = TARGET_FIELDS.filter(f =>
+                      (mapping[f.key] !== undefined && mapping[f.key] >= 0) ||
+                      (f.key === 'manufacturer' && !mfgMapped && defaultMfg.trim())
+                    );
+                    return (
+                      <>
+                        <thead>
+                          <tr className="bg-navy text-white text-left">
+                            {visibleFields.map(f => (
+                              <th key={f.key} className="px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap">
+                                {f.label}
+                              </th>
+                            ))}
+                            <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider whitespace-nowrap">
+                              Priced From
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {previewRows.map((row, idx) => {
+                            const mfg = row.manufacturer?.trim();
+                            const model = row.model_number?.trim();
+                            const isSkipped = !mfg || !model;
+                            return (
+                              <tr key={idx} className={`${idx % 2 === 1 ? 'bg-surface/30' : ''} ${isSkipped ? 'opacity-40' : ''}`}>
+                                {visibleFields.map(f => (
+                                  <td key={f.key} className="px-3 py-2 text-text-primary whitespace-nowrap max-w-[220px] truncate">
+                                    {(f.key === 'list_price' || f.key === 'cost') && row[f.key]
+                                      ? (() => {
+                                          const n = parseFloat(row[f.key].replace(/[$,]/g, ''));
+                                          return isNaN(n) ? row[f.key] : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                                        })()
+                                      : row[f.key] || '—'}
+                                  </td>
+                                ))}
+                                <td className="px-3 py-2 text-text-primary whitespace-nowrap">
+                                  {previewPricedFrom || '—'}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </>
+                    );
+                  })()}
                 </table>
               </div>
               {rawRows.length > 5 && (

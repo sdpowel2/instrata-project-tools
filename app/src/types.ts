@@ -132,6 +132,8 @@ export type ItemCategory = 'Display' | 'Audio' | 'Control' | 'Networking' | 'Cab
 export type ManualSectionType = 'System Overview' | 'System Section' | 'Device Registry' | 'Support Contacts' | 'Emergency Procedures';
 export type SignOffStatus = 'Pending' | 'Passed' | 'Failed' | 'N/A';
 
+export type DToolsBomStatus = '' | 'found' | 'not_found' | 'error' | 'loading';
+
 export interface Project {
   id: string;
   name: string;
@@ -141,6 +143,8 @@ export interface Project {
   businessUnit: ProjectBusinessUnit | '';
   status: ProjectStatus;
   mondayItemId?: number;
+  dtoolsProjectId?: string;
+  dtoolsBomStatus: DToolsBomStatus;
   createdAt: string;
   updatedAt: string;
 }

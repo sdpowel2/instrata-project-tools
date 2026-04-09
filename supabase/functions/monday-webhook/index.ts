@@ -6,6 +6,39 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const VALID_BUSINESS_UNITS = ['Instrata SE', 'Instrata SW', 'Instrata NE', 'Instrata MA'];
 const STATUS_COLUMN_ID     = 'status9';
 
+// ─── D-Tools project lookup (fire-and-forget) ────────────────────────────────
+
+async function triggerDToolsLookup(
+  supabaseClient: any,
+  projectId: string,
+  projectNumber: string,
+) {
+  if (!projectNumber) return;
+  const apiKey = Deno.env.get('DTOOLS_API_KEY');
+  if (!apiKey) {
+    console.log('[monday-webhook] DTOOLS_API_KEY not set — skipping DTools lookup');
+    return;
+  }
+
+  try {
+    // Call the dtools-project-lookup edge function
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const res = await fetch(`${supabaseUrl}/functions/v1/dtools-project-lookup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({ projectId, projectNumber }),
+    });
+    const result = await res.json();
+    console.log(`[monday-webhook] DTools lookup result:`, JSON.stringify(result));
+  } catch (err) {
+    console.error('[monday-webhook] DTools lookup failed (non-blocking):', err);
+  }
+}
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -176,6 +209,10 @@ serve(async (req) => {
     }
 
     console.log(`[monday-webhook] Pre-sales "Review" — created new project ${data.id}`);
+
+    // Fire-and-forget DTools BoM lookup
+    await triggerDToolsLookup(supabase, data.id, projectNum);
+
     return new Response(JSON.stringify({ status: 'created', id: data.id }), {
       headers: { 'Content-Type': 'application/json' },
     });
@@ -214,6 +251,9 @@ serve(async (req) => {
       status: 500, headers: { 'Content-Type': 'application/json' },
     });
   }
+
+  // Fire-and-forget DTools BoM lookup
+  await triggerDToolsLookup(supabase, data.id, projectNum);
 
   return new Response(JSON.stringify({ status: 'created', id: data.id }), {
     headers: { 'Content-Type': 'application/json' },
