@@ -1,4 +1,18 @@
-export type ProjectStatus = 'Active' | 'Pending Closeout' | 'Closed';
+// Monday.com pipeline statuses (canonical going forward).
+// Legacy values ('Active' | 'Pending Closeout' | 'Closed') are still tolerated by
+// the StatusBadge color map and can be migrated by setting the new status in-app.
+export type MondayProjectStatus =
+  | 'Not Started'
+  | 'In Progress'
+  | 'In Review'
+  | 'Follow Up'
+  | 'Won';
+
+export type LegacyProjectStatus = 'Active' | 'Pending Closeout' | 'Closed';
+
+export type ProjectStatus = MondayProjectStatus | LegacyProjectStatus;
+
+export type ProjectPhase = 'Pre-Sales' | 'Post-Sales';
 
 // ===================== AUTO REVIEWER =====================
 
@@ -142,6 +156,11 @@ export interface Project {
   address: string;
   businessUnit: ProjectBusinessUnit | '';
   status: ProjectStatus;
+  phase: ProjectPhase;
+  /** Contracted / quoted value, e.g. "$482K" or "$1.2M". String to allow human formatting. */
+  value: string;
+  /** Auth user id of the engineer this project is assigned to. */
+  ownerId?: string;
   mondayItemId?: number;
   dtoolsProjectId?: string;
   dtoolsBomStatus: DToolsBomStatus;
@@ -149,7 +168,9 @@ export interface Project {
   updatedAt: string;
 }
 
-// ===================== PROJECT-LEVEL BILL OF MATERIALS =====================
+// ===================== PROJECT LINE ITEMS =====================
+
+export type BomItemType = 'Product' | 'Labor';
 
 export interface SubmittalItemLocation {
   room: string;
@@ -169,6 +190,17 @@ export interface ProjectBoMItem {
   cutSheetData?: string;
   cutSheetName?: string;
   sortOrder: number;
+  itemType: BomItemType;
+  unitCost: number;
+  unitPrice: number;
+  laborHours: number;
+  laborUnitCost: number;
+  laborUnitPrice: number;
+  fixedLaborCost: number;
+  fixedLaborPrice: number;
+  marginPct: number;
+  ownerFurnished: boolean;
+  optional: boolean;
 }
 
 // ===================== SUBMITTALS =====================

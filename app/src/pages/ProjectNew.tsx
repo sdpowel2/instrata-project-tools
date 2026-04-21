@@ -1,12 +1,22 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store';
-import type { ProjectStatus, ProjectBusinessUnit } from '../types';
+import type { ProjectStatus, ProjectBusinessUnit, ProjectPhase } from '../types';
 
 export function ProjectNew() {
   const navigate = useNavigate();
   const addProject = useStore((s) => s.addProject);
-  const [form, setForm] = useState({ name: '', number: '', client: '', address: '', businessUnit: '' as ProjectBusinessUnit | '', status: 'Active' as ProjectStatus, dtoolsBomStatus: '' as const });
+  const [form, setForm] = useState({
+    name: '',
+    number: '',
+    client: '',
+    address: '',
+    businessUnit: '' as ProjectBusinessUnit | '',
+    status: 'Not Started' as ProjectStatus,
+    phase: 'Pre-Sales' as ProjectPhase,
+    value: '',
+    dtoolsBomStatus: '' as const,
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,6 +49,17 @@ export function ProjectNew() {
         <Field label="Address">
           <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="input" placeholder="Project address" />
         </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Phase" required>
+            <select value={form.phase} onChange={(e) => setForm({ ...form, phase: e.target.value as ProjectPhase })} className="input">
+              <option value="Pre-Sales">Pre-Sales</option>
+              <option value="Post-Sales">Post-Sales</option>
+            </select>
+          </Field>
+          <Field label="Contracted Value">
+            <input value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} className="input" placeholder="e.g. $482K" />
+          </Field>
+        </div>
         <div className="flex justify-end gap-3 pt-4 border-t border-border">
           <button type="button" onClick={() => navigate('/projects')} className="btn-secondary">Cancel</button>
           <button type="submit" className="btn-primary">Create Project</button>

@@ -6,6 +6,8 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
 import { LocationProductPicker } from '../components/LocationProductPicker';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PhaseRibbon } from '../components/PhaseRibbon';
 import { exportRFIPDF } from '../utils/exportRFIPDF';
 import type { RFIStatus } from '../types';
 
@@ -77,12 +79,22 @@ export function RFIList() {
   };
 
   return (
-    <div className="p-8">
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      {project && <ProjectHeader project={project} />}
+      {project && (
+        <div className="mt-5">
+          {/* RFIs straddle both phases — show the project's current phase. */}
+          <PhaseRibbon phase={project.phase} toolLabel="RFIs" toolIcon={MessageSquareWarning} />
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-navy">RFI Log</h2>
+        <div>
+          <h2 className="text-[22px] font-bold text-navy m-0">RFI Log</h2>
+          <p className="text-[13px] text-fg-2 mt-1 m-0">Requests for information across this project.</p>
+        </div>
         <div className="flex gap-3">
           <button onClick={handleExportCSV} className="btn-secondary text-sm"><Download size={14} /> Export CSV</button>
-          <button onClick={() => setShowNew(true)} className="btn-primary text-sm"><Plus size={16} /> New RFI</button>
+          <button onClick={() => setShowNew(true)} className="btn-orange text-sm"><Plus size={16} /> New RFI</button>
         </div>
       </div>
 

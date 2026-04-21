@@ -3,11 +3,13 @@ import { useParams } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle2, MinusCircle, MessageSquare, ChevronDown,
   ChevronUp, Clock, RefreshCw, ThumbsUp, AlertCircle, Info, Loader2,
-  Upload, FileSpreadsheet,
+  Upload, FileSpreadsheet, ScanLine,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PhaseRibbon } from '../components/PhaseRibbon';
 import type { ReviewFlag, ReviewFlagStatus, ReviewRunStatus } from '../types';
 import { ReviewQuoteView } from '../components/ReviewBoMTable';
 import { parseCsv, mapRow } from '../utils/reviewEngine';
@@ -452,7 +454,11 @@ export function AutoReviewPage() {
   }
 
   return (
-    <div className="p-6 max-w-6xl">
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      {project && <ProjectHeader project={project} />}
+      <div className="mt-5">
+        <PhaseRibbon phase="Pre-Sales" toolLabel="Auto-Review" toolIcon={ScanLine} />
+      </div>
 
       {/* ── CSV Upload (admin only) ───────────────────────────────────────── */}
       {isAdmin && (

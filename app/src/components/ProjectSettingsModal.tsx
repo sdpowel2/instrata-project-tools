@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Modal } from './Modal';
 import { useStore } from '../store';
-import type { Project, ProjectStatus, ProjectBusinessUnit } from '../types';
+import type { Project, ProjectStatus, ProjectBusinessUnit, ProjectPhase } from '../types';
 
 interface Props {
   open: boolean;
@@ -18,7 +18,9 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
     client: '',
     address: '',
     businessUnit: '' as ProjectBusinessUnit | '',
-    status: 'Active' as ProjectStatus,
+    status: 'Not Started' as ProjectStatus,
+    phase: 'Pre-Sales' as ProjectPhase,
+    value: '',
     mondayItemId: undefined as number | undefined,
   });
 
@@ -32,6 +34,8 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
         address: project.address,
         businessUnit: project.businessUnit,
         status: project.status,
+        phase: project.phase,
+        value: project.value,
         mondayItemId: project.mondayItemId,
       });
     }
@@ -46,6 +50,8 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
       address: form.address,
       businessUnit: form.businessUnit,
       status: form.status,
+      phase: form.phase,
+      value: form.value,
       mondayItemId: form.mondayItemId,
     });
     onClose();
@@ -108,15 +114,41 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
           />
         </Field>
 
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Phase">
+            <select
+              value={form.phase}
+              onChange={(e) => setForm({ ...form, phase: e.target.value as ProjectPhase })}
+              className="input"
+            >
+              <option value="Pre-Sales">Pre-Sales</option>
+              <option value="Post-Sales">Post-Sales</option>
+            </select>
+          </Field>
+          <Field label="Contracted Value">
+            <input
+              value={form.value}
+              onChange={(e) => setForm({ ...form, value: e.target.value })}
+              className="input"
+              placeholder="e.g. $482K"
+            />
+          </Field>
+        </div>
+
         <Field label="Status">
           <select
             value={form.status}
             onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}
             className="input"
           >
-            <option value="Active">Active</option>
-            <option value="Pending Closeout">Pending Closeout</option>
-            <option value="Closed">Closed</option>
+            <option value="Not Started">Not Started</option>
+            <option value="In Progress">In Progress</option>
+            <option value="In Review">In Review</option>
+            <option value="Follow Up">Follow Up</option>
+            <option value="Won">Won</option>
+            <option value="Active">Active (legacy)</option>
+            <option value="Pending Closeout">Pending Closeout (legacy)</option>
+            <option value="Closed">Closed (legacy)</option>
           </select>
         </Field>
 

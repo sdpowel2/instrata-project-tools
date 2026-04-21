@@ -5,8 +5,11 @@ import {
   AlertTriangle, CheckCircle2, ArrowLeft, MapPin, DollarSign, Clock,
   FileText, RefreshCw,
 } from 'lucide-react';
+import { Scale } from 'lucide-react';
 import { useStore } from '../store';
 import { CellMapperModal } from '../components/CellMapperModal';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PhaseRibbon } from '../components/PhaseRibbon';
 import type { CellMapping, BidLevelingSession, GenerationReportEntry } from '../types';
 import {
   parseBomCsv, parseTemplate, generateXlsx, resolveTag,
@@ -206,8 +209,14 @@ export function BidLevelingPage() {
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
+  const project = useStore((s) => s.projects.find((p) => p.id === projectId));
+
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      {project && <ProjectHeader project={project} />}
+      <div className="mt-5">
+        <PhaseRibbon phase="Pre-Sales" toolLabel="Bid Leveling" toolIcon={Scale} />
+      </div>
       {step === 'list' ? (
         <SessionList
           sessions={sessions}

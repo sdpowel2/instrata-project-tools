@@ -15,6 +15,7 @@ import { AutoReviewPage } from './pages/AutoReview';
 import { ReviewQueuePage } from './pages/ReviewQueue';
 import { BidLevelingPage } from './pages/BidLevelingPage';
 import { PersonalOpsPage } from './pages/PersonalOpsPage';
+import { EffortSurveyPage } from './pages/EffortSurvey';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -89,6 +90,8 @@ export default function App() {
                 <Route path="closeout" element={<CloseoutDashboard />} />
                 <Route path="manual" element={<OwnerManualPage />} />
                 <Route path="bid-leveling" element={<BidLevelingPage />} />
+                <Route path="pre-survey" element={<EffortSurveyPage kind="pre-sales" />} />
+                <Route path="post-survey" element={<EffortSurveyPage kind="post-sales" />} />
               </Route>
               <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="personal-ops" element={<PersonalOpsPage />} />

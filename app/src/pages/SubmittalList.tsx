@@ -5,6 +5,8 @@ import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PhaseRibbon } from '../components/PhaseRibbon';
 import type { SubmittalStatus } from '../types';
 
 export function SubmittalList() {
@@ -12,6 +14,7 @@ export function SubmittalList() {
   const navigate = useNavigate();
   const allSubmittals = useStore((s) => s.submittals);
   const submittals = useMemo(() => allSubmittals.filter((x) => x.projectId === projectId), [allSubmittals, projectId]);
+  const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const addSubmittal = useStore((s) => s.addSubmittal);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ title: '', revision: 'Rev 0', preparedBy: '', submittedTo: '', status: 'Draft' as SubmittalStatus, notes: '' });
@@ -25,10 +28,17 @@ export function SubmittalList() {
   };
 
   return (
-    <div className="p-8">
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      {project && <ProjectHeader project={project} />}
+      <div className="mt-5">
+        <PhaseRibbon phase="Post-Sales" toolLabel="Submittals" toolIcon={FileText} />
+      </div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-navy">Submittals</h2>
-        <button onClick={() => setShowNew(true)} className="btn-primary"><Plus size={16} /> New Submittal</button>
+        <div>
+          <h2 className="text-[22px] font-bold text-navy m-0">Submittals</h2>
+          <p className="text-[13px] text-fg-2 mt-1 m-0">Equipment data review and approval packages.</p>
+        </div>
+        <button onClick={() => setShowNew(true)} className="btn-orange"><Plus size={16} /> New Submittal</button>
       </div>
 
       {submittals.length === 0 ? (

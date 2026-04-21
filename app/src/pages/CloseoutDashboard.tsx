@@ -6,6 +6,8 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
 import { LocationProductPicker } from '../components/LocationProductPicker';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PhaseRibbon } from '../components/PhaseRibbon';
 import type { PunchStatus, PunchPriority, SignOffStatus, Warranty, ManualBookmark } from '../types';
 import { exportSignOffPDF } from '../utils/exportSignOffPDF';
 import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
@@ -341,9 +343,16 @@ export function CloseoutDashboard() {
   ] as const;
 
   return (
-    <div className="p-8">
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      {project && <ProjectHeader project={project} />}
+      <div className="mt-5">
+        <PhaseRibbon phase="Post-Sales" toolLabel="Closeout" toolIcon={ClipboardCheck} />
+      </div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-navy">Closeout Package</h2>
+        <div>
+          <h2 className="text-[22px] font-bold text-navy m-0">Closeout Package</h2>
+          <p className="text-[13px] text-fg-2 mt-1 m-0">Punch list, warranties, sign-off sheets, and as-built drawings.</p>
+        </div>
         <button
           className="btn-primary text-sm"
           onClick={() => {

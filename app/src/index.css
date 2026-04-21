@@ -1,44 +1,89 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+@font-face {
+  font-family: 'Gantari';
+  src: url('./assets/Gantari-VariableFont_wght.ttf') format('truetype-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 @theme {
+  /* Brand */
   --color-navy: #22326E;
-  --color-navy-light: #2d4291;
-  --color-navy-dark: #1a2656;
+  --color-navy-light: #2D4291;
+  --color-navy-dark: #1A2656;
   --color-orange: #F68D2E;
-  --color-orange-light: #f8a45a;
-  --color-orange-dark: #e07a1a;
+  --color-orange-light: #F8A45A;
+  --color-orange-dark: #E07A1A;
   --color-blue: #0072CE;
-  --color-blue-light: #338fdb;
+  --color-blue-light: #338FDB;
   --color-yellow: #FFCD00;
+
+  /* Surfaces / borders */
   --color-surface: #F5F6F8;
+  --color-surface-2: #FFFFFF;
   --color-border: #E2E4E9;
+  --color-border-soft: #EEF0F3;
+
+  /* Foreground text */
+  --color-fg: #1A1A2E;
+  --color-fg-2: #5A5A7A;
+  --color-fg-3: #8B8BA6;
+
+  /* Legacy aliases (kept so existing classes like text-text-primary keep working) */
   --color-text-primary: #1A1A2E;
   --color-text-secondary: #5A5A7A;
-  --font-sans: 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Status — bg / fg pairs */
+  --color-status-success-bg: #DCFCE7;
+  --color-status-success-fg: #15803D;
+  --color-status-info-bg: #DBEAFE;
+  --color-status-info-fg: #1D4ED8;
+  --color-status-warn-bg: #FEF9C3;
+  --color-status-warn-fg: #A16207;
+  --color-status-danger-bg: #FEE2E2;
+  --color-status-danger-fg: #B91C1C;
+  --color-status-neutral-bg: #F3F4F6;
+  --color-status-neutral-fg: #4B5563;
+
+  /* Typography */
+  --font-sans: 'Gantari', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 html, body, #root {
   height: 100%;
   font-family: var(--font-sans);
   background: var(--color-surface);
-  color: var(--color-text-primary);
+  color: var(--color-fg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--color-border);
-  border-radius: 3px;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-secondary);
+  background: var(--color-fg-2);
+}
+
+/* Brand "eyebrow" — orange uppercase label used above section headings */
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-orange);
 }
 
 /* Shared form classes */
@@ -50,7 +95,7 @@ html, body, #root {
   border-radius: 0.5rem;
   font-size: 0.875rem;
   background: white;
-  color: var(--color-text-primary);
+  color: var(--color-fg);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .input:focus {
@@ -59,7 +104,7 @@ html, body, #root {
   box-shadow: 0 0 0 3px rgba(34, 50, 110, 0.1);
 }
 .input::placeholder {
-  color: var(--color-text-secondary);
+  color: var(--color-fg-2);
   opacity: 0.6;
 }
 textarea.input {
@@ -105,4 +150,22 @@ select.input {
 .btn-secondary:hover {
   background: var(--color-surface);
   border-color: var(--color-navy);
+}
+
+.btn-orange {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  background: var(--color-orange);
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-orange:hover {
+  background: var(--color-orange-dark);
 }

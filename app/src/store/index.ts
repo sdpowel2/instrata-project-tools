@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type {
   Project, Submittal, SubmittalItem, RFI, CloseoutPackage,
   Warranty, PunchItem, SignOffSheet, OwnerManual, ManualSection, ManualDevice,
-  ProjectBoMItem, AsBuiltDrawing,
+  ProjectBoMItem, BomItemType, AsBuiltDrawing,
   ItemCategory,
   SubmittalItemLocation,
   ReviewRun, ReviewFlag, ReviewRunStatus, ReviewFlagStatus,
@@ -35,14 +35,25 @@ const now = () => new Date().toISOString().split('T')[0];
 // ---------------------------------------------------------------------------
 
 // --- Projects ---
+// Postgres timestamps come back as full ISO strings ("2026-03-30T02:02:09.5Z").
+// The UI only needs the date portion — strip the time component.
+function toDate(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  return v.slice(0, 10);
+}
+
 function rowToProject(r: any): Project {
   return {
     id: r.id, name: r.name, number: r.number, client: r.client,
     address: r.address, businessUnit: r.business_unit ?? '', status: r.status,
+    phase: r.phase ?? 'Post-Sales',
+    value: r.value ?? '',
+    ownerId: r.owner_id ?? undefined,
     mondayItemId: r.monday_item_id ?? undefined,
     dtoolsProjectId: r.dtools_project_id ?? undefined,
     dtoolsBomStatus: r.dtools_bom_status ?? '',
-    createdAt: r.created_at, updatedAt: r.updated_at,
+    createdAt: toDate(r.created_at),
+    updatedAt: toDate(r.updated_at),
   };
 }
 function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<string, any> {
@@ -54,6 +65,9 @@ function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<stri
   if (p.address !== undefined) row.address = p.address;
   if (p.businessUnit !== undefined) row.business_unit = p.businessUnit;
   if (p.status !== undefined) row.status = p.status;
+  if (p.phase !== undefined) row.phase = p.phase;
+  if (p.value !== undefined) row.value = p.value;
+  if (p.ownerId !== undefined) row.owner_id = p.ownerId;
   if (p.mondayItemId !== undefined) row.monday_item_id = p.mondayItemId;
   if (p.dtoolsProjectId !== undefined) row.dtools_project_id = p.dtoolsProjectId;
   if (p.dtoolsBomStatus !== undefined) row.dtools_bom_status = p.dtoolsBomStatus;
@@ -70,6 +84,17 @@ function rowToBoMItem(r: any): ProjectBoMItem {
     description: r.description, category: r.category, qty: r.qty, notes: r.notes ?? '',
     locations: r.locations ?? [], cutSheetData: r.cut_sheet_url ?? undefined,
     cutSheetName: r.cut_sheet_name ?? undefined, sortOrder: r.sort_order ?? 0,
+    itemType: r.item_type ?? 'Product',
+    unitCost: Number(r.unit_cost) || 0,
+    unitPrice: Number(r.unit_price) || 0,
+    laborHours: Number(r.labor_hours) || 0,
+    laborUnitCost: Number(r.labor_unit_cost) || 0,
+    laborUnitPrice: Number(r.labor_unit_price) || 0,
+    fixedLaborCost: Number(r.fixed_labor_cost) || 0,
+    fixedLaborPrice: Number(r.fixed_labor_price) || 0,
+    marginPct: Number(r.margin_pct) || 0,
+    ownerFurnished: r.owner_furnished ?? false,
+    optional: r.optional ?? false,
   };
 }
 function bomItemToRow(item: Partial<ProjectBoMItem>): Record<string, any> {
@@ -86,6 +111,17 @@ function bomItemToRow(item: Partial<ProjectBoMItem>): Record<string, any> {
   if (item.cutSheetData !== undefined) row.cut_sheet_url = item.cutSheetData;
   if (item.cutSheetName !== undefined) row.cut_sheet_name = item.cutSheetName;
   if (item.sortOrder !== undefined) row.sort_order = item.sortOrder;
+  if (item.itemType !== undefined) row.item_type = item.itemType;
+  if (item.unitCost !== undefined) row.unit_cost = item.unitCost;
+  if (item.unitPrice !== undefined) row.unit_price = item.unitPrice;
+  if (item.laborHours !== undefined) row.labor_hours = item.laborHours;
+  if (item.laborUnitCost !== undefined) row.labor_unit_cost = item.laborUnitCost;
+  if (item.laborUnitPrice !== undefined) row.labor_unit_price = item.laborUnitPrice;
+  if (item.fixedLaborCost !== undefined) row.fixed_labor_cost = item.fixedLaborCost;
+  if (item.fixedLaborPrice !== undefined) row.fixed_labor_price = item.fixedLaborPrice;
+  if (item.marginPct !== undefined) row.margin_pct = item.marginPct;
+  if (item.ownerFurnished !== undefined) row.owner_furnished = item.ownerFurnished;
+  if (item.optional !== undefined) row.optional = item.optional;
   return row;
 }
 
@@ -317,20 +353,22 @@ function dbExec(fn: () => PromiseLike<{ error: any }>): void {
 // ---------------------------------------------------------------------------
 
 const seedProjects: Project[] = [
-  { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', businessUnit: 'Instrata NE', status: 'Active', dtoolsBomStatus: '', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
-  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'Active', dtoolsBomStatus: '', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
-  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Pending Closeout', dtoolsBomStatus: '', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
-  { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', businessUnit: 'Instrata NE', status: 'Closed', dtoolsBomStatus: '', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
-  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'Active', dtoolsBomStatus: '', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
+  { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', businessUnit: 'Instrata NE', status: 'In Progress', phase: 'Post-Sales', value: '$482K', dtoolsBomStatus: '', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
+  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'In Progress', phase: 'Post-Sales', value: '$1.2M', dtoolsBomStatus: '', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
+  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Follow Up', phase: 'Post-Sales', value: '$890K', dtoolsBomStatus: '', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
+  { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', businessUnit: 'Instrata NE', status: 'Won', phase: 'Post-Sales', value: '$340K', dtoolsBomStatus: '', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
+  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'In Review', phase: 'Pre-Sales', value: '$612K', dtoolsBomStatus: '', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
 ];
 
+const bomDefaults = { itemType: 'Product' as const, unitCost: 0, unitPrice: 0, laborHours: 0, laborUnitCost: 0, laborUnitPrice: 0, fixedLaborCost: 0, fixedLaborPrice: 0, marginPct: 0, ownerFurnished: false, optional: false };
+
 const seedProjectBoM: ProjectBoMItem[] = [
-  { id: 'bom1', projectId: 'p1', manufacturer: 'Samsung', model: 'QM85C', description: '85" QLED 4K Display', category: 'Display', qty: 4, locations: [{ room: 'Conference Room A', qty: 2 }, { room: 'Conference Room B', qty: 2 }], notes: 'Conference room primary displays', sortOrder: 0 },
-  { id: 'bom2', projectId: 'p1', manufacturer: 'Crestron', model: 'DM-NVX-363', description: 'DM NVX 4K60 Network AV Encoder/Decoder', category: 'Control', qty: 8, locations: [{ room: 'Conference Room A', qty: 4 }, { room: 'Conference Room B', qty: 4 }], notes: '', sortOrder: 1 },
-  { id: 'bom3', projectId: 'p1', manufacturer: 'Shure', model: 'MXA920', description: 'Ceiling Array Microphone', category: 'Audio', qty: 6, locations: [{ room: 'Conference Room A', qty: 2 }, { room: 'Conference Room B', qty: 2 }, { room: 'Executive Boardroom', qty: 2 }], notes: 'White finish to match ceiling', sortOrder: 2 },
-  { id: 'bom4', projectId: 'p1', manufacturer: 'QSC', model: 'Core 110f', description: 'Q-SYS Unified Core', category: 'Audio', qty: 1, locations: [{ room: 'AV Rack Room', qty: 1 }], notes: 'Main DSP processor', sortOrder: 3 },
-  { id: 'bom5', projectId: 'p1', manufacturer: 'Belden', model: '10GXW13', description: 'Cat6A Plenum Cable', category: 'Cabling', qty: 50, locations: [], notes: '50 boxes - blue', sortOrder: 4 },
-  { id: 'bom6', projectId: 'p1', manufacturer: 'Liberty', model: 'DERA2P-015M', description: 'Plenum AOC HDMI Cable 15m', category: 'Cabling', qty: 12, locations: [], notes: '', sortOrder: 5 },
+  { ...bomDefaults, id: 'bom1', projectId: 'p1', manufacturer: 'Samsung', model: 'QM85C', description: '85" QLED 4K Display', category: 'Display', qty: 4, locations: [{ room: 'Conference Room A', qty: 2 }, { room: 'Conference Room B', qty: 2 }], notes: 'Conference room primary displays', sortOrder: 0 },
+  { ...bomDefaults, id: 'bom2', projectId: 'p1', manufacturer: 'Crestron', model: 'DM-NVX-363', description: 'DM NVX 4K60 Network AV Encoder/Decoder', category: 'Control', qty: 8, locations: [{ room: 'Conference Room A', qty: 4 }, { room: 'Conference Room B', qty: 4 }], notes: '', sortOrder: 1 },
+  { ...bomDefaults, id: 'bom3', projectId: 'p1', manufacturer: 'Shure', model: 'MXA920', description: 'Ceiling Array Microphone', category: 'Audio', qty: 6, locations: [{ room: 'Conference Room A', qty: 2 }, { room: 'Conference Room B', qty: 2 }, { room: 'Executive Boardroom', qty: 2 }], notes: 'White finish to match ceiling', sortOrder: 2 },
+  { ...bomDefaults, id: 'bom4', projectId: 'p1', manufacturer: 'QSC', model: 'Core 110f', description: 'Q-SYS Unified Core', category: 'Audio', qty: 1, locations: [{ room: 'AV Rack Room', qty: 1 }], notes: 'Main DSP processor', sortOrder: 3 },
+  { ...bomDefaults, id: 'bom5', projectId: 'p1', manufacturer: 'Belden', model: '10GXW13', description: 'Cat6A Plenum Cable', category: 'Cabling', qty: 50, locations: [], notes: '50 boxes - blue', sortOrder: 4 },
+  { ...bomDefaults, id: 'bom6', projectId: 'p1', manufacturer: 'Liberty', model: 'DERA2P-015M', description: 'Plenum AOC HDMI Cable 15m', category: 'Cabling', qty: 12, locations: [], notes: '', sortOrder: 5 },
 ];
 
 const seedSubmittals: Submittal[] = [
@@ -515,7 +553,7 @@ interface AppState {
   addBoMItem: (projectId: string, item: Omit<ProjectBoMItem, 'id' | 'projectId'>) => string;
   updateBoMItem: (itemId: string, updates: Partial<ProjectBoMItem>) => void;
   deleteBoMItem: (itemId: string) => void;
-  importBoMItems: (projectId: string, items: { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; notes: string; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string }[]) => void;
+  importBoMItems: (projectId: string, items: { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; notes: string; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string; itemType?: BomItemType; unitCost?: number; unitPrice?: number; laborHours?: number; laborUnitCost?: number; laborUnitPrice?: number; fixedLaborCost?: number; fixedLaborPrice?: number; marginPct?: number; ownerFurnished?: boolean; optional?: boolean }[]) => void;
 
   // Submittal actions
   addSubmittal: (s: Omit<Submittal, 'id' | 'createdAt' | 'items'>) => string;
@@ -874,6 +912,17 @@ export const useStore = create<AppState>((set, get) => ({
       cutSheetData: item.cutSheetData,
       cutSheetName: item.cutSheetName,
       sortOrder: maxSort + idx,
+      itemType: item.itemType ?? 'Product',
+      unitCost: item.unitCost ?? 0,
+      unitPrice: item.unitPrice ?? 0,
+      laborHours: item.laborHours ?? 0,
+      laborUnitCost: item.laborUnitCost ?? 0,
+      laborUnitPrice: item.laborUnitPrice ?? 0,
+      fixedLaborCost: item.fixedLaborCost ?? 0,
+      fixedLaborPrice: item.fixedLaborPrice ?? 0,
+      marginPct: item.marginPct ?? 0,
+      ownerFurnished: item.ownerFurnished ?? false,
+      optional: item.optional ?? false,
     }));
     set((s) => ({ projectBoM: [...s.projectBoM, ...newItems] }));
     dbExec(() => supabase.from('project_bom_items').insert(newItems.map(bomItemToRow)));

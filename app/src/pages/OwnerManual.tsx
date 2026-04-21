@@ -4,12 +4,15 @@ import { Plus, BookOpen, Trash2, Download, ChevronDown, ChevronRight, Cpu } from
 import { useStore } from '../store';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PhaseRibbon } from '../components/PhaseRibbon';
 import type { ManualSectionType } from '../types';
 
 const sectionTypes: ManualSectionType[] = ['System Overview', 'System Section', 'Device Registry', 'Support Contacts', 'Emergency Procedures'];
 
 export function OwnerManualPage() {
   const { projectId } = useParams();
+  const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const allManuals = useStore((s) => s.manuals);
   const manuals = useMemo(() => allManuals.filter((x) => x.projectId === projectId), [allManuals, projectId]);
   const addManual = useStore((s) => s.addManual);
@@ -93,11 +96,18 @@ export function OwnerManualPage() {
   const sortedSections = [...manual.sections].sort((a, b) => a.sortOrder - b.sortOrder);
 
   return (
-    <div className="p-8 max-w-[1200px]">
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      {project && <ProjectHeader project={project} />}
+      <div className="mt-5">
+        <PhaseRibbon phase="Post-Sales" toolLabel="Owner Manual" toolIcon={BookOpen} />
+      </div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-navy">Owner Manual</h2>
+        <div>
+          <h2 className="text-[22px] font-bold text-navy m-0">Owner Manual</h2>
+          <p className="text-[13px] text-fg-2 mt-1 m-0">Generated handoff documentation.</p>
+        </div>
         <div className="flex gap-3">
-          <button className="btn-primary text-sm"><Download size={14} /> Export PDF</button>
+          <button className="btn-orange text-sm"><Download size={14} /> Export PDF</button>
         </div>
       </div>
 
