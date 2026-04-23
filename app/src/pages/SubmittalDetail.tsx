@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../store';
@@ -309,7 +309,12 @@ export function SubmittalDetail() {
                       </label>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary max-w-[150px] truncate">{item.notes || '—'}</td>
+                  <td className="px-4 py-3 max-w-[200px]">
+                    <InlineNotesField
+                      value={item.notes}
+                      onSave={(next) => updateItem(submittalId!, item.id, { notes: next })}
+                    />
+                  </td>
                   <td className="px-3 py-3">
                     <button onClick={() => deleteItem(submittalId!, item.id)} className="p-1 rounded hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors">
                       <Trash2 size={14} />
@@ -372,5 +377,41 @@ export function SubmittalDetail() {
         onImport={handleCSVImport}
       />
     </div>
+  );
+}
+
+// Notes are edited in place inside the line items table. The field looks
+// like static text until you click into it; saves on blur or Enter, reverts
+// on Escape. Updating the persisted value from props (e.g. someone else
+// edits the same row) keeps the local draft in sync when not focused.
+function InlineNotesField({ value, onSave }: { value: string; onSave: (next: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const [editing, setEditing] = useState(false);
+
+  // Re-sync when the canonical value changes and we're not actively editing.
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  const commit = () => {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed !== value.trim()) onSave(trimmed);
+  };
+
+  return (
+    <input
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => setEditing(true)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); }
+        else if (e.key === 'Escape') { setDraft(value); setEditing(false); (e.currentTarget as HTMLInputElement).blur(); }
+      }}
+      placeholder="—"
+      className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-secondary/50 px-2 py-1 -mx-2 -my-1 rounded border border-transparent hover:border-border focus:border-navy focus:bg-white focus:text-text-primary focus:outline-none focus:ring-2 focus:ring-navy/20 transition-colors"
+    />
   );
 }
