@@ -2,7 +2,7 @@ import { NavLink, Outlet, useParams, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, ShieldCheck, Scale, Mail,
-  Home, ScanLine,
+  Home, ScanLine, ClipboardList,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -50,7 +50,10 @@ export function Layout() {
             <SidebarLink key={item.to} to={item.to} icon={item.icon} label={item.label} end={item.to === '/'} />
           ))}
           {isAdmin && (
-            <SidebarLink to="/personal-ops" icon={Mail} label="Personal Ops" />
+            <>
+              <SidebarLink to="/manager-dashboard" icon={ClipboardList} label="Manager Dashboard" />
+              <SidebarLink to="/personal-ops" icon={Mail} label="Personal Ops" />
+            </>
           )}
 
           {project && (

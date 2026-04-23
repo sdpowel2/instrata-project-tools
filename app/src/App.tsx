@@ -15,6 +15,7 @@ import { AutoReviewPage } from './pages/AutoReview';
 import { ReviewQueuePage } from './pages/ReviewQueue';
 import { BidLevelingPage } from './pages/BidLevelingPage';
 import { PersonalOpsPage } from './pages/PersonalOpsPage';
+import { ManagerDashboardPage } from './pages/ManagerDashboard';
 import { EffortSurveyPage } from './pages/EffortSurvey';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -94,6 +95,7 @@ export default function App() {
                 <Route path="post-survey" element={<EffortSurveyPage kind="post-sales" />} />
               </Route>
               <Route path="review-queue" element={<ReviewQueuePage />} />
+              <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
               <Route path="personal-ops" element={<PersonalOpsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
