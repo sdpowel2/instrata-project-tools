@@ -14,20 +14,6 @@ function corsHeaders() {
 
 const DTOOLS_BASE = 'https://api.d-tools.com/SI';
 
-interface DToolsProjectItem {
-  Id: string;
-  TypeId: number;
-  Manufacturer: string;
-  Model: string;
-  Category?: string;
-  Description?: string;
-  Quantity: number;
-  TotalQuantity?: number;
-  LocationId?: string;
-  LocationName?: string;
-  Phase?: string;
-}
-
 interface DToolsLocation {
   Id: string;
   Name: string;
@@ -46,6 +32,13 @@ async function dtoolsFetch(apiKey: string, path: string): Promise<any> {
   return res.json();
 }
 
+/** Safely extract a number from untyped API data. */
+function num(v: any): number {
+  if (v === null || v === undefined) return 0;
+  const n = typeof v === 'string' ? parseFloat(v) : Number(v);
+  return isNaN(n) ? 0 : n;
+}
+
 function mapCategory(cat?: string): string {
   if (!cat) return 'Other';
   const c = cat.toLowerCase();
@@ -57,14 +50,33 @@ function mapCategory(cat?: string): string {
   return 'Other';
 }
 
+interface GroupedItem {
+  manufacturer: string;
+  model: string;
+  description: string;
+  category: string;
+  qty: number;
+  notes: string;
+  locations: Map<string, number>;
+  itemType: string;
+  unitCost: number;
+  unitPrice: number;
+  laborHours: number;
+  laborUnitCost: number;
+  laborUnitPrice: number;
+  fixedLaborCost: number;
+  fixedLaborPrice: number;
+  marginPct: number;
+  ownerFurnished: boolean;
+  optional: boolean;
+}
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders() });
   }
-
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405, headers: corsHeaders() });
   }
@@ -79,16 +91,14 @@ serve(async (req) => {
   const { projectId, projectNumber } = body;
   if (!projectId || !projectNumber) {
     return new Response(JSON.stringify({ error: 'projectId and projectNumber required' }), {
-      status: 400,
-      headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+      status: 400, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
     });
   }
 
   const apiKey = Deno.env.get('DTOOLS_API_KEY');
   if (!apiKey) {
     return new Response(JSON.stringify({ error: 'DTOOLS_API_KEY not set' }), {
-      status: 500,
-      headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+      status: 500, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
     });
   }
 
@@ -122,7 +132,6 @@ serve(async (req) => {
       });
     }
 
-    // Find exact match or take first result
     const match = projects.find(
       (p: any) => p.Number?.toLowerCase() === projectNumber.toLowerCase(),
     ) ?? projects[0];
@@ -130,47 +139,149 @@ serve(async (req) => {
     const dtoolsProjectId = match.Id;
     console.log(`[dtools-lookup] Found DTools project: ${dtoolsProjectId} (${match.Name})`);
 
-    // ── Step 2: Fetch project items with location aggregation ────────────────
+    // ── Step 2a: Fetch WITH location aggregation (for qty per location) ─────
     const detailData = await dtoolsFetch(
       apiKey,
       `/Subscribe/Projects?id=${encodeURIComponent(dtoolsProjectId)}&aggregateBy=Location`,
     );
-
     const project = detailData?.Project ?? detailData;
-    const items: DToolsProjectItem[] = project?.Items ?? detailData?.Items ?? [];
+    const aggItems: any[] = project?.Items ?? detailData?.Items ?? [];
     const locations: DToolsLocation[] = project?.Locations ?? [];
 
-    // Build location ID → FullName map (preserves hierarchy via backslash path)
+    // ── Step 2b: Fetch WITHOUT aggregation (for labor types + rates) ────────
+    const fullData = await dtoolsFetch(
+      apiKey,
+      `/Subscribe/Projects?id=${encodeURIComponent(dtoolsProjectId)}`,
+    );
+    const fullProject = fullData?.Project ?? fullData;
+    const fullItems: any[] = fullProject?.Items ?? fullData?.Items ?? [];
+
+    // ── Step 3: Build labor rate map from TypeId=2 items ────────────────────
+    // TypeId=2 items carry: Model = labor type name, UnitCost = cost/hr, UnitPrice = price/hr
+    const laborRateMap = new Map<string, { costPerHour: number; pricePerHour: number }>();
+    for (const item of fullItems) {
+      if (item.TypeId != 2) continue;
+      const typeName = (item.Model || '').trim();
+      if (!typeName) continue;
+      const cost = num(item.UnitCost);
+      const price = num(item.UnitPrice);
+      // Only store if it has actual rates (skip unpopulated travel items)
+      if ((cost > 0 || price > 0) && !laborRateMap.has(typeName)) {
+        laborRateMap.set(typeName, { costPerHour: cost, pricePerHour: price });
+      }
+    }
+    console.log(`[dtools-lookup] Labor rate map: ${laborRateMap.size} types — ${Array.from(laborRateMap.entries()).map(([k, v]) => `${k}=$${v.costPerHour}/$${v.pricePerHour}`).join(', ')}`);
+
+    // ── Step 4: Build per-item labor lookup from non-aggregated items ──────
+    // Each non-aggregated item has its own ItemLaborTypes (labor type + hours breakdown).
+    // Key by Manufacturer||Model since Ids may differ between agg and non-agg fetches.
+    // If same product has different labor at different locations, we take the first occurrence
+    // (this is rare — most products have the same labor config everywhere).
+    const itemLaborByKey = new Map<string, any[]>();
+    for (const fi of fullItems) {
+      if (fi.TypeId != 1) continue;
+      const ilt = fi.ItemLaborTypes ?? [];
+      if (ilt.length > 0) {
+        const key = `${fi.Manufacturer}||${fi.Model}`;
+        if (!itemLaborByKey.has(key)) {
+          itemLaborByKey.set(key, ilt);
+        }
+      }
+    }
+    console.log(`[dtools-lookup] Products with ItemLaborTypes: ${itemLaborByKey.size}`);
+
+    // Default Install rate for items without specific labor type info
+    const installRate = laborRateMap.get('Install');
+
+    // ── Step 5: Build location map and enrich aggregated items ───────────────
     const locationMap = new Map<string, string>();
     for (const loc of locations) {
       locationMap.set(loc.Id, loc.FullName || loc.Name);
     }
-
-    // Enrich items with location names
-    for (const item of items) {
+    for (const item of aggItems) {
       if (item.LocationId && !item.LocationName) {
         item.LocationName = locationMap.get(item.LocationId) ?? item.LocationId;
       }
     }
 
-    // ── Step 3: Filter to products and group by manufacturer+model ───────────
-    const products = items.filter((i) => i.TypeId === 1);
-    console.log(`[dtools-lookup] Found ${items.length} total items, ${products.length} products`);
+    // ── Step 6: Process each item individually ──────────────────────────────
+    // Include products (1, 3, 4) and location-specific labor (2 with LocationId)
+    const billableItems = aggItems.filter((i: any) =>
+      i.TypeId == 1 || i.TypeId == 3 || i.TypeId == 4 ||
+      (i.TypeId == 2 && i.LocationId)
+    );
+    console.log(`[dtools-lookup] ${aggItems.length} total agg items, ${billableItems.length} billable`);
 
-    const grouped = new Map<string, {
-      manufacturer: string;
-      model: string;
-      description: string;
-      category: string;
-      qty: number;
-      notes: string;
-      locations: Map<string, number>;
-    }>();
+    const grouped = new Map<string, GroupedItem>();
+    let pathILT = 0, pathInstallRate = 0, pathNoLabor = 0, pathLabor = 0;
 
-    for (const item of products) {
-      const key = `${item.Manufacturer}||${item.Model}`;
-      const itemQty = item.TotalQuantity ?? item.Quantity ?? 1;
+    for (const item of billableItems) {
+      const isLabor = item.TypeId == 2;
+      const itemQty = num(item.Quantity) || 1;
       const locName = item.LocationName || '';
+
+      // Products: group by manufacturer+model+unitCost (same product, same price = merge)
+      // Labor: unique per type+location
+      const key = isLabor
+        ? `Labor||${item.Model || item.Description || 'Unknown'}||${locName}`
+        : `${item.Manufacturer}||${item.Model}||${num(item.UnitCost)}`;
+
+      let unitCost = 0;
+      let unitPrice = 0;
+      let laborHours = 0;
+      let laborUnitCost = 0;
+      let laborUnitPrice = 0;
+      let fixedLaborCost = 0;
+      let fixedLaborPrice = 0;
+      let itemType = 'Product';
+
+      if (isLabor) {
+        // TypeId=2 with location: standalone labor item
+        itemType = 'Labor';
+        laborHours = itemQty;
+        laborUnitCost = num(item.UnitCost);
+        laborUnitPrice = num(item.UnitPrice);
+        pathLabor++;
+      } else {
+        // Product — equipment pricing
+        unitCost = num(item.UnitCost);
+        unitPrice = num(item.UnitPrice);
+
+        // Compute labor: look up this product's ItemLaborTypes, then hours × rate
+        const iltKey = `${item.Manufacturer}||${item.Model}`;
+        const ilt = itemLaborByKey.get(iltKey) ?? [];
+        if (ilt.length > 0) {
+          let totalCost = 0, totalPrice = 0, totalHours = 0;
+          for (const lt of ilt) {
+            const typeName = (lt.Name || '').trim();
+            const hours = num(lt.Hours);
+            const rate = laborRateMap.get(typeName);
+            if (rate && hours > 0) {
+              totalCost += hours * rate.costPerHour;
+              totalPrice += hours * rate.pricePerHour;
+              totalHours += hours;
+            }
+          }
+          if (totalHours > 0) {
+            laborHours = totalHours;
+            laborUnitCost = totalCost / totalHours;
+            laborUnitPrice = totalPrice / totalHours;
+          }
+          pathILT++;
+        } else if (num(item.LaborHours) > 0 && installRate) {
+          laborHours = num(item.LaborHours);
+          laborUnitCost = installRate.costPerHour;
+          laborUnitPrice = installRate.pricePerHour;
+          pathInstallRate++;
+        } else {
+          pathNoLabor++;
+        }
+      }
+
+      const margin = num(item.Margin);
+      const ownerFurnished = item.IsOfe === true;
+      const isOptional = item.IsOptional === true;
+
       const existing = grouped.get(key);
 
       if (existing) {
@@ -189,11 +300,24 @@ serve(async (req) => {
           qty: itemQty,
           notes: item.Phase ? `Phase: ${item.Phase}` : '',
           locations: locs,
+          itemType,
+          unitCost,
+          unitPrice,
+          laborHours,
+          laborUnitCost,
+          laborUnitPrice,
+          fixedLaborCost,
+          fixedLaborPrice,
+          marginPct: margin > 0 && margin <= 1 ? margin * 100 : margin,
+          ownerFurnished,
+          optional: isOptional,
         });
       }
     }
 
-    // ── Step 4: Insert BoM items into project_bom_items ──────────────────────
+    console.log(`[dtools-lookup] Labor paths: ${pathILT} via ItemLaborTypes, ${pathInstallRate} via Install rate fallback, ${pathNoLabor} no labor, ${pathLabor} standalone labor items`);
+
+    // ── Step 7: Insert BoM items ─────────────────────────────────────────────
     const bomRows = Array.from(grouped.values()).map((g, idx) => ({
       project_id: projectId,
       manufacturer: g.manufacturer,
@@ -204,13 +328,22 @@ serve(async (req) => {
       notes: g.notes,
       locations: Array.from(g.locations.entries()).map(([room, qty]) => ({ room, qty })),
       sort_order: idx,
+      item_type: g.itemType,
+      unit_cost: g.unitCost,
+      unit_price: g.unitPrice,
+      labor_hours: g.laborHours,
+      labor_unit_cost: g.laborUnitCost,
+      labor_unit_price: g.laborUnitPrice,
+      fixed_labor_cost: g.fixedLaborCost,
+      fixed_labor_price: g.fixedLaborPrice,
+      margin_pct: g.marginPct,
+      owner_furnished: g.ownerFurnished,
+      optional: g.optional,
     }));
 
     if (bomRows.length > 0) {
-      // Clear any existing BoM items for this project before importing
       await supabase.from('project_bom_items').delete().eq('project_id', projectId);
 
-      // Insert in batches of 100
       for (let i = 0; i < bomRows.length; i += 100) {
         const batch = bomRows.slice(i, i + 100);
         const { error } = await supabase.from('project_bom_items').insert(batch);
@@ -220,20 +353,34 @@ serve(async (req) => {
       }
     }
 
-    // ── Step 5: Update project with DTools info ──────────────────────────────
-    await supabase.from('projects').update({
+    // ── Step 8: Update project status + value ──────────────────────────────
+    // DTools exposes the authoritative project total as `Price` on both list
+    // and detail endpoints. Format to match our stored `value` convention
+    // ("$XXXk" / "$X.XM" / etc.).
+    // Full precision with grouping + cents — matches dtools-import-project
+    // so a re-sync can't change the formatting style of an existing project.
+    const dtoolsPrice = num(fullProject?.Price ?? fullProject?.ProjectTotal ?? fullProject?.Total);
+    const formattedValue = dtoolsPrice > 0
+      ? '$' + dtoolsPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : '';
+
+    const projectUpdate: Record<string, any> = {
       dtools_project_id: dtoolsProjectId,
       dtools_bom_status: 'found',
       updated_at: new Date().toISOString(),
-    }).eq('id', projectId);
+    };
+    if (formattedValue) projectUpdate.value = formattedValue;
 
-    console.log(`[dtools-lookup] Imported ${bomRows.length} BoM items for project ${projectId}`);
+    await supabase.from('projects').update(projectUpdate).eq('id', projectId);
+
+    console.log(`[dtools-lookup] Imported ${bomRows.length} line items for project ${projectId}${formattedValue ? ` (value=${formattedValue})` : ''}`);
 
     return new Response(JSON.stringify({
       status: 'found',
       dtoolsProjectId,
       dtoolsProjectName: match.Name,
       itemsImported: bomRows.length,
+      value: formattedValue,
     }), {
       headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
     });

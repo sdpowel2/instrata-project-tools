@@ -842,27 +842,45 @@ export const useStore = create<AppState>((set, get) => ({
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      // Refresh project and BoM from Supabase
-      const [projRes, bomRes] = await Promise.all([
-        supabase.from('projects').select('*').eq('id', projectId).single(),
-        supabase.from('project_bom_items').select('*').eq('project_id', projectId),
+      // Server succeeded — flip the button out of "Syncing…" immediately so
+      // a slow post-refresh query can't leave the UI stuck on loading.
+      set((s) => ({
+        projects: s.projects.map((p) => p.id === projectId ? { ...p, dtoolsBomStatus: 'found' as const } : p),
+      }));
+
+      // Refresh project + BoM from Supabase, but race against a 15s timeout so
+      // a hung query (rare, but we've seen session-level timeouts) doesn't
+      // block anything else. If it does time out the data on screen is stale
+      // but accurate after a page reload.
+      const refreshWithTimeout = Promise.race([
+        Promise.all([
+          supabase.from('projects').select('*').eq('id', projectId).single(),
+          supabase.from('project_bom_items').select('*').eq('project_id', projectId),
+        ]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('post-sync refresh timed out')), 15000),
+        ),
       ]);
 
-      if (projRes.data) {
-        const updated = rowToProject(projRes.data);
-        set((s) => ({
-          projects: s.projects.map((p) => p.id === projectId ? updated : p),
-        }));
-      }
-
-      if (bomRes.data) {
-        const newBom = bomRes.data.map(rowToBoMItem);
-        set((s) => ({
-          projectBoM: [
-            ...s.projectBoM.filter((b) => b.projectId !== projectId),
-            ...newBom,
-          ],
-        }));
+      try {
+        const [projRes, bomRes] = await refreshWithTimeout;
+        if (projRes.data) {
+          const updated = rowToProject(projRes.data);
+          set((s) => ({
+            projects: s.projects.map((p) => p.id === projectId ? updated : p),
+          }));
+        }
+        if (bomRes.data) {
+          const newBom = bomRes.data.map(rowToBoMItem);
+          set((s) => ({
+            projectBoM: [
+              ...s.projectBoM.filter((b) => b.projectId !== projectId),
+              ...newBom,
+            ],
+          }));
+        }
+      } catch (refreshErr) {
+        console.warn('[DTools sync] refresh after import failed — reload the page to see updated BoM:', refreshErr);
       }
     } catch (err) {
       console.error('[DTools sync failed]', err);

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   FileText, MessageSquareWarning, ClipboardCheck, BookOpen,
   Upload, Plus, Package, RefreshCw, Loader2, Check,
-  ScanLine, Scale, ChevronRight, Users,
+  ScanLine, Scale, ChevronRight, Users, ChevronDown,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { Modal } from '../components/Modal';
@@ -415,18 +415,89 @@ function ToolGroupCard({ phase, description, items, onOpen }: {
 // =============================================================================
 
 interface ProjectQuoteSectionProps {
-  project: { id: string; dtoolsBomStatus: string; dtoolsProjectId?: string; updatedAt: string };
-  bomItems: { id: string; qty: number; manufacturer: string; model: string; description: string; unitPrice: number }[];
+  project: { id: string; dtoolsBomStatus: string; dtoolsProjectId?: string; updatedAt: string; value?: string };
+  bomItems: {
+    id: string; qty: number; manufacturer: string; model: string; description: string;
+    unitPrice: number; locations: SubmittalItemLocation[];
+  }[];
   onSync: () => void;
   onCsvImport: () => void;
   onAddItem: () => void;
 }
 
+// Hierarchical DTools locations look like "1st Floor\(Typical of 1) Council Chamber - (1607)".
+// We split on backslash to get the path segments, in order from root → leaf.
+function locationPath(room: string): string[] {
+  return room.split('\\').map((s) => s.trim()).filter(Boolean);
+}
+
+// Build a nested tree of locations → items, used by the BoM section to render
+// a collapsible "Floor > Room > …" view. Items without a location land under
+// a synthetic "Unassigned" branch so labor/misc lines aren't dropped.
+interface LocationNode {
+  name: string;
+  fullPath: string; // unique key for expand/collapse state
+  children: Map<string, LocationNode>;
+  // Items physically present at THIS node (qty for this location).
+  items: { item: BoMRow; qty: number }[];
+}
+
+interface BoMRow {
+  id: string; qty: number; manufacturer: string; model: string;
+  description: string; unitPrice: number; locations: SubmittalItemLocation[];
+}
+
+function buildLocationTree(bomItems: BoMRow[]): LocationNode {
+  const root: LocationNode = { name: '', fullPath: '', children: new Map(), items: [] };
+
+  const ensureNode = (path: string[]): LocationNode => {
+    let node = root;
+    let cumulative = '';
+    for (const seg of path) {
+      cumulative = cumulative ? `${cumulative} / ${seg}` : seg;
+      if (!node.children.has(seg)) {
+        node.children.set(seg, { name: seg, fullPath: cumulative, children: new Map(), items: [] });
+      }
+      node = node.children.get(seg)!;
+    }
+    return node;
+  };
+
+  for (const item of bomItems) {
+    if (item.locations.length === 0) {
+      const unassigned = ensureNode(['Unassigned']);
+      unassigned.items.push({ item, qty: item.qty });
+      continue;
+    }
+    for (const loc of item.locations) {
+      const segs = locationPath(loc.room);
+      if (segs.length === 0) {
+        const unassigned = ensureNode(['Unassigned']);
+        unassigned.items.push({ item, qty: loc.qty });
+      } else {
+        ensureNode(segs).items.push({ item, qty: loc.qty });
+      }
+    }
+  }
+
+  return root;
+}
+
+// Total qty of items under a node (recursive). Used in branch headers so
+// users can see how much sits in each location at a glance.
+function countNode(node: LocationNode): number {
+  let count = node.items.reduce((s, x) => s + x.qty, 0);
+  for (const child of node.children.values()) count += countNode(child);
+  return count;
+}
+
 function ProjectQuoteSection({ project, bomItems, onSync, onCsvImport, onAddItem }: ProjectQuoteSectionProps) {
   const syncing = project.dtoolsBomStatus === 'loading';
   const synced = project.dtoolsBomStatus === 'found';
-  const total = bomItems.reduce((s, r) => s + (r.qty * (r.unitPrice || 0)), 0);
-  const fmt = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
+  // Header badge shows the canonical DTools value only — equipment-level
+  // pricing is intentionally hidden in this view (the user manages pricing
+  // in DTools, not here).
+  const totalDisplay = project.value && project.value.trim() ? project.value : null;
 
   return (
     <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
@@ -450,10 +521,10 @@ function ProjectQuoteSection({ project, bomItems, onSync, onCsvImport, onAddItem
           </div>
         </div>
         <div className="flex items-center gap-2.5">
-          {bomItems.length > 0 && (
+          {bomItems.length > 0 && totalDisplay && (
             <div className="text-right pr-1.5">
-              <div className="text-[10px] font-bold text-fg-2 tracking-[0.1em] uppercase">Quote Total</div>
-              <div className="text-xl font-bold text-navy font-mono">{fmt(total)}</div>
+              <div className="text-[10px] font-bold text-fg-2 tracking-[0.1em] uppercase">DTools Project Total</div>
+              <div className="text-xl font-bold text-navy font-mono">{totalDisplay}</div>
             </div>
           )}
           <button onClick={onCsvImport} className="btn-secondary text-sm">
@@ -491,40 +562,173 @@ function ProjectQuoteSection({ project, bomItems, onSync, onCsvImport, onAddItem
         </div>
       ) : (
         <div>
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-navy text-white text-left">
-                <th className="px-5.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.05em]" style={{ paddingLeft: 22, paddingRight: 22, width: 60 }}>Qty</th>
-                <th className="px-5.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.05em]" style={{ paddingLeft: 22, paddingRight: 22, width: 170 }}>Part #</th>
-                <th className="px-5.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.05em]" style={{ paddingLeft: 22, paddingRight: 22, width: 140 }}>Manufacturer</th>
-                <th className="px-5.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.05em]" style={{ paddingLeft: 22, paddingRight: 22 }}>Description</th>
-                <th className="px-5.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-right" style={{ paddingLeft: 22, paddingRight: 22, width: 110 }}>Unit</th>
-                <th className="px-5.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-right" style={{ paddingLeft: 22, paddingRight: 22, width: 120 }}>Extended</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bomItems.map((r, i) => (
-                <tr key={r.id} style={{ background: i % 2 === 1 ? 'rgba(245,246,248,0.3)' : '#fff' }}>
-                  <td className="px-5.5 py-3 text-[13px] font-semibold font-mono border-t border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{r.qty}</td>
-                  <td className="px-5.5 py-3 text-[13px] font-mono border-t border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{r.model}</td>
-                  <td className="px-5.5 py-3 text-[13px] text-fg-2 border-t border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{r.manufacturer}</td>
-                  <td className="px-5.5 py-3 text-[13px] border-t border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{r.description}</td>
-                  <td className="px-5.5 py-3 text-[13px] font-mono text-fg-2 text-right border-t border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{fmt(r.unitPrice || 0)}</td>
-                  <td className="px-5.5 py-3 text-[13px] font-mono font-semibold text-right border-t border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{fmt(r.qty * (r.unitPrice || 0))}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr style={{ background: 'rgba(34,50,110,0.03)' }}>
-                <td colSpan={5} className="px-5.5 py-3 text-right text-[13px] font-semibold border-t-2 border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>Total</td>
-                <td className="px-5.5 py-3 text-right font-mono font-bold text-base text-navy border-t-2 border-border" style={{ paddingLeft: 22, paddingRight: 22 }}>{fmt(total)}</td>
-              </tr>
-            </tfoot>
-          </table>
+          <BoMLocationTree bomItems={bomItems} />
+          {project.value && (
+            <div className="px-5.5 py-3 border-t-2 border-border bg-navy/[0.03] flex items-center justify-end gap-3 text-[13px]" style={{ paddingLeft: 22, paddingRight: 22 }}>
+              <span className="font-semibold text-fg-2">DTools Project Total</span>
+              <span className="font-mono font-bold text-navy text-base">{project.value}</span>
+            </div>
+          )}
           <div className="px-5.5 py-2.5 border-t border-border text-xs text-fg-2" style={{ paddingLeft: 22, paddingRight: 22 }}>
             {bomItems.length} line items{synced ? ' · pulled from DTools' : ''}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// BoMLocationTree — collapsible Floor → Room → … hierarchy of BoM items
+// =============================================================================
+
+function BoMLocationTree({ bomItems }: { bomItems: BoMRow[] }) {
+  const tree = useMemo(() => buildLocationTree(bomItems), [bomItems]);
+
+  // Default state: only the top-level branches are expanded. Big projects
+  // collapse rooms by default so the page is scannable.
+  const initialExpanded = useMemo(() => {
+    const set = new Set<string>();
+    for (const top of tree.children.values()) set.add(top.fullPath);
+    return set;
+  }, [tree]);
+  const [expanded, setExpanded] = useState<Set<string>>(initialExpanded);
+
+  const toggle = (path: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const allPaths = useMemo(() => {
+    const out: string[] = [];
+    const walk = (n: LocationNode) => {
+      if (n.fullPath) out.push(n.fullPath);
+      for (const c of n.children.values()) walk(c);
+    };
+    walk(tree);
+    return out;
+  }, [tree]);
+
+  const allExpanded = expanded.size === allPaths.length;
+
+  return (
+    <div>
+      <div className="px-5.5 py-2.5 border-b border-border bg-surface/40 flex items-center justify-between text-xs" style={{ paddingLeft: 22, paddingRight: 22 }}>
+        <div className="text-fg-2">
+          {bomItems.length} line item{bomItems.length === 1 ? '' : 's'} across {tree.children.size} location{tree.children.size === 1 ? '' : 's'}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setExpanded(new Set(allPaths))}
+            disabled={allExpanded}
+            className="text-navy font-medium hover:underline disabled:opacity-40 disabled:no-underline"
+          >
+            Expand all
+          </button>
+          <span className="text-fg-3">·</span>
+          <button
+            onClick={() => setExpanded(new Set())}
+            disabled={expanded.size === 0}
+            className="text-navy font-medium hover:underline disabled:opacity-40 disabled:no-underline"
+          >
+            Collapse all
+          </button>
+        </div>
+      </div>
+      <div>
+        {Array.from(tree.children.values())
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((node) => (
+            <LocationBranch
+              key={node.fullPath}
+              node={node}
+              depth={0}
+              expanded={expanded}
+              onToggle={toggle}
+            />
+          ))}
+      </div>
+    </div>
+  );
+}
+
+interface LocationBranchProps {
+  node: LocationNode;
+  depth: number;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
+}
+
+function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps) {
+  const isOpen = expanded.has(node.fullPath);
+  const childCount = node.children.size;
+  const itemCount = countNode(node);
+  // Indent each level by ~20px so deep hierarchies stay scannable.
+  const indent = 22 + depth * 20;
+
+  return (
+    <div className="border-t border-border first:border-t-0">
+      <button
+        onClick={() => onToggle(node.fullPath)}
+        className="w-full flex items-center gap-2.5 py-2.5 text-left hover:bg-surface/50 transition-colors"
+        style={{ paddingLeft: indent, paddingRight: 22 }}
+      >
+        <span className="text-fg-2 flex-shrink-0">
+          {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+        <span className="text-[13px] font-semibold text-navy flex-1 min-w-0 truncate">
+          {node.name}
+        </span>
+        <span className="text-[11px] text-fg-2 flex items-center gap-3 flex-shrink-0">
+          {childCount > 0 && <span>{childCount} sub-location{childCount === 1 ? '' : 's'}</span>}
+          <span>{itemCount} item{itemCount === 1 ? '' : 's'}</span>
+        </span>
+      </button>
+
+      {isOpen && (
+        <>
+          {/* Items physically present at THIS node (not in deeper sub-locations) */}
+          {node.items.length > 0 && (
+            <div className="bg-white">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-navy/[0.04] text-fg-2 text-left">
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em]" style={{ paddingLeft: indent + 24, paddingRight: 22, width: 50 }}>Qty</th>
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5" style={{ width: 170 }}>Part #</th>
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5" style={{ width: 140 }}>Manufacturer</th>
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {node.items.map(({ item, qty }, i) => (
+                    <tr key={`${item.id}-${i}`} className="border-t border-border-soft">
+                      <td className="py-2 text-[13px] font-semibold font-mono align-top" style={{ paddingLeft: indent + 24, paddingRight: 22 }}>{qty}</td>
+                      <td className="py-2 text-[13px] font-mono align-top pr-5">{item.model}</td>
+                      <td className="py-2 text-[13px] text-fg-2 align-top pr-5">{item.manufacturer}</td>
+                      <td className="py-2 text-[13px] align-top pr-5">{item.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {/* Sub-locations below */}
+          {Array.from(node.children.values())
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((child) => (
+              <LocationBranch
+                key={child.fullPath}
+                node={child}
+                depth={depth + 1}
+                expanded={expanded}
+                onToggle={onToggle}
+              />
+            ))}
+        </>
       )}
     </div>
   );
