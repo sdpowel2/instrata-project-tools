@@ -229,6 +229,10 @@ export interface SubmittalItem {
   cutSheetPath?: string;
   cutSheetData?: string;
   cutSheetName?: string;
+  /** Link to cutsheet_repository.id when the cutsheet was auto-attached from
+   *  the SharePoint repository. Mutually exclusive in practice with
+   *  cutSheetData (which represents an explicit user upload). */
+  cutsheetRepositoryId?: string;
   locations: SubmittalItemLocation[];
   notes: string;
   sortOrder: number;

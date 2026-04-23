@@ -154,6 +154,7 @@ function rowToSubmittalItem(r: any): SubmittalItem {
     id: r.id, submittalId: r.submittal_id, manufacturer: r.manufacturer, model: r.model,
     description: r.description, category: r.category, qty: r.qty,
     cutSheetData: r.cut_sheet_url ?? undefined, cutSheetName: r.cut_sheet_name ?? undefined,
+    cutsheetRepositoryId: r.cutsheet_repository_id ?? undefined,
     locations: r.locations ?? [], notes: r.notes ?? '', sortOrder: r.sort_order ?? 0,
   };
 }
@@ -168,6 +169,7 @@ function submittalItemToRow(item: Partial<SubmittalItem>): Record<string, any> {
   if (item.qty !== undefined) row.qty = item.qty;
   if (item.cutSheetData !== undefined) row.cut_sheet_url = item.cutSheetData;
   if (item.cutSheetName !== undefined) row.cut_sheet_name = item.cutSheetName;
+  if (item.cutsheetRepositoryId !== undefined) row.cutsheet_repository_id = item.cutsheetRepositoryId;
   if (item.locations !== undefined) row.locations = item.locations;
   if (item.notes !== undefined) row.notes = item.notes;
   if (item.sortOrder !== undefined) row.sort_order = item.sortOrder;
@@ -565,6 +567,11 @@ interface AppState {
   deleteSubmittalItem: (submittalId: string, itemId: string) => void;
   reorderSubmittalItems: (submittalId: string, itemIds: string[]) => void;
   populateSubmittalFromBoM: (submittalId: string, projectId: string) => void;
+  /** Look up each item's manufacturer + model in the SharePoint cutsheet
+   *  repository and attach the matching repo cutsheet ID. Safe to call
+   *  multiple times — only updates items that don't already have a cutsheet
+   *  attached. */
+  attachRepoCutsheetsToSubmittal: (submittalId: string) => Promise<{ attached: number; checked: number }>;
 
   // RFI actions
   addRFI: (r: Omit<RFI, 'id' | 'number' | 'createdAt' | 'attachments'>) => string;
@@ -1072,6 +1079,56 @@ export const useStore = create<AppState>((set, get) => ({
         return supabase.from('submittal_items').insert(newItems.map(submittalItemToRow));
       });
     }
+
+    // Fire-and-forget: try to auto-attach cutsheets from the SharePoint
+    // repository in the background. Failures (function not deployed, no
+    // matches, network issue) are non-fatal — submittal still populates.
+    if (isSupabaseConfigured()) {
+      void (async () => {
+        try { await get().attachRepoCutsheetsToSubmittal(submittalId); }
+        catch (err) { console.warn('[populateSubmittalFromBoM] auto-attach failed (non-fatal):', err); }
+      })();
+    }
+  },
+
+  attachRepoCutsheetsToSubmittal: async (submittalId) => {
+    const submittal = get().submittals.find((s) => s.id === submittalId);
+    if (!submittal) return { attached: 0, checked: 0 };
+
+    // Only check items that don't already have a cutsheet (uploaded or repo).
+    const candidates = submittal.items.filter((it) => !it.cutSheetData && !it.cutsheetRepositoryId);
+    if (candidates.length === 0) return { attached: 0, checked: 0 };
+
+    const pairs = candidates.map((it) => ({ manufacturer: it.manufacturer, model: it.model }));
+    const { data, error } = await supabase.functions.invoke<{
+      matches: Record<string, { id: string; sharepoint_path: string }>;
+    }>('sharepoint-cutsheet', { body: { op: 'lookupBatch', pairs } });
+
+    if (error) throw error;
+    const matches = data?.matches ?? {};
+
+    let attached = 0;
+    for (const item of candidates) {
+      const key = `${item.manufacturer.trim().toLowerCase()}|||${item.model.trim().toLowerCase()}`;
+      const hit = matches[key];
+      if (!hit) continue;
+      // Update both store and DB. cutSheetName carries the SharePoint path
+      // for display; cutsheetRepositoryId is the durable link.
+      const path = hit.sharepoint_path.split('/').pop() ?? hit.sharepoint_path;
+      set((s) => ({
+        submittals: s.submittals.map((sb) => sb.id === submittalId ? {
+          ...sb,
+          items: sb.items.map((it) => it.id === item.id
+            ? { ...it, cutsheetRepositoryId: hit.id, cutSheetName: path }
+            : it),
+        } : sb),
+      }));
+      dbExec(() => supabase.from('submittal_items')
+        .update(submittalItemToRow({ cutsheetRepositoryId: hit.id, cutSheetName: path }))
+        .eq('id', item.id));
+      attached++;
+    }
+    return { attached, checked: candidates.length };
   },
 
   // =========================================================================

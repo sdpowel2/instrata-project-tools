@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
@@ -280,7 +280,24 @@ export function SubmittalDetail() {
                   <td className="px-4 py-3"><span className="text-xs font-medium px-2 py-0.5 rounded bg-surface text-text-secondary">{item.category}</span></td>
                   <td className="px-4 py-3 text-sm text-text-primary text-center font-medium">{item.qty}</td>
                   <td className="px-4 py-3">
-                    {item.cutSheetPath ? (
+                    {item.cutsheetRepositoryId ? (
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full flex items-center gap-1 max-w-[140px]"
+                          title="Auto-attached from SharePoint cutsheet repository"
+                        >
+                          <FolderCheck size={10} className="shrink-0" />
+                          <span className="truncate">{item.cutSheetName || 'Repository'}</span>
+                        </span>
+                        <button
+                          onClick={() => updateItem(submittalId!, item.id, { cutsheetRepositoryId: undefined, cutSheetName: undefined })}
+                          className="p-0.5 rounded hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors"
+                          title="Detach repository cutsheet"
+                        >
+                          <XIcon size={12} />
+                        </button>
+                      </div>
+                    ) : item.cutSheetPath ? (
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1 max-w-[120px]">
                           <Check size={10} className="shrink-0" />
