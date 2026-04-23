@@ -9,6 +9,7 @@ import type {
   BidLevelingSession, BidLevelingMappingTemplate,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { isExcludedFromSubmittal } from '../utils/submittalExclusions';
 import {
   parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
 } from '../utils/reviewEngine';
@@ -1024,7 +1025,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   populateSubmittalFromBoM: (submittalId, projectId) => {
-    const bomItems = get().projectBoM.filter((b) => b.projectId === projectId);
+    // Filter out items the submittal flow always excludes (labor + house
+    // manufacturers — see utils/submittalExclusions.ts). The SubmittalDetail
+    // page surfaces the excluded list separately so users can opt anything
+    // back in case-by-case.
+    const bomItems = get().projectBoM
+      .filter((b) => b.projectId === projectId)
+      .filter((b) => !isExcludedFromSubmittal(b));
     const map = new Map<string, { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; notes: string; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string }>();
     for (const item of bomItems) {
       const key = `${item.manufacturer.toLowerCase()}|||${item.model.toLowerCase()}`;

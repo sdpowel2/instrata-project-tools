@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2 } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
@@ -8,6 +8,7 @@ import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal'
 import { exportSubmittalPDF } from '../utils/exportSubmittalPDF';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
+import { listExcludedForSubmittal } from '../utils/submittalExclusions';
 import type { ItemCategory, SubmittalStatus } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
@@ -31,6 +32,7 @@ export function SubmittalDetail() {
     manufacturer: '', model: '', description: '', category: 'Display' as ItemCategory,
     qty: 1, notes: '', sortOrder: 0,
   });
+  const [excludedExpanded, setExcludedExpanded] = useState(false);
 
   if (!submittal) return <div className="p-8 text-text-secondary">Submittal not found.</div>;
 
@@ -103,6 +105,23 @@ export function SubmittalDetail() {
   };
 
   const sortedItems = [...submittal.items].sort((a, b) => a.sortOrder - b.sortOrder);
+  // BoM rows the auto-populate filtered out (labor + house manufacturers)
+  // that aren't already in the submittal. Recomputes whenever items change,
+  // so adding one back removes it from this list automatically.
+  const excludedRows = listExcludedForSubmittal(bomItems, submittal.items);
+
+  const handleAddExcluded = (row: typeof excludedRows[number]) => {
+    addItem(submittalId!, {
+      manufacturer: row.manufacturer,
+      model: row.model,
+      description: row.description,
+      category: 'Other',
+      qty: row.qty,
+      notes: '',
+      locations: [],
+      sortOrder: submittal.items.length,
+    });
+  };
 
   return (
     <div className="p-8 max-w-[1200px]">
@@ -161,6 +180,63 @@ export function SubmittalDetail() {
           <button onClick={() => setShowAddItem(true)} className="btn-secondary text-sm"><Plus size={14} /> Add Line Item</button>
         </div>
       </div>
+
+      {/* Excluded-from-import banner */}
+      {excludedRows.length > 0 && (
+        <div className="bg-white rounded-xl border border-border shadow-sm mb-6 overflow-hidden">
+          <button
+            onClick={() => setExcludedExpanded((v) => !v)}
+            className="w-full flex items-center gap-3 px-5 py-3 hover:bg-surface/50 transition-colors text-left"
+          >
+            <Filter size={16} className="text-orange flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-navy">
+                {excludedRows.length} item{excludedRows.length === 1 ? '' : 's'} excluded from import
+              </div>
+              <div className="text-xs text-fg-2 mt-0.5">
+                Labor entries and house manufacturers (Instrata, Premiere, Cable Solutions, Net100, Kane) are excluded by default.
+              </div>
+            </div>
+            {excludedExpanded ? <ChevronDown size={16} className="text-fg-2" /> : <ChevronRight size={16} className="text-fg-2" />}
+          </button>
+          {excludedExpanded && (
+            <div className="border-t border-border">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-surface/60 text-fg-2 text-left text-[11px]">
+                    <th className="px-5 py-2 font-semibold uppercase tracking-[0.05em]">Manufacturer</th>
+                    <th className="px-5 py-2 font-semibold uppercase tracking-[0.05em]">Model</th>
+                    <th className="px-5 py-2 font-semibold uppercase tracking-[0.05em]">Description</th>
+                    <th className="px-5 py-2 font-semibold uppercase tracking-[0.05em] text-center" style={{ width: 60 }}>Qty</th>
+                    <th className="px-5 py-2 font-semibold uppercase tracking-[0.05em]" style={{ width: 200 }}>Reason</th>
+                    <th className="px-5 py-2" style={{ width: 130 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {excludedRows.map((row) => (
+                    <tr key={row.bomItemId} className="border-t border-border-soft">
+                      <td className="px-5 py-2.5 text-[13px] text-fg-2">{row.manufacturer}</td>
+                      <td className="px-5 py-2.5 text-[13px] font-mono">{row.model}</td>
+                      <td className="px-5 py-2.5 text-[13px]">{row.description}</td>
+                      <td className="px-5 py-2.5 text-[13px] font-mono font-semibold text-center">{row.qty}</td>
+                      <td className="px-5 py-2.5 text-[12px] text-fg-2 italic">{row.reason}</td>
+                      <td className="px-5 py-2.5">
+                        <button
+                          onClick={() => handleAddExcluded(row)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border text-navy hover:bg-surface transition-colors"
+                          title="Add this item to the submittal anyway"
+                        >
+                          <Plus size={12} /> Add to submittal
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Line items table */}
       {sortedItems.length === 0 ? (
