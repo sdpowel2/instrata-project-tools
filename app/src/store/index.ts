@@ -155,6 +155,7 @@ function rowToSubmittalItem(r: any): SubmittalItem {
     description: r.description, category: r.category, qty: r.qty,
     cutSheetData: r.cut_sheet_url ?? undefined, cutSheetName: r.cut_sheet_name ?? undefined,
     cutsheetRepositoryId: r.cutsheet_repository_id ?? undefined,
+    cutsheetStagingId: r.cutsheet_staging_id ?? undefined,
     locations: r.locations ?? [], notes: r.notes ?? '', sortOrder: r.sort_order ?? 0,
   };
 }
@@ -170,6 +171,7 @@ function submittalItemToRow(item: Partial<SubmittalItem>): Record<string, any> {
   if (item.cutSheetData !== undefined) row.cut_sheet_url = item.cutSheetData;
   if (item.cutSheetName !== undefined) row.cut_sheet_name = item.cutSheetName;
   if (item.cutsheetRepositoryId !== undefined) row.cutsheet_repository_id = item.cutsheetRepositoryId;
+  if (item.cutsheetStagingId !== undefined) row.cutsheet_staging_id = item.cutsheetStagingId;
   if (item.locations !== undefined) row.locations = item.locations;
   if (item.notes !== undefined) row.notes = item.notes;
   if (item.sortOrder !== undefined) row.sort_order = item.sortOrder;

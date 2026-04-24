@@ -251,6 +251,137 @@ async function getDownloadUrlFor(itemId: string): Promise<string> {
   return url;
 }
 
+interface UploadStagingInput {
+  /** PDF bytes encoded as base64 (no data: prefix). Capped at ~5MB by the
+   *  Supabase function body limit. */
+  fileBase64: string;
+  filename: string;
+  manufacturer: string;
+  model: string;
+  /** Internal project id (uuid as text). Stored on the staging row for
+   *  later traceability. */
+  projectId?: string;
+  /** Where the upload originated — submittal_builder, etc. */
+  sourceContext?: string;
+  /** Auth uid of the uploader. Required for RLS on the staging insert. */
+  uploadedByUserId?: string;
+}
+
+interface UploadStagingResult {
+  /** When set, the file already exists in the approved repository — caller
+   *  should use this instead of treating the upload as new. */
+  matched?: { repositoryId: string; sharepointPath: string };
+  /** When set, the file was uploaded to /Staging/ and a pending row was
+   *  created. Caller should attach the staging id to the submittal item. */
+  staged?: {
+    stagingId: string;
+    sharepointItemId: string;
+    sharepointPath: string;
+  };
+}
+
+/**
+ * Receive a PDF, deduplicate against the approved repository, otherwise
+ * upload to SharePoint /Staging/ and write a pending cutsheet_staging row.
+ * Returns either a matched-repository pointer or a staged-record pointer.
+ */
+async function uploadStaging(
+  input: UploadStagingInput,
+  supabase: ReturnType<typeof createClient>,
+): Promise<UploadStagingResult> {
+  if (!STAGING_FOLDER_ID) {
+    throw new Error('SHAREPOINT_STAGING_FOLDER_ID env var not set');
+  }
+  if (!input.fileBase64 || !input.filename) {
+    throw new Error('fileBase64 and filename required');
+  }
+  const mfr = input.manufacturer.trim();
+  const model = input.model.trim();
+
+  // 1. Dedupe against the approved repository first. If the cutsheet
+  //    already exists, skip the upload and tell the caller to attach the
+  //    repo record instead.
+  if (mfr && model) {
+    const { data: existing } = await supabase
+      .from('cutsheet_repository')
+      .select('id, sharepoint_path')
+      .ilike('manufacturer', mfr)
+      .ilike('model_number', model)
+      .maybeSingle();
+    if (existing) {
+      return { matched: { repositoryId: existing.id, sharepointPath: existing.sharepoint_path } };
+    }
+  }
+
+  // 2. Upload PDF to SharePoint /Staging/. Filename collisions inside
+  //    Staging are tolerated by Graph (it'll return a 409 conflict). To
+  //    avoid that, prefix with a short timestamp so two users uploading
+  //    "datasheet.pdf" don't collide.
+  const safeName = input.filename.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120);
+  const uniquePrefix = Date.now().toString(36);
+  const stagedFilename = `${uniquePrefix}_${safeName}`;
+
+  // Decode base64 → bytes for the upload body
+  const binary = Uint8Array.from(atob(input.fileBase64), (c) => c.charCodeAt(0));
+
+  const uploadRes = await graphFetch(
+    `/drives/${DRIVE_ID}/items/${STAGING_FOLDER_ID}:/${encodeURIComponent(stagedFilename)}:/content`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/pdf' },
+      body: binary,
+    },
+  );
+  const uploadText = await uploadRes.text();
+  if (!uploadRes.ok) {
+    throw new Error(`SharePoint upload failed (${uploadRes.status}): ${uploadText.slice(0, 500)}`);
+  }
+  const uploaded = JSON.parse(uploadText) as {
+    id: string;
+    name: string;
+    size?: number;
+    parentReference?: { path?: string };
+  };
+
+  const sharepointPath = `${uploaded.parentReference?.path ?? ''}/${uploaded.name}`
+    .replace(/^\/drives\/[^/]+\/root:/, '');
+
+  // 3. Write the staging row.
+  const { data: stagingRow, error } = await supabase
+    .from('cutsheet_staging')
+    .insert({
+      manufacturer: mfr || null,
+      model_number: model || null,
+      sharepoint_item_id: uploaded.id,
+      sharepoint_path: sharepointPath,
+      file_size_bytes: uploaded.size ?? binary.byteLength,
+      original_filename: input.filename,
+      uploaded_by_user_id: input.uploadedByUserId ?? null,
+      source_project_id: input.projectId ?? null,
+      source_context: input.sourceContext ?? 'submittal_builder',
+      status: 'pending',
+    })
+    .select('id')
+    .single();
+  if (error || !stagingRow) {
+    // Roll back the SharePoint upload so we don't leak orphan files.
+    try {
+      await graphFetch(`/drives/${DRIVE_ID}/items/${uploaded.id}`, { method: 'DELETE' });
+    } catch (cleanupErr) {
+      console.error('[uploadStaging] failed to roll back SharePoint upload:', cleanupErr);
+    }
+    throw new Error(`Staging row insert failed: ${error?.message ?? 'unknown'}`);
+  }
+
+  return {
+    staged: {
+      stagingId: stagingRow.id,
+      sharepointItemId: uploaded.id,
+      sharepointPath,
+    },
+  };
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -291,6 +422,9 @@ serve(async (req) => {
         }
         const url = await getDownloadUrlFor(String(body.sharepointItemId));
         return jsonResponse({ downloadUrl: url });
+      }
+      case 'uploadStaging': {
+        return jsonResponse(await uploadStaging(body, supabase));
       }
       default:
         return jsonResponse({ error: `Unknown op: ${op}` }, 400);

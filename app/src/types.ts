@@ -233,6 +233,10 @@ export interface SubmittalItem {
    *  the SharePoint repository. Mutually exclusive in practice with
    *  cutSheetData (which represents an explicit user upload). */
   cutsheetRepositoryId?: string;
+  /** Link to cutsheet_staging.id when the user uploaded a cutsheet that
+   *  isn't in the repository yet — the file lives in SharePoint /Staging/
+   *  awaiting admin approval. Becomes cutsheetRepositoryId once approved. */
+  cutsheetStagingId?: string;
   locations: SubmittalItemLocation[];
   notes: string;
   sortOrder: number;

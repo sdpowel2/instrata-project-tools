@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck, Clock } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
 import { exportSubmittalPDF } from '../utils/exportSubmittalPDF';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import { listExcludedForSubmittal } from '../utils/submittalExclusions';
 import type { ItemCategory, SubmittalStatus } from '../types';
@@ -33,6 +33,7 @@ export function SubmittalDetail() {
     qty: 1, notes: '', sortOrder: 0,
   });
   const [excludedExpanded, setExcludedExpanded] = useState(false);
+  const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
 
   if (!submittal) return <div className="p-8 text-text-secondary">Submittal not found.</div>;
 
@@ -87,20 +88,69 @@ export function SubmittalDetail() {
     });
   };
 
-  const handleCutSheetUpload = (itemId: string, file: File) => {
-    if (isSupabaseConfigured()) {
-      // Upload to Supabase Storage
-      uploadFile('cutsheets', projectId!, file).then((url) => {
-        updateItem(submittalId!, itemId, { cutSheetPath: file.name, cutSheetData: url });
-      }).catch((err) => console.error('Cutsheet upload failed:', err));
-    } else {
-      // Fallback: base64 for demo mode
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const base64 = (e.target?.result as string).split(',')[1];
+  const handleCutSheetUpload = async (itemId: string, file: File) => {
+    const item = submittal.items.find((i) => i.id === itemId);
+    if (!item) return;
+    setUploadingItemId(itemId);
+    try {
+      // Read the file as base64 (no data: prefix) for the edge function body.
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const result = (e.target?.result as string) ?? '';
+          const stripped = result.split(',')[1] ?? '';
+          resolve(stripped);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+
+      if (isSupabaseConfigured()) {
+        // Route through SharePoint staging. The edge function dedupes
+        // against the approved repository first — if a match exists,
+        // we attach that instead of staging a duplicate.
+        const { data: { user } } = await supabase.auth.getUser();
+        const { data, error } = await supabase.functions.invoke<{
+          matched?: { repositoryId: string; sharepointPath: string };
+          staged?: { stagingId: string; sharepointPath: string };
+        }>('sharepoint-cutsheet', {
+          body: {
+            op: 'uploadStaging',
+            fileBase64: base64,
+            filename: file.name,
+            manufacturer: item.manufacturer,
+            model: item.model,
+            projectId: projectId,
+            sourceContext: 'submittal_builder',
+            uploadedByUserId: user?.id ?? null,
+          },
+        });
+        if (error) throw error;
+
+        if (data?.matched) {
+          // Already in the approved repo — attach as a repository cutsheet.
+          const path = data.matched.sharepointPath.split('/').pop() ?? data.matched.sharepointPath;
+          updateItem(submittalId!, itemId, {
+            cutsheetRepositoryId: data.matched.repositoryId,
+            cutSheetName: path,
+          });
+        } else if (data?.staged) {
+          updateItem(submittalId!, itemId, {
+            cutsheetStagingId: data.staged.stagingId,
+            cutSheetName: file.name,
+          });
+        } else {
+          throw new Error('SharePoint upload returned no result');
+        }
+      } else {
+        // Demo mode: in-memory base64 (legacy path).
         updateItem(submittalId!, itemId, { cutSheetPath: file.name, cutSheetData: base64 });
-      };
-      reader.readAsDataURL(file);
+      }
+    } catch (err) {
+      console.error('Cutsheet upload failed:', err);
+      alert(`Cutsheet upload failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setUploadingItemId(null);
     }
   };
 
@@ -280,11 +330,16 @@ export function SubmittalDetail() {
                   <td className="px-4 py-3"><span className="text-xs font-medium px-2 py-0.5 rounded bg-surface text-text-secondary">{item.category}</span></td>
                   <td className="px-4 py-3 text-sm text-text-primary text-center font-medium">{item.qty}</td>
                   <td className="px-4 py-3">
-                    {item.cutsheetRepositoryId ? (
+                    {uploadingItemId === item.id ? (
+                      <span className="text-xs text-text-secondary inline-flex items-center gap-1.5">
+                        <Loader2 size={12} className="animate-spin" />
+                        Uploading…
+                      </span>
+                    ) : item.cutsheetRepositoryId ? (
                       <div className="flex items-center gap-1.5">
                         <span
                           className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full flex items-center gap-1 max-w-[140px]"
-                          title="Auto-attached from SharePoint cutsheet repository"
+                          title="Attached from SharePoint cutsheet repository"
                         >
                           <FolderCheck size={10} className="shrink-0" />
                           <span className="truncate">{item.cutSheetName || 'Repository'}</span>
@@ -293,6 +348,23 @@ export function SubmittalDetail() {
                           onClick={() => updateItem(submittalId!, item.id, { cutsheetRepositoryId: undefined, cutSheetName: undefined })}
                           className="p-0.5 rounded hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors"
                           title="Detach repository cutsheet"
+                        >
+                          <XIcon size={12} />
+                        </button>
+                      </div>
+                    ) : item.cutsheetStagingId ? (
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="text-xs text-orange-dark bg-orange/10 px-2 py-0.5 rounded-full flex items-center gap-1 max-w-[140px]"
+                          title="Uploaded to SharePoint staging — pending admin review"
+                        >
+                          <Clock size={10} className="shrink-0" />
+                          <span className="truncate">{item.cutSheetName || 'Pending review'}</span>
+                        </span>
+                        <button
+                          onClick={() => updateItem(submittalId!, item.id, { cutsheetStagingId: undefined, cutSheetName: undefined })}
+                          className="p-0.5 rounded hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors"
+                          title="Detach staged cutsheet (file remains in /Staging/ for admin to clean up)"
                         >
                           <XIcon size={12} />
                         </button>
