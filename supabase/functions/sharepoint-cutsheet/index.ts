@@ -382,6 +382,269 @@ async function uploadStaging(
   };
 }
 
+interface ListStagingInput {
+  status?: 'pending' | 'approved' | 'rejected' | 'duplicate';
+  /** When true (default), include a fresh download URL per item. Set to
+   *  false for cheap count queries. */
+  withDownloadUrls?: boolean;
+}
+
+/**
+ * Return staging rows (default: all pending) augmented with a fresh
+ * downloadUrl per row for inline PDF preview. RLS already restricts SELECTs
+ * on cutsheet_staging to admins (or the original uploader for their own).
+ */
+async function listStaging(input: ListStagingInput, supabase: ReturnType<typeof createClient>) {
+  const status = input.status ?? 'pending';
+  const includeUrls = input.withDownloadUrls !== false;
+
+  const { data, error } = await supabase
+    .from('cutsheet_staging')
+    .select('*')
+    .eq('status', status)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Staging list failed: ${error.message}`);
+
+  if (!includeUrls || (data ?? []).length === 0) {
+    return { items: data ?? [] };
+  }
+
+  // Fetch download URLs in parallel — Graph rate-limits but a few-dozen
+  // concurrent reads on a single tenant is fine.
+  const items = await Promise.all((data ?? []).map(async (row) => {
+    try {
+      const downloadUrl = await getDownloadUrlFor(row.sharepoint_item_id);
+      return { ...row, downloadUrl };
+    } catch (err) {
+      console.warn(`[listStaging] download URL for ${row.id} failed:`, err);
+      return { ...row, downloadUrl: null };
+    }
+  }));
+  return { items };
+}
+
+interface ApproveStagingInput {
+  stagingId: string;
+  /** Corrected metadata. If omitted, we use the staging row's existing
+   *  values (which the uploader may have set during the upload). */
+  manufacturer?: string;
+  model?: string;
+  category?: string;
+  displayName?: string;
+  /** Auth uid of the admin approving — used for the approved_by_user_id
+   *  audit field. */
+  reviewedByUserId?: string;
+}
+
+/** Sanitize a string so it's safe as a filename/folder name in SharePoint. */
+function fsSafe(s: string): string {
+  return s.replace(/[\\\/:*?"<>|]+/g, '-').trim().slice(0, 120);
+}
+
+/**
+ * Find or create a manufacturer subfolder inside /Repository/. Returns the
+ * Graph item id of the folder.
+ */
+async function ensureManufacturerFolder(manufacturer: string): Promise<string> {
+  if (!REPOSITORY_FOLDER_ID) throw new Error('SHAREPOINT_REPOSITORY_FOLDER_ID env var not set');
+  const folderName = fsSafe(manufacturer);
+  if (!folderName) throw new Error('manufacturer required');
+
+  // Try a direct lookup by path — cheaper than listing children.
+  const lookup = await graphFetch(
+    `/drives/${DRIVE_ID}/items/${REPOSITORY_FOLDER_ID}:/${encodeURIComponent(folderName)}`,
+  );
+  if (lookup.ok) {
+    const json = await lookup.json();
+    return json.id as string;
+  }
+  if (lookup.status !== 404) {
+    const text = await lookup.text();
+    throw new Error(`Folder lookup failed (${lookup.status}): ${text.slice(0, 300)}`);
+  }
+
+  // Create it.
+  const createRes = await graphFetch(
+    `/drives/${DRIVE_ID}/items/${REPOSITORY_FOLDER_ID}/children`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name: folderName,
+        folder: {},
+        '@microsoft.graph.conflictBehavior': 'fail',
+      }),
+    },
+  );
+  const createText = await createRes.text();
+  if (!createRes.ok) {
+    throw new Error(`Folder create failed (${createRes.status}): ${createText.slice(0, 300)}`);
+  }
+  const created = JSON.parse(createText);
+  return created.id as string;
+}
+
+/**
+ * Move the staged file into /Repository/{Manufacturer}/{Model}.pdf, write
+ * the canonical cutsheet_repository row, mark the staging row approved, and
+ * promote any submittal_items that linked to the staging record so they
+ * point at the new repo row instead.
+ */
+async function approveStaging(input: ApproveStagingInput, supabase: ReturnType<typeof createClient>) {
+  if (!input.stagingId) throw new Error('stagingId required');
+  if (!REPOSITORY_FOLDER_ID) throw new Error('SHAREPOINT_REPOSITORY_FOLDER_ID env var not set');
+
+  // 1. Load the staging row.
+  const { data: staging, error: stagingErr } = await supabase
+    .from('cutsheet_staging')
+    .select('*')
+    .eq('id', input.stagingId)
+    .maybeSingle();
+  if (stagingErr || !staging) throw new Error('Staging row not found');
+  if (staging.status !== 'pending') throw new Error(`Staging row is ${staging.status}, not pending`);
+
+  // 2. Resolve final metadata (admin-corrected values win over staging values).
+  const manufacturer = (input.manufacturer ?? staging.manufacturer ?? '').trim();
+  const model = (input.model ?? staging.model_number ?? '').trim();
+  const category = (input.category ?? staging.category ?? null) || null;
+  const displayName = (input.displayName ?? staging.display_name ?? null) || null;
+
+  if (!manufacturer || !model) {
+    throw new Error('manufacturer and model required to approve');
+  }
+
+  // 3. Dedupe — if approved repo already has this (mfr, model), refuse.
+  //    Admin should mark the staging row as a duplicate via reject instead.
+  const { data: dupe } = await supabase
+    .from('cutsheet_repository')
+    .select('id, sharepoint_path')
+    .ilike('manufacturer', manufacturer)
+    .ilike('model_number', model)
+    .maybeSingle();
+  if (dupe) {
+    return { error: 'duplicate', existing: dupe };
+  }
+
+  // 4. Ensure /Repository/{Manufacturer}/ exists, then move the staged file.
+  const mfrFolderId = await ensureManufacturerFolder(manufacturer);
+  const safeFilename = `${fsSafe(model)}.pdf`;
+
+  const moveRes = await graphFetch(`/drives/${DRIVE_ID}/items/${staging.sharepoint_item_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      parentReference: { id: mfrFolderId },
+      name: safeFilename,
+    }),
+  });
+  const moveText = await moveRes.text();
+  if (!moveRes.ok) {
+    throw new Error(`SharePoint move failed (${moveRes.status}): ${moveText.slice(0, 300)}`);
+  }
+  const moved = JSON.parse(moveText) as {
+    id: string;
+    name: string;
+    parentReference?: { path?: string };
+    size?: number;
+  };
+  const finalPath = `${moved.parentReference?.path ?? ''}/${moved.name}`
+    .replace(/^\/drives\/[^/]+\/root:/, '');
+
+  // 5. Insert the canonical repository row.
+  const { data: repoRow, error: repoErr } = await supabase
+    .from('cutsheet_repository')
+    .insert({
+      manufacturer,
+      model_number: model,
+      display_name: displayName,
+      category,
+      sharepoint_item_id: moved.id,
+      sharepoint_path: finalPath,
+      file_size_bytes: moved.size ?? staging.file_size_bytes ?? null,
+      uploaded_by_user_id: staging.uploaded_by_user_id,
+      approved_by_user_id: input.reviewedByUserId ?? null,
+      source_project_id: staging.source_project_id,
+      approved_at: new Date().toISOString(),
+    })
+    .select('id, sharepoint_path')
+    .single();
+  if (repoErr || !repoRow) {
+    // Roll the move back so the file isn't orphaned in /Repository/.
+    try {
+      await graphFetch(`/drives/${DRIVE_ID}/items/${moved.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ parentReference: { id: STAGING_FOLDER_ID } }),
+      });
+    } catch (rollbackErr) {
+      console.error('[approveStaging] rollback failed:', rollbackErr);
+    }
+    throw new Error(`Repository insert failed: ${repoErr?.message ?? 'unknown'}`);
+  }
+
+  // 6. Mark the staging row approved.
+  await supabase.from('cutsheet_staging').update({
+    status: 'approved',
+    reviewed_by_user_id: input.reviewedByUserId ?? null,
+    reviewed_at: new Date().toISOString(),
+    duplicate_of: null,
+  }).eq('id', input.stagingId);
+
+  // 7. Promote any submittal_items that pointed at the staging row to the
+  //    new repository row. Keeps the existing in-flight submittals seamless.
+  await supabase.from('submittal_items')
+    .update({ cutsheet_repository_id: repoRow.id, cutsheet_staging_id: null })
+    .eq('cutsheet_staging_id', input.stagingId);
+
+  return {
+    repository: { id: repoRow.id, sharepoint_path: repoRow.sharepoint_path },
+  };
+}
+
+interface RejectStagingInput {
+  stagingId: string;
+  reason?: string;
+  reviewedByUserId?: string;
+}
+
+/**
+ * Delete the SharePoint file and mark the staging row rejected. Any submittal
+ * items that linked to it have their cutsheet_staging_id cleared so the
+ * uploader can re-upload (or use a different file).
+ */
+async function rejectStaging(input: RejectStagingInput, supabase: ReturnType<typeof createClient>) {
+  if (!input.stagingId) throw new Error('stagingId required');
+
+  const { data: staging, error: stagingErr } = await supabase
+    .from('cutsheet_staging')
+    .select('*')
+    .eq('id', input.stagingId)
+    .maybeSingle();
+  if (stagingErr || !staging) throw new Error('Staging row not found');
+  if (staging.status !== 'pending') throw new Error(`Staging row is ${staging.status}, not pending`);
+
+  // Delete the SharePoint file. Tolerate 404 (file already gone) — the DB
+  // status update is the more important record.
+  const delRes = await graphFetch(`/drives/${DRIVE_ID}/items/${staging.sharepoint_item_id}`, {
+    method: 'DELETE',
+  });
+  if (!delRes.ok && delRes.status !== 404) {
+    const text = await delRes.text();
+    throw new Error(`SharePoint delete failed (${delRes.status}): ${text.slice(0, 300)}`);
+  }
+
+  await supabase.from('cutsheet_staging').update({
+    status: 'rejected',
+    reviewed_by_user_id: input.reviewedByUserId ?? null,
+    reviewed_at: new Date().toISOString(),
+    review_notes: input.reason ?? null,
+  }).eq('id', input.stagingId);
+
+  // Detach any submittal items so the uploader knows the cutsheet was rejected.
+  await supabase.from('submittal_items')
+    .update({ cutsheet_staging_id: null, cut_sheet_name: null })
+    .eq('cutsheet_staging_id', input.stagingId);
+
+  return { rejected: true };
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -425,6 +688,15 @@ serve(async (req) => {
       }
       case 'uploadStaging': {
         return jsonResponse(await uploadStaging(body, supabase));
+      }
+      case 'listStaging': {
+        return jsonResponse(await listStaging(body, supabase));
+      }
+      case 'approveStaging': {
+        return jsonResponse(await approveStaging(body, supabase));
+      }
+      case 'rejectStaging': {
+        return jsonResponse(await rejectStaging(body, supabase));
       }
       default:
         return jsonResponse({ error: `Unknown op: ${op}` }, 400);

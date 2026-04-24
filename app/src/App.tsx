@@ -16,6 +16,7 @@ import { ReviewQueuePage } from './pages/ReviewQueue';
 import { BidLevelingPage } from './pages/BidLevelingPage';
 import { PersonalOpsPage } from './pages/PersonalOpsPage';
 import { ManagerDashboardPage } from './pages/ManagerDashboard';
+import { CutsheetReviewPage } from './pages/CutsheetReview';
 import { EffortSurveyPage } from './pages/EffortSurvey';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -96,6 +97,7 @@ export default function App() {
               </Route>
               <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
+              <Route path="cutsheet-review" element={<CutsheetReviewPage />} />
               <Route path="personal-ops" element={<PersonalOpsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>

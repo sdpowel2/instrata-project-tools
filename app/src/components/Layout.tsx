@@ -1,12 +1,14 @@
 import { NavLink, Outlet, useParams, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, ShieldCheck, Scale, Mail,
-  Home, ScanLine, ClipboardList,
+  Home, ScanLine, ClipboardList, FolderCheck,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from './StatusBadge';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import instrataLogo from '../assets/instrata-logo-white.png';
 
 const mainNav = [
@@ -33,6 +35,7 @@ export function Layout() {
   const { projectId } = useParams();
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const { user, signOut, isAdmin } = useAuth();
+  const pendingCutsheets = usePendingCutsheetCount(isAdmin);
 
   return (
     <div className="flex h-full">
@@ -52,6 +55,12 @@ export function Layout() {
           {isAdmin && (
             <>
               <SidebarLink to="/manager-dashboard" icon={ClipboardList} label="Manager Dashboard" />
+              <SidebarLink
+                to="/cutsheet-review"
+                icon={FolderCheck}
+                label="Cutsheet Review"
+                badge={pendingCutsheets > 0 ? pendingCutsheets : undefined}
+              />
               <SidebarLink to="/personal-ops" icon={Mail} label="Personal Ops" />
             </>
           )}
@@ -155,9 +164,11 @@ interface SidebarLinkProps {
   label: string;
   end?: boolean;
   indent?: boolean;
+  /** Optional count badge rendered on the right side. Hidden when undefined or 0. */
+  badge?: number;
 }
 
-function SidebarLink({ to, icon: Icon, label, end, indent }: SidebarLinkProps) {
+function SidebarLink({ to, icon: Icon, label, end, indent, badge }: SidebarLinkProps) {
   return (
     <NavLink
       to={to}
@@ -176,8 +187,38 @@ function SidebarLink({ to, icon: Icon, label, end, indent }: SidebarLinkProps) {
     >
       <Icon size={17} />
       <span className="flex-1">{label}</span>
+      {badge !== undefined && badge > 0 && (
+        <span className="bg-orange text-white text-[11px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center leading-none">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </NavLink>
   );
+}
+
+// Polls the cutsheet_staging table for pending count so admins see the
+// queue depth in the sidebar at a glance. Polls every 60s — Phase 3 doesn't
+// warrant a realtime subscription.
+function usePendingCutsheetCount(enabled: boolean): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!enabled || !isSupabaseConfigured()) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { count: c, error } = await supabase
+          .from('cutsheet_staging')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'pending');
+        if (cancelled) return;
+        if (!error) setCount(c ?? 0);
+      } catch { /* swallow — sidebar badge is best-effort */ }
+    };
+    tick();
+    const interval = setInterval(tick, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [enabled]);
+  return count;
 }
 
 function PhaseGroup({ label, accent, children }: { label: string; accent: string; children: React.ReactNode }) {
