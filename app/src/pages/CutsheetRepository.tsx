@@ -144,7 +144,8 @@ export function CutsheetRepositoryPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search by manufacturer, model, or category"
-                className="input pl-10"
+                className="input"
+                style={{ paddingLeft: '2.5rem' }}
               />
             </div>
             <span className="text-xs text-fg-2 whitespace-nowrap">

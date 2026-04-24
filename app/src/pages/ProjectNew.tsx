@@ -195,7 +195,8 @@ function DToolsImportPicker({ open, onClose, onImported }: DToolsImportPickerPro
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name, number, or client…"
-            className="input pl-10"
+            className="input"
+            style={{ paddingLeft: '2.5rem' }}
             autoFocus
           />
         </div>
