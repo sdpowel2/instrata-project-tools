@@ -44,6 +44,10 @@ export function CutsheetReviewPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // When approve hits a repo duplicate, we capture the existing repo row so
+  // the admin can convert with a single "Mark as duplicate" click instead of
+  // having to navigate elsewhere to figure out the linkage.
+  const [duplicateOf, setDuplicateOf] = useState<{ id: string; sharepoint_path: string } | null>(null);
 
   // Per-row metadata edits before approval. Keyed by staging row id so the
   // form state doesn't get clobbered when the user navigates between items.
@@ -74,6 +78,41 @@ export function CutsheetReviewPage() {
   }, [selectedId]);
 
   useEffect(() => { if (isAdmin) refresh(); /* eslint-disable-next-line */ }, [isAdmin]);
+
+  // Reset duplicate-detection state whenever the admin moves to a different item.
+  useEffect(() => { setDuplicateOf(null); setActionError(null); }, [selectedId]);
+
+  const handleMarkDuplicate = async () => {
+    if (!selected || !duplicateOf) return;
+    const reason = window.prompt('Optional note about this duplicate (visible to the uploader):') ?? undefined;
+    setActing(true);
+    setActionError(null);
+    try {
+      const { error: fnError } = await supabase.functions.invoke('sharepoint-cutsheet', {
+        body: {
+          op: 'markStagingDuplicate',
+          stagingId: selected.id,
+          existingRepositoryId: duplicateOf.id,
+          reason,
+          reviewedByUserId: user?.id ?? null,
+        },
+      });
+      if (fnError) throw fnError;
+      // Drop from list, advance.
+      setItems((prev) => {
+        const next = prev.filter((i) => i.id !== selected.id);
+        const idx = prev.findIndex((i) => i.id === selected.id);
+        setSelectedId(next[idx] ? next[idx].id : (next[idx - 1]?.id ?? null));
+        return next;
+      });
+      setDuplicateOf(null);
+    } catch (err) {
+      console.error('[CutsheetReview] mark duplicate failed:', err);
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActing(false);
+    }
+  };
 
   const selected = useMemo(() => items.find((i) => i.id === selectedId) ?? null, [items, selectedId]);
 
@@ -121,8 +160,9 @@ export function CutsheetReviewPage() {
         } },
       );
       if (fnError) throw fnError;
-      if (data?.error === 'duplicate') {
-        setActionError(`Repository already has a cutsheet for that manufacturer + model: ${data.existing?.sharepoint_path}`);
+      if (data?.error === 'duplicate' && data.existing) {
+        setActionError(`Repository already has a cutsheet for that manufacturer + model.`);
+        setDuplicateOf(data.existing);
         return;
       }
       // Drop from list, advance selection.
@@ -314,19 +354,37 @@ export function CutsheetReviewPage() {
                   {actionError && (
                     <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 flex gap-2 items-start">
                       <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                      <span>{actionError}</span>
+                      <div className="flex-1">
+                        <div>{actionError}</div>
+                        {duplicateOf && (
+                          <div className="mt-1 text-fg-2 font-mono text-[11px] break-all">
+                            Existing: {duplicateOf.sharepoint_path}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
                   <div className="flex flex-col gap-2 mt-auto">
-                    <button
-                      onClick={handleApprove}
-                      disabled={acting}
-                      className="btn-primary justify-center disabled:opacity-60"
-                    >
-                      {acting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                      Approve & Move to Repository
-                    </button>
+                    {duplicateOf ? (
+                      <button
+                        onClick={handleMarkDuplicate}
+                        disabled={acting}
+                        className="btn-primary justify-center disabled:opacity-60"
+                      >
+                        {acting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                        Mark as duplicate &amp; promote
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleApprove}
+                        disabled={acting}
+                        className="btn-primary justify-center disabled:opacity-60"
+                      >
+                        {acting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                        Approve & Move to Repository
+                      </button>
+                    )}
                     <button
                       onClick={handleReject}
                       disabled={acting}

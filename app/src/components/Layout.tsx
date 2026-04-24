@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, ShieldCheck, Scale, Mail,
-  Home, ScanLine, ClipboardList, FolderCheck,
+  Home, ScanLine, ClipboardList, FolderCheck, Upload,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,6 +15,8 @@ const mainNav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/projects', icon: FolderOpen, label: 'Projects' },
   { to: '/review-queue', icon: ShieldCheck, label: 'Review Queue' },
+  { to: '/cutsheet-repository', icon: BookOpen, label: 'Cutsheet Repo' },
+  { to: '/cutsheet-my-uploads', icon: Upload, label: 'My Uploads' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

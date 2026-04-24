@@ -598,6 +598,68 @@ async function approveStaging(input: ApproveStagingInput, supabase: ReturnType<t
   };
 }
 
+interface MarkDuplicateInput {
+  stagingId: string;
+  existingRepositoryId: string;
+  reason?: string;
+  reviewedByUserId?: string;
+}
+
+/**
+ * Admin says "this staged file is the same product as an already-approved
+ * repository row". We delete the SharePoint /Staging/ file, mark the staging
+ * row as duplicate (with a back-pointer), and promote any submittal items
+ * that were waiting on the staging file so they pick up the existing repo
+ * cutsheet instead — no work lost for the engineer.
+ */
+async function markStagingDuplicate(input: MarkDuplicateInput, supabase: ReturnType<typeof createClient>) {
+  if (!input.stagingId) throw new Error('stagingId required');
+  if (!input.existingRepositoryId) throw new Error('existingRepositoryId required');
+
+  const { data: staging, error: stagingErr } = await supabase
+    .from('cutsheet_staging')
+    .select('*')
+    .eq('id', input.stagingId)
+    .maybeSingle();
+  if (stagingErr || !staging) throw new Error('Staging row not found');
+  if (staging.status !== 'pending') throw new Error(`Staging row is ${staging.status}, not pending`);
+
+  // Confirm the target repo row actually exists before we mutate anything.
+  const { data: target } = await supabase
+    .from('cutsheet_repository')
+    .select('id, sharepoint_path')
+    .eq('id', input.existingRepositoryId)
+    .maybeSingle();
+  if (!target) throw new Error('Target repository row not found');
+
+  // Drop the SharePoint /Staging/ file — we already have the canonical
+  // copy in /Repository/. 404 is tolerated.
+  const delRes = await graphFetch(`/drives/${DRIVE_ID}/items/${staging.sharepoint_item_id}`, {
+    method: 'DELETE',
+  });
+  if (!delRes.ok && delRes.status !== 404) {
+    const text = await delRes.text();
+    throw new Error(`SharePoint delete failed (${delRes.status}): ${text.slice(0, 300)}`);
+  }
+
+  await supabase.from('cutsheet_staging').update({
+    status: 'duplicate',
+    duplicate_of: input.existingRepositoryId,
+    reviewed_by_user_id: input.reviewedByUserId ?? null,
+    reviewed_at: new Date().toISOString(),
+    review_notes: input.reason ?? null,
+  }).eq('id', input.stagingId);
+
+  // Re-point any submittal items that were waiting on the staged file at
+  // the canonical repo row. The engineer's submittal seamlessly upgrades
+  // from "Pending review" to "Repository".
+  await supabase.from('submittal_items')
+    .update({ cutsheet_repository_id: input.existingRepositoryId, cutsheet_staging_id: null })
+    .eq('cutsheet_staging_id', input.stagingId);
+
+  return { existing: target };
+}
+
 interface RejectStagingInput {
   stagingId: string;
   reason?: string;
@@ -697,6 +759,9 @@ serve(async (req) => {
       }
       case 'rejectStaging': {
         return jsonResponse(await rejectStaging(body, supabase));
+      }
+      case 'markStagingDuplicate': {
+        return jsonResponse(await markStagingDuplicate(body, supabase));
       }
       default:
         return jsonResponse({ error: `Unknown op: ${op}` }, 400);

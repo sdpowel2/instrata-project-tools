@@ -17,6 +17,8 @@ import { BidLevelingPage } from './pages/BidLevelingPage';
 import { PersonalOpsPage } from './pages/PersonalOpsPage';
 import { ManagerDashboardPage } from './pages/ManagerDashboard';
 import { CutsheetReviewPage } from './pages/CutsheetReview';
+import { CutsheetRepositoryPage } from './pages/CutsheetRepository';
+import { CutsheetMyUploadsPage } from './pages/CutsheetMyUploads';
 import { EffortSurveyPage } from './pages/EffortSurvey';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -98,6 +100,8 @@ export default function App() {
               <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
               <Route path="cutsheet-review" element={<CutsheetReviewPage />} />
+              <Route path="cutsheet-repository" element={<CutsheetRepositoryPage />} />
+              <Route path="cutsheet-my-uploads" element={<CutsheetMyUploadsPage />} />
               <Route path="personal-ops" element={<PersonalOpsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>

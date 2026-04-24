@@ -1,7 +1,7 @@
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pdf-lib';
 import type { Submittal, SubmittalItem, Project } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
-import { isUrl, fetchFileBytes } from '../lib/storage';
+import { fetchCutsheetBytes, hasCutsheet } from './cutsheetSource';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431); // #22326E
@@ -190,8 +190,11 @@ export async function exportSubmittalPDF(
   const tocEntries: { label: string; indent: number; pageRef: string }[] = [];
   tocEntries.push({ label: 'Bill of Materials by Room', indent: 0, pageRef: 'bom' });
 
-  // Each item with cutsheet
-  const itemsWithCutsheets = sortedItems.filter((i) => i.cutSheetData);
+  // Each item with a cutsheet — checks all three possible sources
+  // (repository, staging, legacy storage). Previously only checked
+  // cutSheetData, so SharePoint-attached items silently produced PDFs
+  // with missing cutsheet pages.
+  const itemsWithCutsheets = sortedItems.filter(hasCutsheet);
   if (itemsWithCutsheets.length > 0) {
     tocEntries.push({ label: 'Product Cutsheets', indent: 0, pageRef: 'cutsheets_header' });
     for (const item of itemsWithCutsheets) {
@@ -355,16 +358,13 @@ export async function exportSubmittalPDF(
 
   // ===================== CUTSHEETS =====================
   for (const item of sortedItems) {
-    if (!item.cutSheetData) continue;
+    if (!hasCutsheet(item)) continue;
 
     try {
-      // Support both URL (Supabase Storage) and base64 (legacy/demo)
-      let cutsheetBytes: Uint8Array;
-      if (isUrl(item.cutSheetData)) {
-        cutsheetBytes = await fetchFileBytes(item.cutSheetData);
-      } else {
-        cutsheetBytes = Uint8Array.from(atob(item.cutSheetData), (c) => c.charCodeAt(0));
-      }
+      // fetchCutsheetBytes resolves the right source (repository → SharePoint
+      // download URL, staging → SharePoint, legacy → Supabase storage or
+      // base64) and records usage analytics for repository-sourced cutsheets.
+      const cutsheetBytes = await fetchCutsheetBytes(item, project.id, 'submittal');
       const cutsheetPdf = await PDFDocument.load(cutsheetBytes);
       const pages = await pdfDoc.copyPages(cutsheetPdf, cutsheetPdf.getPageIndices());
 
@@ -376,7 +376,9 @@ export async function exportSubmittalPDF(
         currentPageNum++;
       }
     } catch (err) {
-      // If cutsheet can't be loaded, add a placeholder page
+      console.warn('[PDF Export] cutsheet embed failed for', item.manufacturer, item.model, err);
+      // If cutsheet can't be loaded, add a placeholder page so the user can
+      // see exactly which item failed instead of getting a silent gap.
       const placeholderPage = pdfDoc.addPage(PageSizes.Letter);
       currentPageNum++;
       cutsheetPageMap.push({ item, startPage: currentPageNum });

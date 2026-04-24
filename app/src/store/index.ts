@@ -1110,6 +1110,9 @@ export const useStore = create<AppState>((set, get) => ({
     const matches = data?.matches ?? {};
 
     let attached = 0;
+    const projectId = submittal.projectId;
+    const { data: { user } } = await supabase.auth.getUser();
+
     for (const item of candidates) {
       const key = `${item.manufacturer.trim().toLowerCase()}|||${item.model.trim().toLowerCase()}`;
       const hit = matches[key];
@@ -1128,6 +1131,14 @@ export const useStore = create<AppState>((set, get) => ({
       dbExec(() => supabase.from('submittal_items')
         .update(submittalItemToRow({ cutsheetRepositoryId: hit.id, cutSheetName: path }))
         .eq('id', item.id));
+      // Record usage so analytics reflect which repo cutsheets are getting
+      // pulled by which projects. Fire-and-forget — failures are non-fatal.
+      dbExec(() => supabase.from('cutsheet_project_usage').insert({
+        cutsheet_id: hit.id,
+        project_id: projectId,
+        used_in: 'submittal',
+        used_by_user_id: user?.id ?? null,
+      }));
       attached++;
     }
     return { attached, checked: candidates.length };
