@@ -229,9 +229,13 @@ export async function importDToolsCatalogCSV(
   for (let start = 0; start < records.length; start += BATCH_SIZE) {
     const batch = records.slice(start, start + BATCH_SIZE);
 
+    // Cast through `never[]` — the Supabase v2 client typings expect a
+    // generated row shape from a Database generic. We don't supply one, so
+    // the inferred type is `never` and the original `Parameters<…>[0][]`
+    // cast was wrong (it resolved to `string[]`, the table-name parameter).
     const { error, count } = await supabase
       .from('product_catalog')
-      .upsert(batch as Parameters<typeof supabase.from>[0][], {
+      .upsert(batch as never[], {
         onConflict: 'manufacturer,model_number',
         ignoreDuplicates: false,
         count: 'exact',

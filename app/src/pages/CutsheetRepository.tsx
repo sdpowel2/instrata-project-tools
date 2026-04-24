@@ -24,11 +24,6 @@ interface RepositoryRow {
   created_at: string;
 }
 
-interface UsageCount {
-  cutsheet_id: string;
-  count: number;
-}
-
 export function CutsheetRepositoryPage() {
   const [items, setItems] = useState<RepositoryRow[]>([]);
   const [usageByCutsheet, setUsageByCutsheet] = useState<Map<string, number>>(new Map());
