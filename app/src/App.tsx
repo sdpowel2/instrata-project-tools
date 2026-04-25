@@ -19,6 +19,7 @@ import { ManagerDashboardPage } from './pages/ManagerDashboard';
 import { CutsheetReviewPage } from './pages/CutsheetReview';
 import { CutsheetRepositoryPage } from './pages/CutsheetRepository';
 import { CutsheetMyUploadsPage } from './pages/CutsheetMyUploads';
+import { ProductsPage } from './pages/ProductsPage';
 import { EffortSurveyPage } from './pages/EffortSurvey';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -97,13 +98,20 @@ export default function App() {
                 <Route path="pre-survey" element={<EffortSurveyPage kind="pre-sales" />} />
                 <Route path="post-survey" element={<EffortSurveyPage kind="post-sales" />} />
               </Route>
-              <Route path="review-queue" element={<ReviewQueuePage />} />
+              <Route path="products" element={<ProductsPage />} />
               <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+
+              {/* Routes below are not exposed in the sidebar but kept
+                  reachable so the code remains warm and any deep links
+                  (submittal upload confirmations, review action links,
+                  etc.) still resolve. Cutsheet Review is surfaced from
+                  the Manager Dashboard instead. */}
+              <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="cutsheet-review" element={<CutsheetReviewPage />} />
               <Route path="cutsheet-repository" element={<CutsheetRepositoryPage />} />
               <Route path="cutsheet-my-uploads" element={<CutsheetMyUploadsPage />} />
               <Route path="personal-ops" element={<PersonalOpsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Route>
         </Routes>

@@ -34,6 +34,19 @@ const STATUS_STYLES: Record<MyUploadRow['status'], { bg: string; fg: string; lab
 };
 
 export function CutsheetMyUploadsPage() {
+  return (
+    <div className="px-8 pt-7 pb-10 max-w-[1100px]">
+      <CutsheetMyUploadsSection showPageHeader />
+    </div>
+  );
+}
+
+interface CutsheetMyUploadsSectionProps {
+  /** Render the full PageHeader. When false (used inside tabs), caller owns the heading. */
+  showPageHeader?: boolean;
+}
+
+export function CutsheetMyUploadsSection({ showPageHeader = false }: CutsheetMyUploadsSectionProps) {
   const { user } = useAuth();
   const [items, setItems] = useState<MyUploadRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -65,30 +78,47 @@ export function CutsheetMyUploadsPage() {
   const pendingCount = items.filter((i) => i.status === 'pending').length;
   const rejectedCount = items.filter((i) => i.status === 'rejected').length;
 
+  const refreshBtn = (
+    <button onClick={refresh} disabled={loading} className="btn-secondary disabled:opacity-60">
+      {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+      Refresh
+    </button>
+  );
+
   return (
-    <div className="px-8 pt-7 pb-10 max-w-[1100px]">
-      <PageHeader
-        eyebrow="SharePoint · Cutsheet Repository"
-        title="My Cutsheet Uploads"
-        subtitle={
-          <>
-            Cutsheets you've uploaded from submittal builds.
-            {' '}
+    <>
+      {showPageHeader ? (
+        <PageHeader
+          eyebrow="SharePoint · Cutsheet Repository"
+          title="My Cutsheet Uploads"
+          subtitle={
+            <>
+              Cutsheets you've uploaded from submittal builds.
+              {' '}
+              {pendingCount > 0 && <strong className="text-orange-dark">{pendingCount} awaiting review.</strong>}
+              {rejectedCount > 0 && (
+                <strong className="text-red-700 ml-1">
+                  {rejectedCount} rejected{rejectedCount === 1 ? '' : ''} — see notes below.
+                </strong>
+              )}
+            </>
+          }
+          actions={refreshBtn}
+        />
+      ) : (
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-sm text-fg-2">
             {pendingCount > 0 && <strong className="text-orange-dark">{pendingCount} awaiting review.</strong>}
             {rejectedCount > 0 && (
               <strong className="text-red-700 ml-1">
-                {rejectedCount} rejected{rejectedCount === 1 ? '' : ''} — see notes below.
+                {rejectedCount} rejected — see notes below.
               </strong>
             )}
-          </>
-        }
-        actions={
-          <button onClick={refresh} disabled={loading} className="btn-secondary disabled:opacity-60">
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            Refresh
-          </button>
-        }
-      />
+            {pendingCount === 0 && rejectedCount === 0 && 'Cutsheets you\'ve uploaded from submittal builds.'}
+          </div>
+          {refreshBtn}
+        </div>
+      )}
 
       {error && (
         <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -156,6 +186,6 @@ export function CutsheetMyUploadsPage() {
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }

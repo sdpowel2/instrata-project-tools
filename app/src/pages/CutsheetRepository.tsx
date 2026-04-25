@@ -25,6 +25,19 @@ interface RepositoryRow {
 }
 
 export function CutsheetRepositoryPage() {
+  return (
+    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
+      <CutsheetRepositorySection showPageHeader />
+    </div>
+  );
+}
+
+interface CutsheetRepositorySectionProps {
+  /** Render the full PageHeader. When false (used inside tabs), caller owns the heading. */
+  showPageHeader?: boolean;
+}
+
+export function CutsheetRepositorySection({ showPageHeader = false }: CutsheetRepositorySectionProps) {
   const [items, setItems] = useState<RepositoryRow[]>([]);
   const [usageByCutsheet, setUsageByCutsheet] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(false);
@@ -104,24 +117,36 @@ export function CutsheetRepositoryPage() {
 
   const selected = useMemo(() => items.find((i) => i.id === selectedId) ?? null, [items, selectedId]);
 
+  const refreshBtn = (
+    <button onClick={refresh} disabled={loading} className="btn-secondary disabled:opacity-60">
+      {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+      Refresh
+    </button>
+  );
+
   return (
-    <div className="px-8 pt-7 pb-10 max-w-[1400px]">
-      <PageHeader
-        eyebrow="SharePoint · Cutsheet Repository"
-        title="Cutsheet Repository"
-        subtitle={
-          <>
+    <>
+      {showPageHeader ? (
+        <PageHeader
+          eyebrow="SharePoint · Cutsheet Repository"
+          title="Cutsheet Repository"
+          subtitle={
+            <>
+              {items.length} approved cutsheet{items.length === 1 ? '' : 's'} in the catalog.
+              {' '}Auto-attached to submittal items when manufacturer + model match.
+            </>
+          }
+          actions={refreshBtn}
+        />
+      ) : (
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-sm text-fg-2">
             {items.length} approved cutsheet{items.length === 1 ? '' : 's'} in the catalog.
             {' '}Auto-attached to submittal items when manufacturer + model match.
-          </>
-        }
-        actions={
-          <button onClick={refresh} disabled={loading} className="btn-secondary disabled:opacity-60">
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            Refresh
-          </button>
-        }
-      />
+          </div>
+          {refreshBtn}
+        </div>
+      )}
 
       {error && (
         <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -256,6 +281,6 @@ export function CutsheetRepositoryPage() {
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }
