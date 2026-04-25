@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Upload, Search } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { CatalogImportModal } from '../components/CatalogImportModal';
-import { CatalogViewerModal } from '../components/CatalogViewerModal';
 import type { LaborRate, ReviewConfigEntry } from '../types';
 
 interface Profile {
@@ -429,78 +427,6 @@ function LaborRatesSection() {
   );
 }
 
-// ─── Product Catalog Import Section ──────────────────────────────────────────
-
-function ProductCatalogSection() {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [result, setResult] = useState<number | null>(null);
-  const [catalogCount, setCatalogCount] = useState<number | null>(null);
-
-  const refreshCount = () => {
-    supabase.from('product_catalog').select('id', { count: 'exact', head: true }).then(({ count }) => {
-      setCatalogCount(count ?? 0);
-    });
-  };
-
-  useEffect(() => { refreshCount(); }, []);
-
-  const handleComplete = (count: number) => {
-    setResult(count);
-    refreshCount();
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-text-secondary">Current catalog size:</span>
-        <span className="font-semibold text-text-primary">
-          {catalogCount === null ? '—' : `${catalogCount.toLocaleString()} items`}
-        </span>
-      </div>
-
-      <div>
-        <p className="text-xs text-text-secondary mb-3">
-          Import products from a CSV or Excel file. You'll map columns to the right fields before importing.
-          Existing items (matched by manufacturer + model) are updated automatically.
-        </p>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => { setResult(null); setModalOpen(true); }}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Upload size={14} /> Import from CSV
-          </button>
-          {catalogCount !== null && catalogCount > 0 && (
-            <button
-              onClick={() => setViewerOpen(true)}
-              className="btn-secondary flex items-center gap-2"
-            >
-              <Search size={14} /> Open Catalog
-            </button>
-          )}
-        </div>
-      </div>
-
-      {result !== null && (
-        <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-          Import complete — {result.toLocaleString()} items processed.
-        </div>
-      )}
-
-      <CatalogImportModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onComplete={handleComplete}
-      />
-      <CatalogViewerModal
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-      />
-    </div>
-  );
-}
-
 export function SettingsPage() {
   const { isAdmin } = useAuth();
   const configured = isSupabaseConfigured();
@@ -591,14 +517,6 @@ export function SettingsPage() {
               Labor types must match exactly what engineers enter in the D-Tools Labor Type column. Any unmatched type generates a High flag.
             </p>
             <LaborRatesSection />
-          </div>
-
-          <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <ShieldCheck size={18} className="text-navy" />
-              <h2 className="text-base font-semibold text-navy">Product Catalog</h2>
-            </div>
-            <ProductCatalogSection />
           </div>
         </>
       )}

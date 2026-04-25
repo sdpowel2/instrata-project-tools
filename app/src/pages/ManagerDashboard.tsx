@@ -9,8 +9,9 @@
 // worklist that the user will act on inside Monday itself.
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, ClipboardList, RefreshCw, Loader2, Users } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, ClipboardList, RefreshCw, Loader2, Users, FolderCheck, ChevronRight } from 'lucide-react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { Eyebrow, PageHeader } from '../components/ui';
 
 interface ManagerItem {
@@ -30,6 +31,7 @@ export function ManagerDashboardPage() {
   const [data, setData] = useState<FeedResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pendingCutsheets = usePendingCutsheetCount();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -90,6 +92,8 @@ export function ManagerDashboardPage() {
       )}
 
       <div className="grid grid-cols-1 gap-5">
+        <CutsheetReviewCard pendingCount={pendingCutsheets} />
+
         <CategoryCard
           eyebrow="Needs Triage"
           title="Unassigned with due date"
@@ -205,6 +209,68 @@ function DueDatePill({ dueDate, emphasisWhenSoon }: { dueDate: string; emphasisW
       {label}
     </span>
   );
+}
+
+// Compact entry card for the Cutsheet Review queue — lives here now that
+// it's no longer a top-level sidebar entry. Pending count is polled so the
+// badge stays reasonably fresh without a realtime subscription.
+function CutsheetReviewCard({ pendingCount }: { pendingCount: number }) {
+  const hasPending = pendingCount > 0;
+  return (
+    <Link
+      to="/cutsheet-review"
+      className="bg-white border border-border rounded-xl shadow-sm overflow-hidden hover:border-navy/40 transition-colors block"
+    >
+      <div
+        className="flex items-center gap-3.5 px-5 py-4"
+        style={{ background: hasPending ? 'rgba(246,141,46,0.08)' : 'rgba(15,23,42,0.03)' }}
+      >
+        <div
+          className="w-11 h-11 rounded-[10px] flex items-center justify-center flex-shrink-0"
+          style={{ background: hasPending ? 'var(--color-orange)' : '#475569', color: '#fff' }}
+        >
+          <FolderCheck size={22} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <Eyebrow color={hasPending ? 'var(--color-orange)' : '#475569'}>Cutsheet Review</Eyebrow>
+          <h2 className="text-lg font-bold text-navy m-0 mt-0.5">
+            {hasPending ? 'Cutsheets awaiting approval' : 'Cutsheet queue is clear'}
+            {hasPending && <span className="ml-2.5 text-sm font-medium text-fg-2">{pendingCount}</span>}
+          </h2>
+          <div className="text-[13px] text-fg-2 mt-0.5">
+            {hasPending
+              ? 'Review pending cutsheet uploads from engineers and promote approved files to the repository.'
+              : 'No pending cutsheet uploads. New submissions from engineers will surface here.'}
+          </div>
+        </div>
+        <ChevronRight size={18} className="text-fg-2 flex-shrink-0" />
+      </div>
+    </Link>
+  );
+}
+
+// Polls cutsheet_staging for the pending count. Same cadence the sidebar
+// used to use — 60s is plenty for an admin worklist.
+function usePendingCutsheetCount(): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { count: c, error } = await supabase
+          .from('cutsheet_staging')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'pending');
+        if (cancelled) return;
+        if (!error) setCount(c ?? 0);
+      } catch { /* swallow — badge is best-effort */ }
+    };
+    tick();
+    const interval = setInterval(tick, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+  return count;
 }
 
 function daysFromToday(dateStr: string): number | null {

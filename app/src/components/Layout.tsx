@@ -2,8 +2,8 @@ import { NavLink, Outlet, useParams, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
-  ClipboardCheck, BookOpen, Settings, LogOut, ShieldCheck, Scale, Mail,
-  Home, ScanLine, ClipboardList, FolderCheck, Upload,
+  ClipboardCheck, BookOpen, Settings, LogOut, Scale,
+  Home, ScanLine, ClipboardList, Package,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,10 +14,7 @@ import instrataLogo from '../assets/instrata-logo-white.png';
 const mainNav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/projects', icon: FolderOpen, label: 'Projects' },
-  { to: '/review-queue', icon: ShieldCheck, label: 'Review Queue' },
-  { to: '/cutsheet-repository', icon: BookOpen, label: 'Cutsheet Repo' },
-  { to: '/cutsheet-my-uploads', icon: Upload, label: 'My Uploads' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/products', icon: Package, label: 'Products' },
 ];
 
 const presalesTools = [
@@ -55,17 +52,14 @@ export function Layout() {
             <SidebarLink key={item.to} to={item.to} icon={item.icon} label={item.label} end={item.to === '/'} />
           ))}
           {isAdmin && (
-            <>
-              <SidebarLink to="/manager-dashboard" icon={ClipboardList} label="Manager Dashboard" />
-              <SidebarLink
-                to="/cutsheet-review"
-                icon={FolderCheck}
-                label="Cutsheet Review"
-                badge={pendingCutsheets > 0 ? pendingCutsheets : undefined}
-              />
-              <SidebarLink to="/personal-ops" icon={Mail} label="Personal Ops" />
-            </>
+            <SidebarLink
+              to="/manager-dashboard"
+              icon={ClipboardList}
+              label="Manager Dashboard"
+              badge={pendingCutsheets > 0 ? pendingCutsheets : undefined}
+            />
           )}
+          <SidebarLink to="/settings" icon={Settings} label="Settings" />
 
           {project && (
             <>
