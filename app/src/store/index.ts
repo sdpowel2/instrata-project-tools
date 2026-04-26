@@ -47,9 +47,12 @@ function rowToProject(r: any): Project {
   return {
     id: r.id, name: r.name, number: r.number, client: r.client,
     address: r.address, businessUnit: r.business_unit ?? '', status: r.status,
-    phase: r.phase ?? 'Post-Sales',
+    phase: r.phase ?? 'Pre-Sales',
     value: r.value ?? '',
     ownerId: r.owner_id ?? undefined,
+    projectCode: r.project_code ?? undefined,
+    mondayPresalesItemId: r.monday_presales_item_id ?? undefined,
+    mondayPostsalesItemId: r.monday_postsales_item_id ?? undefined,
     mondayItemId: r.monday_item_id ?? undefined,
     dtoolsProjectId: r.dtools_project_id ?? undefined,
     dtoolsBomStatus: r.dtools_bom_status ?? '',
@@ -69,6 +72,9 @@ function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<stri
   if (p.phase !== undefined) row.phase = p.phase;
   if (p.value !== undefined) row.value = p.value;
   if (p.ownerId !== undefined) row.owner_id = p.ownerId;
+  if (p.projectCode !== undefined) row.project_code = p.projectCode;
+  if (p.mondayPresalesItemId !== undefined) row.monday_presales_item_id = p.mondayPresalesItemId;
+  if (p.mondayPostsalesItemId !== undefined) row.monday_postsales_item_id = p.mondayPostsalesItemId;
   if (p.mondayItemId !== undefined) row.monday_item_id = p.mondayItemId;
   if (p.dtoolsProjectId !== undefined) row.dtools_project_id = p.dtoolsProjectId;
   if (p.dtoolsBomStatus !== undefined) row.dtools_bom_status = p.dtoolsBomStatus;
@@ -359,10 +365,10 @@ function dbExec(fn: () => PromiseLike<{ error: any }>): void {
 
 const seedProjects: Project[] = [
   { id: 'p1', name: 'One Vanderbilt - Level 60 AV Buildout', number: 'INS-2026-001', client: 'SL Green Realty', address: '1 Vanderbilt Ave, New York, NY 10017', businessUnit: 'Instrata NE', status: 'In Progress', phase: 'Post-Sales', value: '$482K', dtoolsBomStatus: '', createdAt: '2026-01-15', updatedAt: '2026-03-20' },
-  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'In Progress', phase: 'Post-Sales', value: '$1.2M', dtoolsBomStatus: '', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
-  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Follow Up', phase: 'Post-Sales', value: '$890K', dtoolsBomStatus: '', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
+  { id: 'p2', name: 'Hudson Yards Tower 30 - Conference Center', number: 'INS-2026-002', client: 'Related Companies', address: '30 Hudson Yards, New York, NY 10001', businessUnit: 'Instrata NE', status: 'Install', phase: 'Post-Sales', value: '$1.2M', dtoolsBomStatus: '', createdAt: '2026-02-01', updatedAt: '2026-03-18' },
+  { id: 'p3', name: 'Brookfield Place - Trading Floor Refresh', number: 'INS-2026-003', client: 'Brookfield Asset Mgmt', address: '250 Vesey St, New York, NY 10281', businessUnit: 'Instrata MA', status: 'Close Out', phase: 'Post-Sales', value: '$890K', dtoolsBomStatus: '', createdAt: '2025-10-10', updatedAt: '2026-03-10' },
   { id: 'p4', name: '75 Rockefeller - Lobby Experience Center', number: 'INS-2025-018', client: 'RXR Realty', address: '75 Rockefeller Plaza, New York, NY 10019', businessUnit: 'Instrata NE', status: 'Won', phase: 'Post-Sales', value: '$340K', dtoolsBomStatus: '', createdAt: '2025-06-01', updatedAt: '2025-12-15' },
-  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'In Review', phase: 'Pre-Sales', value: '$612K', dtoolsBomStatus: '', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
+  { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'Review', phase: 'Pre-Sales', value: '$612K', dtoolsBomStatus: '', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
 ];
 
 const bomDefaults = { itemType: 'Product' as const, unitCost: 0, unitPrice: 0, laborHours: 0, laborUnitCost: 0, laborUnitPrice: 0, fixedLaborCost: 0, fixedLaborPrice: 0, marginPct: 0, ownerFurnished: false, optional: false };
