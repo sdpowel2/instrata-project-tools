@@ -16,15 +16,25 @@ const colorMap: Record<string, [string, string]> = {
   'N/A': ['#F3F4F6', '#6B7280'],
   Standard: ['#F3F4F6', '#4B5563'],
 
-  // Monday.com pipeline statuses
+  // Monday.com pre-sales pipeline statuses
   'Not Started': ['#F3F4F6', '#4B5563'],
   'In Progress': ['rgba(246,141,46,0.1)', '#E07A1A'],
-  'In Review': ['#DBEAFE', '#1D4ED8'],
+  'On Hold': ['#FEF3C7', '#92400E'],
+  Review: ['#DBEAFE', '#1D4ED8'],
   'Follow Up': ['#FEF9C3', '#A16207'],
   Won: ['#DCFCE7', '#15803D'],
+  Lost: ['#FEE2E2', '#B91C1C'],
+  'Declined to Bid': ['#F3F4F6', '#6B7280'],
+  Rebid: ['rgba(34,50,110,0.1)', '#22326E'],
 
-  // Legacy ProjectStatus values (retained while legacy projects exist)
+  // Monday.com post-sales pipeline statuses (Won/Not Started/In Progress reuse the above)
+  Install: ['rgba(0,114,206,0.12)', '#0072CE'],
+  'Close Out': ['rgba(34,50,110,0.12)', '#22326E'],
+  Completed: ['#DCFCE7', '#15803D'],
+
+  // Legacy ProjectStatus values (kept while old projects exist)
   Active: ['#DCFCE7', '#15803D'],
+  'In Review': ['#DBEAFE', '#1D4ED8'],
   'Pending Closeout': ['#FEF9C3', '#A16207'],
 
   // Phase tags

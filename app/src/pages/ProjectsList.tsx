@@ -6,7 +6,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { PageHeader } from '../components/ui';
 import type { ProjectPhase } from '../types';
 
-const STATUS_PILLS = ['All', 'Active', 'Pending Closeout', 'Closed'] as const;
+const PHASE_PILLS = ['All', 'Pre-Sales', 'Post-Sales'] as const;
 
 export function ProjectsList() {
   const navigate = useNavigate();
@@ -14,7 +14,7 @@ export function ProjectsList() {
   // In demo mode, all projects are shown regardless of role.
   const projects = useStore((s) => s.projects);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [phaseFilter, setPhaseFilter] = useState<string>('All');
   const [buFilter, setBuFilter] = useState<string>('All');
 
   const businessUnits = useMemo(() => {
@@ -32,14 +32,14 @@ export function ProjectsList() {
           || p.number.toLowerCase().includes(q)
           || p.client.toLowerCase().includes(q)
           || (p.businessUnit?.toLowerCase().includes(q) ?? false);
-        const matchStatus = statusFilter === 'All' || p.status === statusFilter;
+        const matchPhase = phaseFilter === 'All' || p.phase === phaseFilter;
         const matchBU = buFilter === 'All' || p.businessUnit === buFilter;
-        return matchSearch && matchStatus && matchBU;
+        return matchSearch && matchPhase && matchBU;
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }, [projects, search, statusFilter, buFilter]);
+  }, [projects, search, phaseFilter, buFilter]);
 
-  const filtersActive = search.trim() !== '' || statusFilter !== 'All' || buFilter !== 'All';
+  const filtersActive = search.trim() !== '' || phaseFilter !== 'All' || buFilter !== 'All';
 
   return (
     <div className="px-8 pt-7 pb-10 max-w-[1400px]">
@@ -76,12 +76,12 @@ export function ProjectsList() {
         </div>
 
         <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg">
-          {STATUS_PILLS.map((status) => {
-            const active = statusFilter === status;
+          {PHASE_PILLS.map((phase) => {
+            const active = phaseFilter === phase;
             return (
               <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
+                key={phase}
+                onClick={() => setPhaseFilter(phase)}
                 className={[
                   'px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap',
                   active
@@ -89,7 +89,7 @@ export function ProjectsList() {
                     : 'text-fg-2 hover:text-navy hover:bg-surface',
                 ].join(' ')}
               >
-                {status}
+                {phase}
               </button>
             );
           })}

@@ -3,6 +3,15 @@ import { Modal } from './Modal';
 import { useStore } from '../store';
 import type { Project, ProjectStatus, ProjectBusinessUnit, ProjectPhase } from '../types';
 
+const PRE_SALES_BOARD_ID = 3477536693;
+const POST_SALES_BOARD_ID = 3523133226;
+
+const STATUS_OPTIONS: ProjectStatus[] = [
+  'Not Started', 'In Progress', 'On Hold', 'Review', 'Follow Up',
+  'Won', 'Lost', 'Declined to Bid', 'Rebid',
+  'Install', 'Close Out', 'Completed',
+];
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -21,7 +30,6 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
     status: 'Not Started' as ProjectStatus,
     phase: 'Pre-Sales' as ProjectPhase,
     value: '',
-    mondayItemId: undefined as number | undefined,
   });
 
   // Reset form when modal opens or project changes
@@ -36,7 +44,6 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
         status: project.status,
         phase: project.phase,
         value: project.value,
-        mondayItemId: project.mondayItemId,
       });
     }
   }, [open, project]);
@@ -52,7 +59,6 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
       status: form.status,
       phase: form.phase,
       value: form.value,
-      mondayItemId: form.mondayItemId,
     });
     onClose();
   };
@@ -141,26 +147,16 @@ export function ProjectSettingsModal({ open, onClose, project }: Props) {
             onChange={(e) => setForm({ ...form, status: e.target.value as ProjectStatus })}
             className="input"
           >
-            <option value="Not Started">Not Started</option>
-            <option value="In Progress">In Progress</option>
-            <option value="In Review">In Review</option>
-            <option value="Follow Up">Follow Up</option>
-            <option value="Won">Won</option>
-            <option value="Active">Active (legacy)</option>
-            <option value="Pending Closeout">Pending Closeout (legacy)</option>
-            <option value="Closed">Closed (legacy)</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
           </select>
+          <p className="text-[11px] text-fg-2 mt-1">
+            Status is normally synced from Monday.com — change here only to override.
+          </p>
         </Field>
 
-        <Field label="Monday.com Item ID">
-          <input
-            type="number"
-            value={form.mondayItemId ?? ''}
-            onChange={(e) => setForm({ ...form, mondayItemId: e.target.value ? Number(e.target.value) : undefined })}
-            className="input"
-            placeholder="Monday.com item ID (optional)"
-          />
-        </Field>
+        <MondayLinkPanel project={project} />
 
         <div className="flex justify-end gap-3 pt-4 border-t border-border">
           <button type="button" onClick={onClose} className="btn-secondary">
@@ -183,5 +179,40 @@ function Field({ label, required, children }: { label: string; required?: boolea
       </span>
       <div className="mt-1.5">{children}</div>
     </label>
+  );
+}
+
+function MondayLinkPanel({ project }: { project: Project }) {
+  const presalesUrl = project.mondayPresalesItemId
+    ? `https://instrata.monday.com/boards/${PRE_SALES_BOARD_ID}/pulses/${project.mondayPresalesItemId}`
+    : null;
+  const postsalesUrl = project.mondayPostsalesItemId
+    ? `https://instrata.monday.com/boards/${POST_SALES_BOARD_ID}/pulses/${project.mondayPostsalesItemId}`
+    : null;
+
+  return (
+    <div className="rounded-lg border border-border bg-surface/40 px-4 py-3">
+      <div className="text-[11px] font-bold tracking-[0.08em] uppercase text-fg-2 mb-2">
+        Monday.com Link
+      </div>
+      <dl className="grid grid-cols-[120px_1fr] gap-y-1.5 text-[13px]">
+        <dt className="text-fg-2">Project ID</dt>
+        <dd className="font-mono text-fg">
+          {project.projectCode ?? <span className="text-fg-2 italic">Not yet assigned</span>}
+        </dd>
+        <dt className="text-fg-2">Pre-Sales item</dt>
+        <dd>
+          {presalesUrl
+            ? <a href={presalesUrl} target="_blank" rel="noreferrer" className="text-orange hover:underline">{project.mondayPresalesItemId}</a>
+            : <span className="text-fg-2 italic">Not linked</span>}
+        </dd>
+        <dt className="text-fg-2">Post-Sales item</dt>
+        <dd>
+          {postsalesUrl
+            ? <a href={postsalesUrl} target="_blank" rel="noreferrer" className="text-orange hover:underline">{project.mondayPostsalesItemId}</a>
+            : <span className="text-fg-2 italic">Not linked</span>}
+        </dd>
+      </dl>
+    </div>
   );
 }

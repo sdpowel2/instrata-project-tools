@@ -1,16 +1,33 @@
-// Monday.com pipeline statuses (canonical going forward).
-// Legacy values ('Active' | 'Pending Closeout' | 'Closed') are still tolerated by
-// the StatusBadge color map and can be migrated by setting the new status in-app.
-export type MondayProjectStatus =
+// Union of every status value that can appear on either Monday board, kept in
+// sync with Monday so we never reject an inbound webhook value. Pre-sales and
+// post-sales boards share some statuses (Not Started, In Progress, Won) and
+// each carries its own pipeline-specific values on top.
+export type ProjectStatus =
+  // Pre-sales pipeline
   | 'Not Started'
   | 'In Progress'
-  | 'In Review'
+  | 'On Hold'
+  | 'Review'
   | 'Follow Up'
-  | 'Won';
+  | 'Won'
+  | 'Lost'
+  | 'Declined to Bid'
+  | 'Rebid'
+  // Post-sales pipeline (Won shared from above)
+  | 'Install'
+  | 'Close Out'
+  | 'Completed';
 
-export type LegacyProjectStatus = 'Active' | 'Pending Closeout' | 'Closed';
+// Display order for the pre-sales pipeline bar.
+export const PRE_SALES_STATUSES: ProjectStatus[] = [
+  'Not Started', 'In Progress', 'Review', 'Follow Up', 'Won', 'Lost',
+];
 
-export type ProjectStatus = MondayProjectStatus | LegacyProjectStatus;
+// Display order for the post-sales pipeline bar. "Won" is the duplicated
+// landing state from pre-sales — kept first so it reads as "just arrived."
+export const POST_SALES_STATUSES: ProjectStatus[] = [
+  'Won', 'Not Started', 'In Progress', 'Install', 'Close Out', 'Completed',
+];
 
 export type ProjectPhase = 'Pre-Sales' | 'Post-Sales';
 
@@ -161,6 +178,13 @@ export interface Project {
   value: string;
   /** Auth user id of the engineer this project is assigned to. */
   ownerId?: string;
+  /** Persistent ID written to both Monday boards' Project ID column. Format: INST-YYYY-NNNN. */
+  projectCode?: string;
+  /** Monday item id on the AV Pre-Sales Summary board (3477536693). */
+  mondayPresalesItemId?: number;
+  /** Monday item id on the post-sales board (3523133226). */
+  mondayPostsalesItemId?: number;
+  /** @deprecated single-board pointer — replaced by project_code + presales/postsales ids. Removed once cutover is complete. */
   mondayItemId?: number;
   dtoolsProjectId?: string;
   dtoolsBomStatus: DToolsBomStatus;

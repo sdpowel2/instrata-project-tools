@@ -1,0 +1,17 @@
+# Instrata Project Tools — Claude Context
+
+## Read first
+Always read `PROJECT_DOCS.md` before responding. This is the living 
+documentation for this project and contains architecture, schema, 
+feature inventory, and business rules.
+
+## Session rules
+- When we build or complete a feature, update the Feature Inventory 
+  in PROJECT_DOCS.md
+- When we add a new Edge Function, add it to the Edge Functions Inventory
+- When we add a DB migration, update the Database Schema section
+- At the end of any session where code changed, remind me to update 
+  the Changelog
+
+## Current focus
+Monday.com connection and bringing current projects live/status tracking.

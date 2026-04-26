@@ -14,9 +14,9 @@ import { EffortSurveyPrompt, EffortSurveyFooter } from './EffortSurvey';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import type {
-  ItemCategory, SubmittalItemLocation, ProjectPhase,
-  MondayProjectStatus,
+  ItemCategory, SubmittalItemLocation, ProjectPhase, ProjectStatus,
 } from '../types';
+import { PRE_SALES_STATUSES, POST_SALES_STATUSES } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
 
@@ -170,7 +170,7 @@ export function ProjectOverview() {
             </span>
           </div>
           <div className="p-6">
-            <PhaseTimeline status={project.status as MondayProjectStatus} />
+            <PhaseTimeline status={project.status} phase={project.phase} />
           </div>
         </div>
 
@@ -261,19 +261,17 @@ export function ProjectOverview() {
 // PhaseTimeline — Monday status pipeline as a stepper
 // =============================================================================
 
-const TIMELINE_PHASES: MondayProjectStatus[] = ['Not Started', 'In Progress', 'In Review', 'Follow Up', 'Won'];
-
-function PhaseTimeline({ status }: { status: MondayProjectStatus }) {
-  // Legacy statuses ('Active', 'Pending Closeout', 'Closed') aren't on the
-  // Monday timeline — fall back to the closest position.
-  const legacyMap: Record<string, number> = { Active: 1, 'Pending Closeout': 3, Closed: 4 };
-  const idx = TIMELINE_PHASES.indexOf(status) >= 0
-    ? TIMELINE_PHASES.indexOf(status)
-    : (legacyMap[status as string] ?? 0);
+// Stepper sequences are pulled from types.ts so they stay in sync with the
+// authoritative status enum. Off-pipeline statuses (On Hold / Lost / Declined
+// to Bid / Rebid) don't render on the timeline — those are surface-only states.
+function PhaseTimeline({ status, phase }: { status: ProjectStatus; phase: ProjectPhase }) {
+  const phases = phase === 'Pre-Sales' ? PRE_SALES_STATUSES : POST_SALES_STATUSES;
+  const rawIdx = phases.indexOf(status);
+  const idx = rawIdx >= 0 ? rawIdx : 0;
 
   return (
     <div className="flex items-center">
-      {TIMELINE_PHASES.map((p, i) => {
+      {phases.map((p, i) => {
         const done = i < idx;
         const here = i === idx;
         const color = done ? '#15803D' : here ? '#F68D2E' : '#CBD5E1';
@@ -297,7 +295,7 @@ function PhaseTimeline({ status }: { status: MondayProjectStatus }) {
                 {p}
               </div>
             </div>
-            {i < TIMELINE_PHASES.length - 1 && (
+            {i < phases.length - 1 && (
               <div
                 className="flex-1 h-0.5"
                 style={{ background: i < idx ? '#15803D' : '#E2E4E9', margin: '0 -4px 22px' }}
