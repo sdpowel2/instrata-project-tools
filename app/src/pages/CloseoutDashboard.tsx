@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Shield, AlertTriangle, Trash2, Download, CheckCircle2, ClipboardCheck, ChevronDown, ChevronRight, X, Eye, FileText, Upload, BookOpen } from 'lucide-react';
+import { Plus, Shield, AlertTriangle, Trash2, Download, CheckCircle2, ClipboardCheck, ChevronDown, ChevronRight, X, Eye, FileText, Upload, BookOpen, Rocket, MapPin, GripVertical } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
@@ -8,9 +8,10 @@ import { Modal } from '../components/Modal';
 import { LocationProductPicker } from '../components/LocationProductPicker';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { PhaseRibbon } from '../components/PhaseRibbon';
-import type { PunchStatus, PunchPriority, SignOffStatus, Warranty, ManualBookmark } from '../types';
+import type { PunchStatus, PunchPriority, SignOffStatus, Warranty, ManualBookmark, QuickStartRoom } from '../types';
 import { exportSignOffPDF } from '../utils/exportSignOffPDF';
 import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
+import { exportPunchListPDF } from '../utils/exportPunchListPDF';
 import { exportManualsPDF } from '../utils/exportManualsPDF';
 import { extractBookmarks } from '../utils/extractBookmarks';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -57,11 +58,11 @@ function WarrantyEditModal({
         </label>
         <div className="grid grid-cols-2 gap-4">
           <label className="block">
-            <span className="text-sm font-medium text-text-secondary">Manufacturer (from BoM)</span>
+            <span className="text-sm font-medium text-fg-2">Manufacturer (from BoM)</span>
             <input value={form.manufacturer ?? ''} readOnly className="input mt-1.5 bg-surface cursor-not-allowed" />
           </label>
           <label className="block">
-            <span className="text-sm font-medium text-text-secondary">Model (from BoM)</span>
+            <span className="text-sm font-medium text-fg-2">Model (from BoM)</span>
             <input value={form.model ?? ''} readOnly className="input mt-1.5 bg-surface cursor-not-allowed" />
           </label>
         </div>
@@ -161,13 +162,19 @@ export function CloseoutDashboard() {
   const deleteSignOffCustomItem = useStore((s) => s.deleteSignOffCustomItem);
   const addAsBuiltDrawing = useStore((s) => s.addAsBuiltDrawing);
   const deleteAsBuiltDrawing = useStore((s) => s.deleteAsBuiltDrawing);
+  const addQuickStartRoom = useStore((s) => s.addQuickStartRoom);
+  const deleteQuickStartRoom = useStore((s) => s.deleteQuickStartRoom);
+  const addQuickStartStep = useStore((s) => s.addQuickStartStep);
+  const updateQuickStartStep = useStore((s) => s.updateQuickStartStep);
+  const deleteQuickStartStep = useStore((s) => s.deleteQuickStartStep);
   const allBoM = useStore((s) => s.projectBoM);
   const projects = useStore((s) => s.projects);
   const projectBoM = useMemo(() => allBoM.filter((b) => b.projectId === projectId), [allBoM, projectId]);
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
   // ── All useState hooks ABOVE the early return ──
-  const [activeTab, setActiveTab] = useState<'warranties' | 'punch' | 'signoff' | 'drawings' | 'manuals'>('warranties');
+  const [activeTab, setActiveTab] = useState<'warranties' | 'punch' | 'signoff' | 'drawings' | 'manuals' | 'quickstart'>('warranties');
+  const [showAddRoom, setShowAddRoom] = useState(false);
   const [showAddWarranty, setShowAddWarranty] = useState(false);
   const [showAddPunch, setShowAddPunch] = useState(false);
   const [editingWarranty, setEditingWarranty] = useState<Warranty | null>(null);
@@ -184,6 +191,7 @@ export function CloseoutDashboard() {
   // As-Built Drawings state
   const [showAddDrawing, setShowAddDrawing] = useState(false);
   const [drawingForm, setDrawingForm] = useState({ title: '', revision: '', fileName: '', fileData: '' });
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // Sign-Off accordion state
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
@@ -217,7 +225,7 @@ export function CloseoutDashboard() {
     }
   }, [closeout, projectId, getOrCreate]);
 
-  if (!closeout) return <div className="p-8 text-text-secondary">Loading closeout package...</div>;
+  if (!closeout) return <div className="p-8 text-fg-2">Loading closeout package...</div>;
 
   const closeoutId = closeout.id;
 
@@ -249,8 +257,6 @@ export function CloseoutDashboard() {
   };
 
   // ── As-Built Drawings ──
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -340,6 +346,7 @@ export function CloseoutDashboard() {
     { key: 'signoff', label: 'Test & Sign-Off', icon: CheckCircle2, count: (closeout.signOffSheets || []).length },
     { key: 'drawings', label: 'As-Built Drawings', icon: ClipboardCheck, count: (closeout.asBuiltDrawings || []).length },
     { key: 'manuals', label: 'Manuals', icon: BookOpen, count: closeout.productManualUrl ? 1 : 0 },
+    { key: 'quickstart', label: 'Quick Start Guide', icon: Rocket, count: (closeout.quickStartRooms ?? []).length },
   ] as const;
 
   return (
@@ -354,7 +361,7 @@ export function CloseoutDashboard() {
           <p className="text-[13px] text-fg-2 mt-1 m-0">Punch list, warranties, sign-off sheets, and as-built drawings.</p>
         </div>
         <button
-          className="btn-primary text-sm"
+          className="btn-orange text-sm"
           onClick={() => {
             if (project && closeout) {
               exportCloseoutPDF(project, closeout, projectBoM, project.client, project.client)
@@ -373,7 +380,7 @@ export function CloseoutDashboard() {
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === tab.key ? 'bg-navy text-white' : 'bg-white text-text-secondary border border-border hover:bg-surface'
+              activeTab === tab.key ? 'bg-navy text-white' : 'bg-white text-fg-2 border border-border hover:bg-surface'
             }`}
           >
             <tab.icon size={16} />
@@ -429,7 +436,7 @@ export function CloseoutDashboard() {
                   {closeout.warranties.map((w, i) => (
                     <tr
                       key={w.id}
-                      className={`cursor-pointer hover:bg-blue-50/50 ${i % 2 === 1 ? 'bg-surface/30' : ''}`}
+                      className={`cursor-pointer hover:bg-surface/50 ${i % 2 === 1 ? 'bg-surface/30' : ''}`}
                       onClick={() => setEditingWarranty(w)}
                     >
                       <td className="px-5 py-2">
@@ -437,10 +444,10 @@ export function CloseoutDashboard() {
                           value={w.system}
                           onChange={(e) => handleInlineWarrantyChange(w.id, 'system', e.target.value)}
                           onClick={(e) => e.stopPropagation()}
-                          className="w-full text-sm font-medium text-text-primary bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
+                          className="w-full text-sm font-medium text-fg bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
                         />
                       </td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">
+                      <td className="px-5 py-3 text-sm text-fg-2">
                         {w.manufacturer} {w.model}
                       </td>
                       <td className="px-5 py-2">
@@ -448,7 +455,7 @@ export function CloseoutDashboard() {
                           value={w.vendor}
                           onChange={(e) => handleInlineWarrantyChange(w.id, 'vendor', e.target.value)}
                           onClick={(e) => e.stopPropagation()}
-                          className="w-full text-sm text-text-secondary bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
+                          className="w-full text-sm text-fg-2 bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
                           placeholder="Enter vendor"
                         />
                       </td>
@@ -458,7 +465,7 @@ export function CloseoutDashboard() {
                           value={w.startDate}
                           onChange={(e) => handleInlineWarrantyChange(w.id, 'startDate', e.target.value)}
                           onClick={(e) => e.stopPropagation()}
-                          className="text-sm text-text-secondary bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
+                          className="text-sm text-fg-2 bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
                         />
                       </td>
                       <td className="px-5 py-2">
@@ -468,23 +475,23 @@ export function CloseoutDashboard() {
                           value={w.durationMonths}
                           onChange={(e) => handleInlineWarrantyChange(w.id, 'durationMonths', Number(e.target.value))}
                           onClick={(e) => e.stopPropagation()}
-                          className="w-20 text-sm text-text-secondary bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
+                          className="w-20 text-sm text-fg-2 bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
                         />
-                        <span className="text-xs text-text-secondary ml-1">mo</span>
+                        <span className="text-xs text-fg-2 ml-1">mo</span>
                       </td>
                       <td className="px-5 py-2">
                         <input
                           value={w.contactName}
                           onChange={(e) => handleInlineWarrantyChange(w.id, 'contactName', e.target.value)}
                           onClick={(e) => e.stopPropagation()}
-                          className="w-full text-sm text-text-secondary bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
+                          className="w-full text-sm text-fg-2 bg-transparent border-b border-transparent hover:border-border focus:border-navy focus:outline-none px-0 py-1"
                           placeholder="Contact name"
                         />
                       </td>
                       <td className="px-3 py-3">
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteWarranty(closeoutId, w.id); }}
-                          className="p-1 rounded hover:bg-red-50 text-text-secondary hover:text-red-500"
+                          className="p-1 rounded hover:bg-red-50 text-fg-2 hover:text-red-500"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -501,7 +508,19 @@ export function CloseoutDashboard() {
       {/* ═══════════════════ Punch List Tab ═══════════════════ */}
       {activeTab === 'punch' && (
         <>
-          <div className="flex justify-end mb-4">
+          <div className="flex justify-end gap-3 mb-4">
+            <button
+              onClick={() => {
+                if (project) {
+                  exportPunchListPDF(project, closeout.punchItems, projectBoM)
+                    .catch((err) => { console.error('[Punch List PDF]', err); alert('PDF export failed: ' + err.message); });
+                }
+              }}
+              disabled={closeout.punchItems.length === 0}
+              className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download size={14} /> Export Punch List PDF
+            </button>
             <button onClick={() => setShowAddPunch(true)} className="btn-secondary text-sm"><Plus size={14} /> Add Punch Item</button>
           </div>
           {closeout.punchItems.length === 0 ? (
@@ -524,11 +543,11 @@ export function CloseoutDashboard() {
                 <tbody className="divide-y divide-border">
                   {closeout.punchItems.map((p, i) => (
                     <tr key={p.id} className={i % 2 === 1 ? 'bg-surface/30' : ''}>
-                      <td className="px-5 py-3 text-sm font-mono text-text-secondary">{i + 1}</td>
-                      <td className="px-5 py-3 text-sm text-text-primary">{p.description}</td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">{p.location}</td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">{getProductName(p.productRef) || <span className="text-text-secondary/50">&mdash;</span>}</td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">{p.assignedTo}</td>
+                      <td className="px-5 py-3 text-sm font-mono text-fg-2">{i + 1}</td>
+                      <td className="px-5 py-3 text-sm text-fg">{p.description}</td>
+                      <td className="px-5 py-3 text-sm text-fg-2">{p.location}</td>
+                      <td className="px-5 py-3 text-sm text-fg-2">{getProductName(p.productRef) || <span className="text-fg-2/50">&mdash;</span>}</td>
+                      <td className="px-5 py-3 text-sm text-fg-2">{p.assignedTo}</td>
                       <td className="px-5 py-3"><StatusBadge status={p.priority} /></td>
                       <td className="px-5 py-3">
                         <select
@@ -549,13 +568,13 @@ export function CloseoutDashboard() {
                         </select>
                       </td>
                       <td className="px-3 py-3">
-                        <button onClick={() => deletePunchItem(closeoutId, p.id)} className="p-1 rounded hover:bg-red-50 text-text-secondary hover:text-red-500"><Trash2 size={14} /></button>
+                        <button onClick={() => deletePunchItem(closeoutId, p.id)} className="p-1 rounded hover:bg-red-50 text-fg-2 hover:text-red-500"><Trash2 size={14} /></button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="px-5 py-3 bg-surface/50 border-t border-border text-sm text-text-secondary">
+              <div className="px-5 py-3 bg-surface/50 border-t border-border text-sm text-fg-2">
                 {closeout.punchItems.filter((p) => p.status !== 'Complete' && p.status !== 'N/A').length} open &middot; {closeout.punchItems.filter((p) => p.status === 'Complete').length} complete
               </div>
             </div>
@@ -568,7 +587,7 @@ export function CloseoutDashboard() {
         <>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <label className="text-sm font-medium text-text-primary whitespace-nowrap">Prepared By</label>
+              <label className="text-sm font-medium text-fg whitespace-nowrap">Prepared By</label>
               <input
                 value={signOffPreparedBy}
                 onChange={(e) => setSignOffPreparedBy(e.target.value)}
@@ -608,9 +627,9 @@ export function CloseoutDashboard() {
                       className="w-full flex items-center justify-between px-5 py-4 hover:bg-surface/50 transition-colors"
                     >
                       <div className="flex items-center gap-3">
-                        {isExpanded ? <ChevronDown size={18} className="text-navy" /> : <ChevronRight size={18} className="text-text-secondary" />}
+                        {isExpanded ? <ChevronDown size={18} className="text-navy" /> : <ChevronRight size={18} className="text-fg-2" />}
                         <span className="text-sm font-semibold text-navy">{room}</span>
-                        <span className="text-xs text-text-secondary bg-surface px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-fg-2 bg-surface px-2 py-0.5 rounded-full">
                           {items.length} product{items.length !== 1 ? 's' : ''}
                         </span>
                       </div>
@@ -632,10 +651,10 @@ export function CloseoutDashboard() {
                         <table className="w-full">
                           <thead>
                             <tr className="bg-surface/50">
-                              <th className="px-5 py-2 text-xs font-semibold text-text-secondary text-left uppercase tracking-wider">Manufacturer</th>
-                              <th className="px-5 py-2 text-xs font-semibold text-text-secondary text-left uppercase tracking-wider">Model</th>
-                              <th className="px-5 py-2 text-xs font-semibold text-text-secondary text-left uppercase tracking-wider">Description</th>
-                              <th className="px-5 py-2 text-xs font-semibold text-text-secondary text-left uppercase tracking-wider">Qty</th>
+                              <th className="px-5 py-2 text-xs font-semibold text-fg-2 text-left uppercase tracking-wider">Manufacturer</th>
+                              <th className="px-5 py-2 text-xs font-semibold text-fg-2 text-left uppercase tracking-wider">Model</th>
+                              <th className="px-5 py-2 text-xs font-semibold text-fg-2 text-left uppercase tracking-wider">Description</th>
+                              <th className="px-5 py-2 text-xs font-semibold text-fg-2 text-left uppercase tracking-wider">Qty</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-border">
@@ -643,10 +662,10 @@ export function CloseoutDashboard() {
                               const locQty = item.locations.find((l) => l.room === room)?.qty ?? item.qty;
                               return (
                                 <tr key={item.id}>
-                                  <td className="px-5 py-2.5 text-sm text-text-primary">{item.manufacturer}</td>
-                                  <td className="px-5 py-2.5 text-sm text-text-secondary">{item.model}</td>
-                                  <td className="px-5 py-2.5 text-sm text-text-secondary">{item.description}</td>
-                                  <td className="px-5 py-2.5 text-sm text-text-secondary">{locQty}</td>
+                                  <td className="px-5 py-2.5 text-sm text-fg">{item.manufacturer}</td>
+                                  <td className="px-5 py-2.5 text-sm text-fg-2">{item.model}</td>
+                                  <td className="px-5 py-2.5 text-sm text-fg-2">{item.description}</td>
+                                  <td className="px-5 py-2.5 text-sm text-fg-2">{locQty}</td>
                                 </tr>
                               );
                             })}
@@ -656,14 +675,14 @@ export function CloseoutDashboard() {
                         {/* Custom items */}
                         {sheet && (sheet.customItems || []).length > 0 && (
                           <div className="px-5 py-3 border-t border-border">
-                            <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Custom Items</p>
+                            <p className="text-xs font-semibold text-fg-2 uppercase tracking-wider mb-2">Custom Items</p>
                             <div className="space-y-1.5">
                               {(sheet.customItems || []).map((ci) => (
                                 <div key={ci.id} className="flex items-center justify-between bg-surface/50 rounded-lg px-3 py-2">
-                                  <span className="text-sm text-text-primary">{ci.text}</span>
+                                  <span className="text-sm text-fg">{ci.text}</span>
                                   <button
                                     onClick={() => deleteSignOffCustomItem(closeoutId, sheet.id, ci.id)}
-                                    className="p-0.5 rounded hover:bg-red-50 text-text-secondary hover:text-red-500"
+                                    className="p-0.5 rounded hover:bg-red-50 text-fg-2 hover:text-red-500"
                                   >
                                     <X size={14} />
                                   </button>
@@ -764,21 +783,21 @@ export function CloseoutDashboard() {
                 <tbody className="divide-y divide-border">
                   {(closeout.asBuiltDrawings || []).map((d, i) => (
                     <tr key={d.id} className={i % 2 === 1 ? 'bg-surface/30' : ''}>
-                      <td className="px-5 py-3 text-sm font-medium text-text-primary">{d.title}</td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">{d.fileName}</td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">{d.revision || '\u2014'}</td>
-                      <td className="px-5 py-3 text-sm text-text-secondary">{d.uploadedAt}</td>
+                      <td className="px-5 py-3 text-sm font-medium text-fg">{d.title}</td>
+                      <td className="px-5 py-3 text-sm text-fg-2">{d.fileName}</td>
+                      <td className="px-5 py-3 text-sm text-fg-2">{d.revision || '\u2014'}</td>
+                      <td className="px-5 py-3 text-sm text-fg-2">{d.uploadedAt}</td>
                       <td className="px-3 py-3 flex gap-1">
                         <button
                           onClick={() => handleViewDrawing(d)}
-                          className="p-1 rounded hover:bg-blue-50 text-text-secondary hover:text-navy"
+                          className="p-1 rounded hover:bg-blue-50 text-fg-2 hover:text-navy"
                           title="Download / View"
                         >
                           <Eye size={14} />
                         </button>
                         <button
                           onClick={() => deleteAsBuiltDrawing(closeoutId, d.id)}
-                          className="p-1 rounded hover:bg-red-50 text-text-secondary hover:text-red-500"
+                          className="p-1 rounded hover:bg-red-50 text-fg-2 hover:text-red-500"
                           title="Delete"
                         >
                           <Trash2 size={14} />
@@ -845,8 +864,8 @@ export function CloseoutDashboard() {
                     <BookOpen size={20} className="text-navy" />
                   </div>
                   <div>
-                    <p className="text-sm font-semibold text-text-primary">{closeout.productManualName}</p>
-                    <p className="text-xs text-text-secondary mt-0.5">{manualBookmarks.length > 0 ? `${manualBookmarks.filter(b => b.depth === 0).length} sections detected` : 'No bookmarks detected'}</p>
+                    <p className="text-sm font-semibold text-fg">{closeout.productManualName}</p>
+                    <p className="text-xs text-fg-2 mt-0.5">{manualBookmarks.length > 0 ? `${manualBookmarks.filter(b => b.depth === 0).length} sections detected` : 'No bookmarks detected'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -876,7 +895,7 @@ export function CloseoutDashboard() {
                   </button>
                   <button
                     onClick={() => { clearProductManual(closeoutId); setManualBookmarks([]); }}
-                    className="p-2 rounded-lg hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors"
+                    className="p-2 rounded-lg hover:bg-red-50 text-fg-2 hover:text-red-500 transition-colors"
                     title="Remove manual"
                   >
                     <Trash2 size={16} />
@@ -894,8 +913,8 @@ export function CloseoutDashboard() {
                   <div className="divide-y divide-border">
                     {manualBookmarks.map((bm, i) => (
                       <div key={i} className="flex items-center justify-between px-5 py-2.5" style={{ paddingLeft: `${20 + bm.depth * 16}px` }}>
-                        <span className={`text-sm ${bm.depth === 0 ? 'font-semibold text-navy' : 'text-text-secondary'}`}>{bm.title}</span>
-                        {bm.page > 0 && <span className="text-xs font-mono text-text-secondary ml-4 shrink-0">p. {bm.page}</span>}
+                        <span className={`text-sm ${bm.depth === 0 ? 'font-semibold text-navy' : 'text-fg-2'}`}>{bm.title}</span>
+                        {bm.page > 0 && <span className="text-xs font-mono text-fg-2 ml-4 shrink-0">p. {bm.page}</span>}
                       </div>
                     ))}
                   </div>
@@ -905,6 +924,58 @@ export function CloseoutDashboard() {
           )}
         </>
       )}
+
+      {/* ═══════════════════ Quick Start Guide Tab ═══════════════════ */}
+      {activeTab === 'quickstart' && (
+        <>
+          <div className="flex justify-end mb-4">
+            <button onClick={() => setShowAddRoom(true)} className="btn-secondary text-sm">
+              <Plus size={14} /> Add a Room
+            </button>
+          </div>
+          {(closeout.quickStartRooms ?? []).length === 0 ? (
+            <EmptyState
+              icon={<Rocket size={48} />}
+              title="No quick start rooms yet"
+              description="Add a room to walk the client through how to operate it."
+              action={
+                <button onClick={() => setShowAddRoom(true)} className="btn-primary">
+                  <Plus size={16} /> Add a Room
+                </button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {(closeout.quickStartRooms ?? []).map((room) => (
+                <QuickStartRoomCard
+                  key={room.id}
+                  room={room}
+                  onDelete={() => {
+                    if (confirm(`Delete the "${room.name}" quick start room? All steps will be removed.`)) {
+                      deleteQuickStartRoom(closeoutId, room.id);
+                    }
+                  }}
+                  onAddStep={() => addQuickStartStep(closeoutId, room.id, { text: '', note: '' })}
+                  onUpdateStep={(stepId, updates) => updateQuickStartStep(closeoutId, room.id, stepId, updates)}
+                  onDeleteStep={(stepId) => deleteQuickStartStep(closeoutId, room.id, stepId)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ─── Add Room Modal ─── */}
+      <AddQuickStartRoomModal
+        open={showAddRoom}
+        onClose={() => setShowAddRoom(false)}
+        availableRooms={roomGroups.map(([room]) => room)}
+        existingRoomNames={new Set((closeout.quickStartRooms ?? []).map((r) => r.name))}
+        onAdd={(name) => {
+          addQuickStartRoom(closeoutId, name);
+          setShowAddRoom(false);
+        }}
+      />
 
       {/* ─── Warranty Edit Modal ─── */}
       <WarrantyEditModal
@@ -1012,10 +1083,10 @@ export function CloseoutDashboard() {
               type="file"
               accept="application/pdf"
               onChange={handleFileChange}
-              className="mt-1.5 block w-full text-sm text-text-secondary file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-navy file:text-white hover:file:bg-navy/90 file:cursor-pointer"
+              className="mt-1.5 block w-full text-sm text-fg-2 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-navy file:text-white hover:file:bg-navy/90 file:cursor-pointer"
             />
             {drawingForm.fileName && (
-              <p className="text-xs text-text-secondary mt-1">Selected: {drawingForm.fileName}</p>
+              <p className="text-xs text-fg-2 mt-1">Selected: {drawingForm.fileName}</p>
             )}
           </label>
           <div className="flex justify-end gap-3 pt-4 border-t border-border">
@@ -1025,5 +1096,205 @@ export function CloseoutDashboard() {
         </form>
       </Modal>
     </div>
+  );
+}
+
+/* ─── Quick Start Guide: Room card with editable steps ─── */
+function QuickStartRoomCard({
+  room,
+  onDelete,
+  onAddStep,
+  onUpdateStep,
+  onDeleteStep,
+}: {
+  room: QuickStartRoom;
+  onDelete: () => void;
+  onAddStep: () => void;
+  onUpdateStep: (stepId: string, updates: { text?: string; note?: string }) => void;
+  onDeleteStep: (stepId: string) => void;
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-border shadow-sm overflow-hidden">
+      <div className="px-5 py-3.5 bg-navy/5 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-2 h-7 rounded" style={{ background: '#F68D2E' }} />
+          <h3 className="text-base font-semibold text-navy m-0 truncate">{room.name}</h3>
+          <span className="text-xs text-fg-2 whitespace-nowrap">
+            {room.steps.length} step{room.steps.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <button
+          onClick={onDelete}
+          className="p-1.5 rounded hover:bg-red-50 text-fg-2 hover:text-red-500 transition-colors"
+          title="Delete room"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+
+      {room.steps.length === 0 ? (
+        <div className="px-5 py-8 text-center text-sm text-fg-2">
+          No steps yet. Add the first step below.
+        </div>
+      ) : (
+        <ol className="divide-y divide-border-soft">
+          {room.steps.map((step, i) => (
+            <li key={step.id} className="px-5 py-4 flex items-start gap-3">
+              <GripVertical size={14} className="text-fg-3 mt-2.5 flex-shrink-0" />
+              <div className="flex items-center justify-center w-7 h-7 rounded-full bg-navy text-white text-xs font-bold font-mono flex-shrink-0 mt-1">
+                {i + 1}
+              </div>
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <input
+                  value={step.text}
+                  onChange={(e) => onUpdateStep(step.id, { text: e.target.value })}
+                  placeholder="Step (e.g. Press the Start button)"
+                  className="input text-sm"
+                />
+                <textarea
+                  value={step.note}
+                  onChange={(e) => onUpdateStep(step.id, { note: e.target.value })}
+                  placeholder="Note (optional — extra context shown below the step)"
+                  rows={2}
+                  className="input text-xs"
+                />
+              </div>
+              <button
+                onClick={() => onDeleteStep(step.id)}
+                className="p-1.5 rounded hover:bg-red-50 text-fg-2 hover:text-red-500 transition-colors flex-shrink-0 mt-1"
+                title="Delete step"
+              >
+                <X size={14} />
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      <div className="px-5 py-3 border-t border-border bg-surface/40">
+        <button onClick={onAddStep} className="btn-secondary text-sm">
+          <Plus size={14} /> Add Step
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Quick Start Guide: Add Room modal ─── */
+function AddQuickStartRoomModal({
+  open,
+  onClose,
+  availableRooms,
+  existingRoomNames,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  availableRooms: string[];
+  existingRoomNames: Set<string>;
+  onAdd: (name: string) => void;
+}) {
+  const [customName, setCustomName] = useState('');
+  const [search, setSearch] = useState('');
+
+  // Reset on open/close
+  useEffect(() => {
+    if (!open) {
+      setCustomName('');
+      setSearch('');
+    }
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = availableRooms.filter((r) => r && r !== 'Unassigned');
+    if (!q) return list;
+    return list.filter((r) => r.toLowerCase().includes(q));
+  }, [availableRooms, search]);
+
+  const handleAddCustom = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = customName.trim();
+    if (!name) return;
+    onAdd(name);
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Add a Room" wide>
+      <div className="space-y-5">
+        {/* Custom name */}
+        <div>
+          <label className="block text-sm font-medium text-fg mb-1.5">Custom room name</label>
+          <form onSubmit={handleAddCustom} className="flex gap-2">
+            <input
+              value={customName}
+              onChange={(e) => setCustomName(e.target.value)}
+              placeholder='e.g. "Conference Room 145"'
+              className="input flex-1"
+              autoFocus
+            />
+            <button
+              type="submit"
+              disabled={!customName.trim()}
+              className="btn-primary text-sm whitespace-nowrap disabled:opacity-50"
+            >
+              <Plus size={14} /> Add
+            </button>
+          </form>
+          <p className="text-xs text-fg-2 mt-1.5">
+            Type a name if your BoM doesn't have rooms broken out (e.g. quotes built by equipment type).
+          </p>
+        </div>
+
+        {/* Or pick from BoM */}
+        {availableRooms.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs uppercase tracking-wider text-fg-2 font-semibold">Or pick from project locations</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
+            {availableRooms.length > 6 && (
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter locations…"
+                className="input text-sm mb-2"
+              />
+            )}
+
+            <div className="border border-border rounded-lg overflow-hidden bg-white" style={{ maxHeight: 320, overflowY: 'auto' }}>
+              {filtered.length === 0 ? (
+                <div className="py-8 text-center text-sm text-fg-2">
+                  No matching locations.
+                </div>
+              ) : (
+                <ul className="divide-y divide-border-soft">
+                  {filtered.map((room) => {
+                    const alreadyAdded = existingRoomNames.has(room);
+                    return (
+                      <li key={room}>
+                        <button
+                          type="button"
+                          onClick={() => onAdd(room)}
+                          disabled={alreadyAdded}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-surface/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={alreadyAdded ? 'Already added' : undefined}
+                        >
+                          <MapPin size={13} className="text-fg-2 flex-shrink-0" />
+                          <span className="flex-1 min-w-0 truncate">{room}</span>
+                          {alreadyAdded && <span className="text-[10px] text-fg-3 uppercase tracking-wider">Added</span>}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }

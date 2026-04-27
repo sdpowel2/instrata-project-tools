@@ -46,13 +46,49 @@ function addFooter(page: PDFPage, font: PDFFont, pageNum: number, label?: string
   }
 }
 
+/** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
+function sanitize(s: string | null | undefined): string {
+  if (!s) return '';
+  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function truncateText(text: string, font: PDFFont, size: number, maxW: number): string {
-  let t = text;
+  const original = sanitize(text);
+  let t = original;
   while (font.widthOfTextAtSize(t, size) > maxW && t.length > 0) {
     t = t.slice(0, -1);
   }
-  if (t !== text && t.length > 0) t = t.slice(0, -1) + '\u2026';
+  if (t !== original && t.length > 0) t = t.slice(0, -1) + '\u2026';
   return t;
+}
+
+/** Word-wrap text to a max width. Long single words get hard-truncated with
+ *  an ellipsis so they never overflow. */
+function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  const clean = sanitize(text);
+  if (!clean) return [''];
+  const words = clean.split(/\s+/);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      if (font.widthOfTextAtSize(word, size) > maxWidth) {
+        let truncated = word;
+        while (truncated.length > 0 && font.widthOfTextAtSize(truncated + '\u2026', size) > maxWidth) {
+          truncated = truncated.slice(0, -1);
+        }
+        current = truncated + '\u2026';
+      } else {
+        current = word;
+      }
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length > 0 ? lines : [''];
 }
 
 function drawTableRow(
@@ -68,11 +104,12 @@ function drawTableRow(
     page.drawRectangle({ x: MARGIN, y: y - 4, width: CONTENT_W, height: 18, color: bg });
   }
   for (const col of cols) {
-    let text = col.text;
+    const original = sanitize(col.text);
+    let text = original;
     while (font.widthOfTextAtSize(text, size) > col.w - 4 && text.length > 0) {
       text = text.slice(0, -1);
     }
-    if (text !== col.text && text.length > 0) text = text.slice(0, -1) + '\u2026';
+    if (text !== original && text.length > 0) text = text.slice(0, -1) + '\u2026';
     page.drawText(text, { x: col.x, y, size, font, color });
   }
 }
@@ -165,43 +202,68 @@ export async function exportCloseoutPDF(
 
   coverPage.drawRectangle({ x: MARGIN + 80, y: PAGE_H - 240, width: CONTENT_W - 160, height: 2, color: ORANGE });
 
-  const projectNameSize = 22;
-  const projectNameW = fontBold.widthOfTextAtSize(project.name, projectNameSize);
-  coverPage.drawText(project.name, {
-    x: (PAGE_W - projectNameW) / 2,
-    y: PAGE_H - 300,
-    size: projectNameSize,
-    font: fontBold,
-    color: NAVY,
-  });
+  // Project name — wrap with breathing room (matches the other PDFs).
+  const HERO_MAX_W = CONTENT_W - 80;
+  let projectNameSize = 22;
+  let projectNameLines = wrapText(project.name, fontBold, projectNameSize, HERO_MAX_W);
+  if (projectNameLines.some((l) => fontBold.widthOfTextAtSize(l, projectNameSize) > HERO_MAX_W)) {
+    projectNameSize = 18;
+    projectNameLines = wrapText(project.name, fontBold, projectNameSize, HERO_MAX_W);
+  }
+  const nameLineHeight = projectNameSize + 6;
+  const nameTopY = PAGE_H - 300;
+  for (let i = 0; i < projectNameLines.length; i++) {
+    const line = projectNameLines[i];
+    const w = fontBold.widthOfTextAtSize(line, projectNameSize);
+    coverPage.drawText(line, {
+      x: (PAGE_W - w) / 2,
+      y: nameTopY - i * nameLineHeight,
+      size: projectNameSize,
+      font: fontBold,
+      color: NAVY,
+    });
+  }
+  const nameBlockBottom = nameTopY - (projectNameLines.length - 1) * nameLineHeight;
 
   const titleText = 'Closeout Package';
   const titleSize = 16;
   const titleW = fontRegular.widthOfTextAtSize(titleText, titleSize);
+  const titleY = nameBlockBottom - 30;
   coverPage.drawText(titleText, {
     x: (PAGE_W - titleW) / 2,
-    y: PAGE_H - 330,
+    y: titleY,
     size: titleSize,
     font: fontRegular,
     color: DARK_GRAY,
   });
 
-  const detailsY = PAGE_H - 430;
+  const detailsY = titleY - 100;
   const detailLines = [
-    { label: 'Prepared By:', value: preparedBy },
-    { label: 'Submitted To:', value: submittedTo },
+    { label: 'Prepared By:', value: sanitize(preparedBy) },
+    { label: 'Submitted To:', value: sanitize(submittedTo) },
     { label: 'Date:', value: today },
-    { label: 'Project No.:', value: project.number },
+    { label: 'Project No.:', value: sanitize(project.number) },
   ];
 
   for (let i = 0; i < detailLines.length; i++) {
     const d = detailLines[i];
     const y = detailsY - i * 24;
     const labelW = fontBold.widthOfTextAtSize(d.label, 11);
-    const totalW = labelW + 8 + fontRegular.widthOfTextAtSize(d.value, 11);
+    // Truncate the value if it would push the centered line wider than the
+    // hero zone (matches the other PDFs).
+    const cleanValue = d.value || '\u2014';
+    let value = cleanValue;
+    while (
+      labelW + 8 + fontRegular.widthOfTextAtSize(value, 11) > HERO_MAX_W &&
+      value.length > 1
+    ) {
+      value = value.slice(0, -1);
+    }
+    if (value !== cleanValue && value.length > 0) value = value.slice(0, -1) + '\u2026';
+    const totalW = labelW + 8 + fontRegular.widthOfTextAtSize(value, 11);
     const startX = (PAGE_W - totalW) / 2;
     coverPage.drawText(d.label, { x: startX, y, size: 11, font: fontBold, color: NAVY });
-    coverPage.drawText(d.value, { x: startX + labelW + 8, y, size: 11, font: fontRegular, color: DARK_GRAY });
+    coverPage.drawText(value, { x: startX + labelW + 8, y, size: 11, font: fontRegular, color: DARK_GRAY });
   }
 
   coverPage.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: 6, color: ORANGE });
@@ -318,6 +380,9 @@ export async function exportCloseoutPDF(
   }
 
   // ===================== PUNCH LIST SECTION =====================
+  // Mirrors the standalone Punch List PDF: items grouped by location with an
+  // orange-accent header per group, a navy column band (Done / # / Description
+  // / Priority / Assigned To / Status), and a checkbox per row.
   {
     const { page: hdrPage, nextPageNum } = drawSectionHeaderPage(pdfDoc, 'Punch List', fontBold, fontRegular, currentPageNum);
     currentPageNum = nextPageNum;
@@ -331,38 +396,156 @@ export async function exportCloseoutPDF(
     if (punchItems.length === 0) {
       page.drawText('No punch items recorded.', { x: MARGIN, y, size: 11, font: fontItalic, color: MID_GRAY });
     } else {
-      const pCols = [
-        { label: 'Description', x: MARGIN, w: 180 },
-        { label: 'Location', x: MARGIN + 180, w: 100 },
-        { label: 'Status', x: MARGIN + 280, w: 70 },
-        { label: 'Priority', x: MARGIN + 350, w: 65 },
-        { label: 'Assigned To', x: MARGIN + 415, w: 89 },
-      ];
-
-      page.drawRectangle({ x: MARGIN, y: y - 4, width: CONTENT_W, height: 18, color: NAVY });
-      for (const col of pCols) {
-        page.drawText(col.label, { x: col.x + 4, y, size: 8, font: fontBold, color: WHITE });
+      // Group by location. Items without a location land under "Unassigned"
+      // so nothing is silently dropped — caught a bug where punch items with
+      // empty location strings disappeared from the closeout PDF.
+      const grouped = new Map<string, typeof punchItems>();
+      for (const item of punchItems) {
+        const key = (item.location && item.location.trim()) || 'Unassigned';
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key)!.push(item);
       }
-      y -= 20;
+      const locations = Array.from(grouped.keys()).sort((a, b) => {
+        if (a === 'Unassigned') return 1;
+        if (b === 'Unassigned') return -1;
+        return a.localeCompare(b);
+      });
 
-      for (let i = 0; i < punchItems.length; i++) {
-        if (y < MARGIN + 50) {
+      // Column geometry — must fit inside CONTENT_W (504pt). Same layout as
+      // the standalone Punch List PDF.
+      const COL = {
+        checkX: MARGIN + 6,
+        checkSize: 11,
+        numX: MARGIN + 28,
+        descX: MARGIN + 60,
+        descW: 240,
+        priorityX: MARGIN + 304,
+        assignedX: MARGIN + 370,
+        assignedW: 90,
+        statusX: MARGIN + 466,
+      };
+      const RED = rgb(0.725, 0.110, 0.110);
+
+      function drawColumnHeader(p: PDFPage, atY: number) {
+        p.drawRectangle({ x: MARGIN, y: atY - 4, width: CONTENT_W, height: 18, color: NAVY });
+        p.drawText('Done', { x: COL.checkX, y: atY, size: 8, font: fontBold, color: WHITE });
+        p.drawText('#', { x: COL.numX, y: atY, size: 8, font: fontBold, color: WHITE });
+        p.drawText('Description', { x: COL.descX, y: atY, size: 8, font: fontBold, color: WHITE });
+        p.drawText('Priority', { x: COL.priorityX, y: atY, size: 8, font: fontBold, color: WHITE });
+        p.drawText('Assigned To', { x: COL.assignedX, y: atY, size: 8, font: fontBold, color: WHITE });
+        p.drawText('Status', { x: COL.statusX, y: atY, size: 8, font: fontBold, color: WHITE });
+      }
+
+      function drawLocationHeader(p: PDFPage, atY: number, location: string, count: number, suffix?: string) {
+        p.drawRectangle({ x: MARGIN, y: atY - 2, width: 4, height: 16, color: ORANGE });
+        const label = suffix ? `${sanitize(location)} ${suffix}` : sanitize(location);
+        p.drawText(label, { x: MARGIN + 12, y: atY, size: 12, font: fontBold, color: NAVY });
+        const countText = `${count} item${count === 1 ? '' : 's'}`;
+        p.drawText(countText, {
+          x: PAGE_W - MARGIN - fontItalic.widthOfTextAtSize(countText, 9),
+          y: atY + 1,
+          size: 9,
+          font: fontItalic,
+          color: MID_GRAY,
+        });
+      }
+
+      let itemNumber = 0;
+      for (const location of locations) {
+        const items = grouped.get(location)!;
+
+        // Need ~80pt to fit a location header + column band + 1 row before
+        // paginating; otherwise start fresh on a new page.
+        if (y < MARGIN + 80) {
           addFooter(page, fontRegular, currentPageNum, 'Punch List');
           page = pdfDoc.addPage(PageSizes.Letter);
           currentPageNum++;
           y = PAGE_H - MARGIN;
         }
 
-        const p = punchItems[i];
-        const bg = i % 2 === 0 ? undefined : LIGHT_GRAY;
-        drawTableRow(page, y, [
-          { text: p.description, x: pCols[0].x + 4, w: pCols[0].w },
-          { text: p.location, x: pCols[1].x + 4, w: pCols[1].w },
-          { text: p.status, x: pCols[2].x + 4, w: pCols[2].w },
-          { text: p.priority, x: pCols[3].x + 4, w: pCols[3].w },
-          { text: p.assignedTo, x: pCols[4].x + 4, w: pCols[4].w },
-        ], fontRegular, 9, BLACK, bg);
+        drawLocationHeader(page, y, location, items.length);
+        y -= 24;
+        drawColumnHeader(page, y);
         y -= 18;
+
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          itemNumber++;
+
+          const descLines = wrapText(item.description, fontRegular, 9, COL.descW - 6);
+          const rowH = Math.max(20, descLines.length * 12 + 8);
+
+          if (y - rowH < MARGIN + 30) {
+            addFooter(page, fontRegular, currentPageNum, 'Punch List');
+            page = pdfDoc.addPage(PageSizes.Letter);
+            currentPageNum++;
+            y = PAGE_H - MARGIN;
+            drawLocationHeader(page, y, location, items.length, '(continued)');
+            y -= 24;
+            drawColumnHeader(page, y);
+            y -= 18;
+          }
+
+          const rowBg = i % 2 === 1 ? LIGHT_GRAY : undefined;
+          if (rowBg) {
+            page.drawRectangle({ x: MARGIN, y: y - rowH + 14, width: CONTENT_W, height: rowH, color: rowBg });
+          }
+
+          const topY = y;
+          const isComplete = item.status === 'Complete';
+
+          // Checkbox (pre-checked if Complete)
+          page.drawRectangle({
+            x: COL.checkX, y: topY - 1, width: COL.checkSize, height: COL.checkSize,
+            borderColor: DARK_GRAY, borderWidth: 1,
+          });
+          if (isComplete) {
+            page.drawText('X', { x: COL.checkX + 2, y: topY, size: 10, font: fontBold, color: NAVY });
+          }
+
+          page.drawText(String(itemNumber), {
+            x: COL.numX, y: topY, size: 9, font: fontBold, color: NAVY,
+          });
+
+          for (let li = 0; li < descLines.length; li++) {
+            page.drawText(descLines[li], {
+              x: COL.descX,
+              y: topY - li * 12,
+              size: 9,
+              font: fontRegular,
+              color: BLACK,
+            });
+          }
+
+          const priorityColor = item.priority === 'Critical' ? RED : DARK_GRAY;
+          const priorityFont = item.priority === 'Critical' ? fontBold : fontRegular;
+          page.drawText(sanitize(item.priority), {
+            x: COL.priorityX, y: topY, size: 9, font: priorityFont, color: priorityColor,
+          });
+
+          const cleanAssigned = sanitize(item.assignedTo) || '\u2014';
+          let assigned = cleanAssigned;
+          while (fontRegular.widthOfTextAtSize(assigned, 9) > COL.assignedW - 4 && assigned.length > 0) {
+            assigned = assigned.slice(0, -1);
+          }
+          if (assigned !== cleanAssigned) assigned = assigned.slice(0, -1) + '\u2026';
+          page.drawText(assigned, {
+            x: COL.assignedX, y: topY, size: 9, font: fontRegular, color: DARK_GRAY,
+          });
+
+          page.drawText(sanitize(item.status), {
+            x: COL.statusX,
+            y: topY,
+            size: 9,
+            font: fontRegular,
+            color: isComplete ? rgb(0.082, 0.502, 0.239) : DARK_GRAY,
+          });
+
+          y -= rowH;
+        }
+
+        // Spacing between location groups
+        y -= 14;
       }
 
       addFooter(page, fontRegular, currentPageNum, 'Punch List');
@@ -434,7 +617,7 @@ export async function exportCloseoutPDF(
 
       // Room header bar
       page.drawRectangle({ x: MARGIN, y: y - 6, width: CONTENT_W, height: 30, color: NAVY });
-      page.drawText(room, { x: MARGIN + 10, y, size: 14, font: fontBold, color: WHITE });
+      page.drawText(sanitize(room), { x: MARGIN + 10, y, size: 14, font: fontBold, color: WHITE });
       y -= 44;
 
       // Table header
@@ -575,7 +758,7 @@ export async function exportCloseoutPDF(
           // If drawing can't be loaded, add a placeholder page
           const placeholderPage = pdfDoc.addPage(PageSizes.Letter);
           currentPageNum++;
-          placeholderPage.drawText(`As-Built Drawing: ${drawing.title}`, {
+          placeholderPage.drawText(sanitize(`As-Built Drawing: ${drawing.title}`), {
             x: MARGIN,
             y: PAGE_H / 2,
             size: 14,

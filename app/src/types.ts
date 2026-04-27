@@ -304,8 +304,25 @@ export interface CloseoutPackage {
   punchItems: PunchItem[];
   signOffSheets: SignOffSheet[];
   asBuiltDrawings: AsBuiltDrawing[];
+  quickStartRooms: QuickStartRoom[];
   productManualUrl?: string;
   productManualName?: string;
+}
+
+export interface QuickStartRoom {
+  id: string;
+  closeoutId: string;
+  name: string;
+  sortOrder: number;
+  steps: QuickStartStep[];
+}
+
+export interface QuickStartStep {
+  id: string;
+  roomId: string;
+  text: string;
+  note: string;
+  sortOrder: number;
 }
 
 export interface ManualBookmark {

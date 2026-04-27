@@ -7,6 +7,7 @@ import {
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
+import { DToolsSyncDot } from '../components/DToolsSyncDot';
 import { Eyebrow, PageHeader } from '../components/ui';
 import type { Project, ProjectStatus, ProjectPhase } from '../types';
 
@@ -343,6 +344,7 @@ function ProjectRow({ project, onOpen, first }: { project: Project; onOpen: (p: 
       <div className="w-[3px] h-9 rounded-sm" style={{ background: accent }} />
       <div className="min-w-0">
         <div className="flex items-center gap-2.5">
+          <DToolsSyncDot project={project} />
           <div className="text-sm font-semibold text-fg truncate">{project.name}</div>
           <span
             className="text-[10px] font-bold tracking-[0.1em] uppercase px-1.5 py-0.5 rounded"

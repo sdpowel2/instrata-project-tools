@@ -43,6 +43,12 @@ function addFooter(page: PDFPage, font: PDFFont, pageNum: number, totalLabel?: s
   }
 }
 
+/** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
+function sanitize(s: string | null | undefined): string {
+  if (!s) return '';
+  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function drawTableRow(
   page: PDFPage,
   y: number,
@@ -56,12 +62,13 @@ function drawTableRow(
     page.drawRectangle({ x: MARGIN, y: y - 4, width: CONTENT_W, height: 18, color: bg });
   }
   for (const col of cols) {
-    let text = col.text;
+    const original = sanitize(col.text);
+    let text = original;
     // Truncate text that's too wide
     while (font.widthOfTextAtSize(text, size) > col.w - 4 && text.length > 0) {
       text = text.slice(0, -1);
     }
-    if (text !== col.text && text.length > 0) text = text.slice(0, -1) + '…';
+    if (text !== original && text.length > 0) text = text.slice(0, -1) + '…';
     page.drawText(text, { x: col.x, y, size, font, color });
   }
 }
@@ -117,9 +124,10 @@ export async function exportSubmittalPDF(
   coverPage.drawRectangle({ x: MARGIN + 80, y: PAGE_H - 240, width: CONTENT_W - 160, height: 2, color: ORANGE });
 
   // Project name
+  const projectName = sanitize(project.name);
   const projectNameSize = 22;
-  const projectNameW = fontBold.widthOfTextAtSize(project.name, projectNameSize);
-  coverPage.drawText(project.name, {
+  const projectNameW = fontBold.widthOfTextAtSize(projectName, projectNameSize);
+  coverPage.drawText(projectName, {
     x: (PAGE_W - projectNameW) / 2,
     y: PAGE_H - 300,
     size: projectNameSize,
@@ -128,9 +136,10 @@ export async function exportSubmittalPDF(
   });
 
   // Submittal title
+  const submittalTitle = sanitize(submittal.title);
   const titleSize = 16;
-  const titleW = fontRegular.widthOfTextAtSize(submittal.title, titleSize);
-  coverPage.drawText(submittal.title, {
+  const titleW = fontRegular.widthOfTextAtSize(submittalTitle, titleSize);
+  coverPage.drawText(submittalTitle, {
     x: (PAGE_W - titleW) / 2,
     y: PAGE_H - 330,
     size: titleSize,
@@ -139,8 +148,9 @@ export async function exportSubmittalPDF(
   });
 
   // Revision
-  const revW = fontItalic.widthOfTextAtSize(submittal.revision, 11);
-  coverPage.drawText(submittal.revision, {
+  const revText = sanitize(submittal.revision);
+  const revW = fontItalic.widthOfTextAtSize(revText, 11);
+  coverPage.drawText(revText, {
     x: (PAGE_W - revW) / 2,
     y: PAGE_H - 355,
     size: 11,
@@ -151,10 +161,10 @@ export async function exportSubmittalPDF(
   // Details section
   const detailsY = PAGE_H - 430;
   const detailLines = [
-    { label: 'Prepared By:', value: submittal.preparedBy },
-    { label: 'Submitted To:', value: submittal.submittedTo },
+    { label: 'Prepared By:', value: sanitize(submittal.preparedBy) },
+    { label: 'Submitted To:', value: sanitize(submittal.submittedTo) },
     { label: 'Date:', value: today },
-    { label: 'Project No.:', value: project.number },
+    { label: 'Project No.:', value: sanitize(project.number) },
   ];
 
   for (let i = 0; i < detailLines.length; i++) {
@@ -219,11 +229,12 @@ export async function exportSubmittalPDF(
 
     if (isHeader && tocEntries.indexOf(entry) > 0) tocY -= 8;
 
-    tocPage.drawText(entry.label, { x, y: tocY, size, font, color });
+    const tocLabel = sanitize(entry.label);
+    tocPage.drawText(tocLabel, { x, y: tocY, size, font, color });
     tocEntryPositions.push({ entry, y: tocY });
 
     // Draw dot leader
-    const textW = font.widthOfTextAtSize(entry.label, size);
+    const textW = font.widthOfTextAtSize(tocLabel, size);
     const dotsStart = x + textW + 8;
     const dotsEnd = PAGE_W - MARGIN - 30;
     if (dotsEnd > dotsStart) {
@@ -305,7 +316,7 @@ export async function exportSubmittalPDF(
 
     // Room header with orange accent
     bomPage.drawRectangle({ x: MARGIN, y: bomY - 2, width: 4, height: 16, color: ORANGE });
-    bomPage.drawText(room, { x: MARGIN + 12, y: bomY, size: 12, font: fontBold, color: NAVY });
+    bomPage.drawText(sanitize(room), { x: MARGIN + 12, y: bomY, size: 12, font: fontBold, color: NAVY });
     bomY -= 24;
 
     // Table header
@@ -382,7 +393,7 @@ export async function exportSubmittalPDF(
       const placeholderPage = pdfDoc.addPage(PageSizes.Letter);
       currentPageNum++;
       cutsheetPageMap.push({ item, startPage: currentPageNum });
-      placeholderPage.drawText(`Cutsheet: ${item.manufacturer} ${item.model}`, {
+      placeholderPage.drawText(sanitize(`Cutsheet: ${item.manufacturer} ${item.model}`), {
         x: MARGIN,
         y: PAGE_H / 2,
         size: 14,
