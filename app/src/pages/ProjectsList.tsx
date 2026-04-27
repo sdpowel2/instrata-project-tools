@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Search, ChevronRight } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
+import { DToolsSyncDot } from '../components/DToolsSyncDot';
 import { PageHeader } from '../components/ui';
 import type { ProjectPhase } from '../types';
 
@@ -143,6 +144,7 @@ export function ProjectsList() {
                         <div className="w-[3px] h-9 rounded-sm flex-shrink-0" style={{ background: accent }} />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
+                            <DToolsSyncDot project={project} />
                             <span className="text-sm font-semibold text-fg truncate">{project.name}</span>
                             <span
                               className="text-[10px] font-bold tracking-[0.1em] uppercase px-1.5 py-0.5 rounded whitespace-nowrap"

@@ -26,6 +26,12 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await r.arrayBuffer());
 }
 
+/** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
+function sanitize(s: string | null | undefined): string {
+  if (!s) return '';
+  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** Draws word-wrapped text, returns the Y position after the last line. */
 function drawWrapped(
   page: ReturnType<PDFDocument['addPage']>,
@@ -38,7 +44,7 @@ function drawWrapped(
   color: any,
   lineHeight = size + 4,
 ): number {
-  const words = (text || '').split(/\s+/);
+  const words = sanitize(text).split(/\s+/).filter(Boolean);
   let line = '';
   for (const word of words) {
     const test = line ? `${line} ${word}` : word;
@@ -84,14 +90,15 @@ export async function exportRFIPDF(rfi: RFI, project: Project): Promise<void> {
     y: y + 10,
     size: 8, font: fontBold, color: MID_GRAY,
   });
-  page.drawText(rfi.number, {
-    x: PAGE_W - MARGIN - fontBold.widthOfTextAtSize(rfi.number, 20),
+  const rfiNumber = sanitize(rfi.number);
+  page.drawText(rfiNumber, {
+    x: PAGE_W - MARGIN - fontBold.widthOfTextAtSize(rfiNumber, 20),
     y: y - 10,
     size: 20, font: fontBold, color: ORANGE,
   });
 
   // ── Subject ──
-  page.drawText(rfi.subject, { x: MARGIN, y, size: 15, font: fontBold, color: NAVY });
+  page.drawText(sanitize(rfi.subject), { x: MARGIN, y, size: 15, font: fontBold, color: NAVY });
   y -= 20;
 
   // ── Navy rule ──
@@ -115,8 +122,8 @@ export async function exportRFIPDF(rfi: RFI, project: Project): Promise<void> {
 
   // ── Project info band ──
   page.drawRectangle({ x: MARGIN, y: y - 5, width: CONTENT_W, height: 26, color: LIGHT_GRAY });
-  page.drawText(`Project: ${project.name}`, { x: MARGIN + 8, y: y + 4, size: 9, font: fontBold, color: NAVY });
-  const projNum = `No. ${project.number}`;
+  page.drawText(sanitize(`Project: ${project.name}`), { x: MARGIN + 8, y: y + 4, size: 9, font: fontBold, color: NAVY });
+  const projNum = sanitize(`No. ${project.number}`);
   page.drawText(projNum, {
     x: PAGE_W - MARGIN - fontRegular.widthOfTextAtSize(projNum, 9) - 8,
     y: y + 4, size: 9, font: fontRegular, color: DARK_GRAY,
@@ -128,12 +135,12 @@ export async function exportRFIPDF(rfi: RFI, project: Project): Promise<void> {
   const col2X = MARGIN + CONTENT_W / 2 + 8;
 
   const metaLeft  = [
-    ['SPEC SECTION / DRAWING REF', rfi.specSection || '—'],
-    ['CREATED',                    rfi.createdAt    || '—'],
+    ['SPEC SECTION / DRAWING REF', sanitize(rfi.specSection) || '—'],
+    ['CREATED',                    sanitize(rfi.createdAt)    || '—'],
   ];
   const metaRight = [
-    ['RESPONSE DUE', rfi.responseDue || '—'],
-    ['CLIENT',       project.client  || '—'],
+    ['RESPONSE DUE', sanitize(rfi.responseDue) || '—'],
+    ['CLIENT',       sanitize(project.client)  || '—'],
   ];
 
   for (let i = 0; i < metaLeft.length; i++) {
@@ -168,7 +175,7 @@ export async function exportRFIPDF(rfi: RFI, project: Project): Promise<void> {
     y = drawWrapped(page, rfi.responseSummary, MARGIN, y, CONTENT_W, 10, fontRegular, BLACK);
     y -= 8;
 
-    const byLine = `Answered by ${rfi.answeredBy || '—'}${rfi.answeredAt ? ` on ${rfi.answeredAt}` : ''}`;
+    const byLine = sanitize(`Answered by ${rfi.answeredBy || '—'}${rfi.answeredAt ? ` on ${rfi.answeredAt}` : ''}`);
     page.drawText(byLine, { x: MARGIN, y, size: 8, font: fontItalic, color: MID_GRAY });
   }
 

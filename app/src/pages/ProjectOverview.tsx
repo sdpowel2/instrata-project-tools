@@ -10,6 +10,7 @@ import { Modal } from '../components/Modal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { Eyebrow } from '../components/ui';
+import { DToolsImportPicker, type DToolsListedProject } from '../components/DToolsImportPicker';
 import { EffortSurveyPrompt, EffortSurveyFooter } from './EffortSurvey';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
@@ -33,6 +34,7 @@ export function ProjectOverview() {
   const addBoMItem = useStore((s) => s.addBoMItem);
   const importBoMItems = useStore((s) => s.importBoMItems);
   const syncDToolsBoM = useStore((s) => s.syncDToolsBoM);
+  const linkDToolsAndSyncBoM = useStore((s) => s.linkDToolsAndSyncBoM);
 
   const submittals = useMemo(() => allSubmittals.filter((x) => x.projectId === projectId), [allSubmittals, projectId]);
   const rfis = useMemo(() => allRfis.filter((x) => x.projectId === projectId), [allRfis, projectId]);
@@ -43,6 +45,7 @@ export function ProjectOverview() {
 
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
+  const [showDToolsPicker, setShowDToolsPicker] = useState(false);
   const [itemForm, setItemForm] = useState({
     manufacturer: '', model: '', description: '',
     category: 'Display' as ItemCategory,
@@ -198,7 +201,17 @@ export function ProjectOverview() {
         <ProjectQuoteSection
           project={project}
           bomItems={bomItems}
-          onSync={() => projectId && syncDToolsBoM(projectId)}
+          onSync={() => {
+            if (!projectId) return;
+            // Linked already → re-sync against the same DTools project.
+            // Not linked yet → open the picker so the user can choose which
+            // DTools project this Monday-imported row should pull from.
+            if (project.dtoolsProjectId) {
+              syncDToolsBoM(projectId);
+            } else {
+              setShowDToolsPicker(true);
+            }
+          }}
           onCsvImport={() => setShowCSVImport(true)}
           onAddItem={() => setShowAddItem(true)}
         />
@@ -207,6 +220,23 @@ export function ProjectOverview() {
       <EffortSurveyFooter project={project} onNavigate={(p) => navigate(p)} />
 
       <CSVImportModal open={showCSVImport} onClose={() => setShowCSVImport(false)} onImport={handleCSVImport} />
+
+      <DToolsImportPicker
+        open={showDToolsPicker}
+        onClose={() => setShowDToolsPicker(false)}
+        onSelect={async (p: DToolsListedProject) => {
+          if (!projectId) return;
+          await linkDToolsAndSyncBoM(projectId, {
+            dtoolsId: p.dtoolsId,
+            number: p.number,
+            projectTotal: p.projectTotal,
+          });
+          setShowDToolsPicker(false);
+        }}
+        title="Link this project to DTools"
+        description="Pick the DTools project this should sync with. The selected project's number, value, and Bill of Materials will be pulled in. You can re-sync anytime after linking."
+        errorLabel="Link failed"
+      />
 
       <Modal open={showAddItem} onClose={() => setShowAddItem(false)} title="Add Line Item">
         <form onSubmit={handleAddItem} className="space-y-4">

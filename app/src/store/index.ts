@@ -3,6 +3,7 @@ import type {
   Project, Submittal, SubmittalItem, RFI, CloseoutPackage,
   Warranty, PunchItem, SignOffSheet, OwnerManual, ManualSection, ManualDevice,
   ProjectBoMItem, BomItemType, AsBuiltDrawing,
+  QuickStartRoom, QuickStartStep,
   ItemCategory,
   SubmittalItemLocation,
   ReviewRun, ReviewFlag, ReviewRunStatus, ReviewFlagStatus,
@@ -215,7 +216,7 @@ function rfiToRow(r: Partial<RFI>): Record<string, any> {
 }
 
 // --- CloseoutPackage ---
-function rowToCloseout(r: any): Omit<CloseoutPackage, 'warranties' | 'punchItems' | 'signOffSheets' | 'asBuiltDrawings'> {
+function rowToCloseout(r: any): Omit<CloseoutPackage, 'warranties' | 'punchItems' | 'signOffSheets' | 'asBuiltDrawings' | 'quickStartRooms'> {
   return {
     id: r.id, projectId: r.project_id, status: r.status, createdAt: r.created_at,
     productManualUrl: r.product_manual_url ?? undefined,
@@ -306,6 +307,37 @@ function signOffSheetToRow(s: Partial<SignOffSheet>): Record<string, any> {
   if (s.status !== undefined) row.status = s.status;
   if (s.notes !== undefined) row.notes = s.notes;
   if (s.customItems !== undefined) row.custom_items = s.customItems;
+  return row;
+}
+
+// --- QuickStartRoom / QuickStartStep ---
+function rowToQuickStartRoom(r: any, steps: QuickStartStep[]): QuickStartRoom {
+  return {
+    id: r.id, closeoutId: r.closeout_id, name: r.name ?? '',
+    sortOrder: r.sort_order ?? 0, steps,
+  };
+}
+function quickStartRoomToRow(r: Partial<QuickStartRoom>): Record<string, any> {
+  const row: any = {};
+  if (r.id !== undefined) row.id = r.id;
+  if (r.closeoutId !== undefined) row.closeout_id = r.closeoutId;
+  if (r.name !== undefined) row.name = r.name;
+  if (r.sortOrder !== undefined) row.sort_order = r.sortOrder;
+  return row;
+}
+function rowToQuickStartStep(r: any): QuickStartStep {
+  return {
+    id: r.id, roomId: r.room_id, text: r.text ?? '', note: r.note ?? '',
+    sortOrder: r.sort_order ?? 0,
+  };
+}
+function quickStartStepToRow(s: Partial<QuickStartStep>): Record<string, any> {
+  const row: any = {};
+  if (s.id !== undefined) row.id = s.id;
+  if (s.roomId !== undefined) row.room_id = s.roomId;
+  if (s.text !== undefined) row.text = s.text;
+  if (s.note !== undefined) row.note = s.note;
+  if (s.sortOrder !== undefined) row.sort_order = s.sortOrder;
   return row;
 }
 
@@ -429,6 +461,7 @@ const seedCloseouts: CloseoutPackage[] = [
     ],
     signOffSheets: [],
     asBuiltDrawings: [],
+    quickStartRooms: [],
   },
 ];
 
@@ -559,6 +592,13 @@ interface AppState {
 
   // DTools sync
   syncDToolsBoM: (projectId: string) => Promise<void>;
+  /** Link an existing (non-DTools) project to a chosen DTools project, then
+   *  pull its BoM. Used by the "Sync from DTools" button on projects that
+   *  came from Monday and have no DTools id yet. */
+  linkDToolsAndSyncBoM: (
+    projectId: string,
+    dtools: { dtoolsId: string; number: string; projectTotal: number },
+  ) => Promise<void>;
 
   // Project BoM actions
   addBoMItem: (projectId: string, item: Omit<ProjectBoMItem, 'id' | 'projectId'>) => string;
@@ -606,6 +646,14 @@ interface AppState {
   deleteAsBuiltDrawing: (closeoutId: string, dId: string) => void;
   setProductManual: (closeoutId: string, url: string, name: string) => void;
   clearProductManual: (closeoutId: string) => void;
+
+  // Quick Start Guide actions
+  addQuickStartRoom: (closeoutId: string, name: string) => string;
+  updateQuickStartRoom: (closeoutId: string, roomId: string, updates: Partial<QuickStartRoom>) => void;
+  deleteQuickStartRoom: (closeoutId: string, roomId: string) => void;
+  addQuickStartStep: (closeoutId: string, roomId: string, step: Omit<QuickStartStep, 'id' | 'roomId' | 'sortOrder'>) => string;
+  updateQuickStartStep: (closeoutId: string, roomId: string, stepId: string, updates: Partial<QuickStartStep>) => void;
+  deleteQuickStartStep: (closeoutId: string, roomId: string, stepId: string) => void;
 
   // Manual actions
   addManual: (m: Omit<OwnerManual, 'id' | 'createdAt' | 'sections'>) => string;
@@ -680,6 +728,8 @@ export const useStore = create<AppState>((set, get) => ({
         supabase.from('punch_items').select('*'),
         supabase.from('sign_off_sheets').select('*'),
         supabase.from('as_built_drawings').select('*'),
+        supabase.from('quick_start_rooms').select('*'),
+        supabase.from('quick_start_steps').select('*'),
         supabase.from('owner_manuals').select('*'),
         // Review runs — summary only (no csv_snapshot, no flags)
         supabase.from('review_runs').select('id,project_id,run_number,triggered_at,status,reviewed_by,reviewed_at,created_at').order('run_number', { ascending: false }),
@@ -703,6 +753,8 @@ export const useStore = create<AppState>((set, get) => ({
         punchItemsRes,
         signOffSheetsRes,
         asBuiltDrawingsRes,
+        quickStartRoomsRes,
+        quickStartStepsRes,
         manualsRes,
         reviewRunsRes,
         bidLevelingSessionsRes,
@@ -710,7 +762,7 @@ export const useStore = create<AppState>((set, get) => ({
       ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes]) {
+      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
@@ -767,12 +819,35 @@ export const useStore = create<AppState>((set, get) => ({
         drawingsByCloseout.set(d.closeoutId, arr);
       }
 
+      // Quick Start: rooms keyed by closeout_id, with their nested steps.
+      const quickStartSteps = (quickStartStepsRes.data ?? []).map(rowToQuickStartStep);
+      const stepsByRoom = new Map<string, QuickStartStep[]>();
+      for (const s of quickStartSteps) {
+        const arr = stepsByRoom.get(s.roomId) ?? [];
+        arr.push(s);
+        stepsByRoom.set(s.roomId, arr);
+      }
+      const quickStartRoomsRaw = (quickStartRoomsRes.data ?? []);
+      const roomsByCloseout = new Map<string, QuickStartRoom[]>();
+      for (const r of quickStartRoomsRaw) {
+        const steps = (stepsByRoom.get(r.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
+        const room = rowToQuickStartRoom(r, steps);
+        const arr = roomsByCloseout.get(room.closeoutId) ?? [];
+        arr.push(room);
+        roomsByCloseout.set(room.closeoutId, arr);
+      }
+      // Sort each closeout's rooms once
+      for (const arr of roomsByCloseout.values()) {
+        arr.sort((a, b) => a.sortOrder - b.sortOrder);
+      }
+
       const closeouts: CloseoutPackage[] = (closeoutsRes.data ?? []).map((r) => ({
         ...rowToCloseout(r),
         warranties: warrantiesByCloseout.get(r.id) ?? [],
         punchItems: punchByCloseout.get(r.id) ?? [],
         signOffSheets: signOffByCloseout.get(r.id) ?? [],
         asBuiltDrawings: drawingsByCloseout.get(r.id) ?? [],
+        quickStartRooms: roomsByCloseout.get(r.id) ?? [],
       }));
 
       set({
@@ -837,6 +912,49 @@ export const useStore = create<AppState>((set, get) => ({
   // =========================================================================
   // DTools Sync
   // =========================================================================
+  linkDToolsAndSyncBoM: async (projectId, dtools) => {
+    const project = get().projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    // Format the DTools project total into the canonical `value` string the
+    // app uses elsewhere (matches `formatValue` in dtools-import-project).
+    const formattedValue = dtools.projectTotal && dtools.projectTotal > 0
+      ? '$' + dtools.projectTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : project.value;
+
+    // Optimistic local update so the BoM sync (which reads project.number)
+    // sees the DTools number on the next render.
+    set((s) => ({
+      projects: s.projects.map((p) => p.id === projectId ? {
+        ...p,
+        dtoolsProjectId: dtools.dtoolsId,
+        number: dtools.number || p.number,
+        value: formattedValue,
+        dtoolsBomStatus: 'loading' as const,
+      } : p),
+    }));
+
+    const { error: updateErr } = await supabase
+      .from('projects')
+      .update({
+        dtools_project_id: dtools.dtoolsId,
+        number: dtools.number || project.number,
+        value: formattedValue,
+        dtools_bom_status: 'loading',
+      })
+      .eq('id', projectId);
+
+    if (updateErr) {
+      console.error('[DTools link failed]', updateErr);
+      set((s) => ({
+        projects: s.projects.map((p) => p.id === projectId ? { ...p, dtoolsBomStatus: 'error' as const } : p),
+      }));
+      throw updateErr;
+    }
+
+    await get().syncDToolsBoM(projectId);
+  },
+
   syncDToolsBoM: async (projectId) => {
     const project = get().projects.find((p) => p.id === projectId);
     if (!project || !project.number) return;
@@ -1189,7 +1307,7 @@ export const useStore = create<AppState>((set, get) => ({
     const id = genId();
     const closeout: CloseoutPackage = {
       id, projectId, status: 'Draft', createdAt: now(),
-      warranties: [], punchItems: [], signOffSheets: [], asBuiltDrawings: [],
+      warranties: [], punchItems: [], signOffSheets: [], asBuiltDrawings: [], quickStartRooms: [],
     };
     set((s) => ({ closeouts: [...s.closeouts, closeout] }));
     dbExec(() => supabase.from('closeout_packages').insert(closeoutToRow(closeout)));
@@ -1409,6 +1527,88 @@ export const useStore = create<AppState>((set, get) => ({
       } : x),
     }));
     dbExec(() => supabase.from('as_built_drawings').delete().eq('id', dId));
+  },
+
+  // =========================================================================
+  // Quick Start Guide
+  // =========================================================================
+  addQuickStartRoom: (closeoutId, name) => {
+    const id = genId();
+    const closeout = get().closeouts.find((c) => c.id === closeoutId);
+    const sortOrder = (closeout?.quickStartRooms?.length ?? 0);
+    const room: QuickStartRoom = { id, closeoutId, name, sortOrder, steps: [] };
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId
+        ? { ...x, quickStartRooms: [...(x.quickStartRooms ?? []), room] }
+        : x),
+    }));
+    dbExec(() => supabase.from('quick_start_rooms').insert(quickStartRoomToRow(room)));
+    return id;
+  },
+
+  updateQuickStartRoom: (closeoutId, roomId, updates) => {
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId ? {
+        ...x,
+        quickStartRooms: (x.quickStartRooms ?? []).map((r) => r.id === roomId ? { ...r, ...updates } : r),
+      } : x),
+    }));
+    dbExec(() => supabase.from('quick_start_rooms').update(quickStartRoomToRow(updates)).eq('id', roomId));
+  },
+
+  deleteQuickStartRoom: (closeoutId, roomId) => {
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId ? {
+        ...x,
+        quickStartRooms: (x.quickStartRooms ?? []).filter((r) => r.id !== roomId),
+      } : x),
+    }));
+    // Steps cascade-delete via FK
+    dbExec(() => supabase.from('quick_start_rooms').delete().eq('id', roomId));
+  },
+
+  addQuickStartStep: (closeoutId, roomId, partial) => {
+    const id = genId();
+    const closeout = get().closeouts.find((c) => c.id === closeoutId);
+    const room = closeout?.quickStartRooms?.find((r) => r.id === roomId);
+    const sortOrder = room?.steps.length ?? 0;
+    const step: QuickStartStep = { id, roomId, text: partial.text, note: partial.note, sortOrder };
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId ? {
+        ...x,
+        quickStartRooms: (x.quickStartRooms ?? []).map((r) => r.id === roomId
+          ? { ...r, steps: [...r.steps, step] }
+          : r),
+      } : x),
+    }));
+    dbExec(() => supabase.from('quick_start_steps').insert(quickStartStepToRow(step)));
+    return id;
+  },
+
+  updateQuickStartStep: (closeoutId, roomId, stepId, updates) => {
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId ? {
+        ...x,
+        quickStartRooms: (x.quickStartRooms ?? []).map((r) => r.id === roomId ? {
+          ...r,
+          steps: r.steps.map((st) => st.id === stepId ? { ...st, ...updates } : st),
+        } : r),
+      } : x),
+    }));
+    dbExec(() => supabase.from('quick_start_steps').update(quickStartStepToRow(updates)).eq('id', stepId));
+  },
+
+  deleteQuickStartStep: (closeoutId, roomId, stepId) => {
+    set((s) => ({
+      closeouts: s.closeouts.map((x) => x.id === closeoutId ? {
+        ...x,
+        quickStartRooms: (x.quickStartRooms ?? []).map((r) => r.id === roomId ? {
+          ...r,
+          steps: r.steps.filter((st) => st.id !== stepId),
+        } : r),
+      } : x),
+    }));
+    dbExec(() => supabase.from('quick_start_steps').delete().eq('id', stepId));
   },
 
   // =========================================================================
