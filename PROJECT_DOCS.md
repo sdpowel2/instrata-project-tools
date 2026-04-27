@@ -192,6 +192,16 @@ Pricing/labor (added in base + `add_bom_pricing.sql`): `item_type` (default `'Pr
 - `id`, `project_id` (FK CASCADE), `title`, `revision`, `overview_text`, `created_at`, `sections` jsonb.
 - **RLS:** project members read/manage. Indexed by `project_id`.
 
+#### `quick_start_rooms` (`add_quick_start_guide.sql`)
+- `id` uuid PK, `closeout_id` uuid → `closeout_packages` CASCADE, `name`, `sort_order`, `created_at`.
+- One row per "room" in a closeout's Quick Start Guide. The `name` is either a verbatim BoM location (incl. sub-locations like `1st Floor\Conference Room A`) or a custom string typed by the user when the BoM isn't keyed by room.
+- **RLS:** project members read/manage (gated via `closeout_packages.project_id` + `is_project_member`). Indexed by `closeout_id`.
+
+#### `quick_start_steps` (`add_quick_start_guide.sql`)
+- `id` uuid PK, `room_id` uuid → `quick_start_rooms` CASCADE, `text`, `note`, `sort_order`.
+- Ordered operating-instruction steps inside a Quick Start room. `text` is the action ("Press the start button"), `note` is optional clarifying context shown beneath it.
+- **RLS:** project members read/manage (gated by joining through `quick_start_rooms` → `closeout_packages` → `is_project_member`). Indexed by `room_id`.
+
 ### Database Functions
 
 | Function | Type | Purpose |
@@ -361,8 +371,9 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Dashboard ("My Projects") | Complete | `Dashboard.tsx` filters by `owner_id`. |
 | Manager Dashboard | Complete | `ManagerDashboard.tsx` + `monday-manager-dashboard` function. Pulls Monday triage + review queues. |
 | Monday Live Phase + Status Sync | Complete | `monday-webhook` handles `create_pulse` + `change_status_column_value` on both Pre-Sales (3477536693) and Post-Sales (3523133226) boards. `monday-backfill` for one-shot population/recovery. `INST-YYYY-NNNN` `project_code` is the persistent link across boards, written to Monday's Project ID text column on both sides. Dashboard Pipeline Bar is phase-aware with separate tile sets per board. |
-| D-Tools Project Import | Complete | `ProjectNew` "Import from DTools" modal → `dtools-list-projects` + `dtools-import-project`. Idempotent on `dtools_project_id`. |
-| D-Tools BoM Sync | Complete | `dtools-project-lookup` writes per-line cost/price/labor/margin/owner-furnished/optional flags. |
+| D-Tools Project Import | Complete | `ProjectNew` "Import from DTools" modal → `dtools-list-projects` + `dtools-import-project`. Idempotent on `dtools_project_id`. Picker extracted to `DToolsImportPicker.tsx` and reused by the BoM sync flow. |
+| D-Tools BoM Sync | Complete | `dtools-project-lookup` writes per-line cost/price/labor/margin/owner-furnished/optional flags. The "Sync from DTools" button on the BoM page opens `DToolsImportPicker` for Monday-imported projects that aren't yet linked (`linkDToolsAndSyncBoM` store action records `dtools_project_id` + DTools number/value, then triggers the sync); already-linked projects re-sync directly. |
+| D-Tools Sync Indicator | Complete | `DToolsSyncDot.tsx` — green/red status dot rendered next to every project name on the dashboard's My Projects list and the Projects table. Driven by `project.dtoolsProjectId` presence. |
 | BoM Location View | Complete | `BoMLocationView.tsx` — qty per room. |
 | Catalog (Products) | Complete | `ProductsPage.tsx`, `CatalogImportModal`, `CatalogViewerModal`, `CSVImportModal`, `CellMapperModal`, `search_catalog` RPC. |
 | Catalog Sync from D-Tools | Complete | `app/src/lib/dtools/api-sync.ts` + `import-catalog.ts`; uses `last_synced_at` / `dtools_updated_on` for incremental. `CatalogSyncStatus.tsx` UI. |
@@ -371,7 +382,10 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Cutsheet Triage (Admin Review) | Complete | `CutsheetReview.tsx` — list/approve/reject/duplicate via `sharepoint-cutsheet`. Promotes pending submittal links to canonical repo links on approval. |
 | Cutsheet My Uploads | Complete | `CutsheetMyUploads.tsx` — uploader can track their own pending items. |
 | Submittals | Complete | `SubmittalList`, `SubmittalDetail`, `exportSubmittalPDF`, `submittalExclusions.ts`. Items link to repo or staging cutsheets via the two FK columns. |
-| Closeout Package | Complete | `CloseoutDashboard.tsx`, `exportCloseoutPDF.ts`, `exportSignOffPDF.ts`. Now includes optional product manual upload. |
+| Closeout Package | Complete | `CloseoutDashboard.tsx`, `exportCloseoutPDF.ts`, `exportSignOffPDF.ts`. Six tabs: Warranties, Punch List, Test & Sign-Off, As-Built Drawings, Manuals, Quick Start Guide. Closeout cover-page + punch section restyled to match the standalone Punch List PDF (grouped by location with checkboxes); items with empty location now group under `Unassigned` instead of being silently dropped. |
+| Punch List PDF Export | Complete | `exportPunchListPDF.ts` — Instrata-branded cover, items grouped by location with hollow checkboxes for field walkthroughs, item numbers, wrapped descriptions, red-bold `Critical` priority, pre-checked + green for `Complete` rows. Wired to the Closeout → Punch List tab. |
+| Test & Sign-Off PDF | Complete | `exportSignOffPDF.ts` — one page per room with a navy band header, items table with `Done` checkboxes, then the room sign-off statement (*"Instrata has completed the full scope of this room…"*) and a dual signature block (Client Representative + Instrata Representative — signature, printed name, date lines for each). |
+| Quick Start Guide | Complete | New tool on the closeout dashboard. `quick_start_rooms` + `quick_start_steps` tables. Add Room modal accepts a custom name (for projects whose BoM is keyed by equipment) or picks from the project's BoM location list (incl. sub-locations); already-added rooms are dimmed. Each room renders as a card with inline-editable steps, each step has a `text` field and an optional `note` field. |
 | O&M / Owner Manual | Complete | `OwnerManual.tsx`, `exportManualsPDF.ts`, `extractBookmarks.ts`. Skill-equivalent in-app. |
 | RFI List | Complete | `RFIList.tsx`, `exportRFIPDF.ts`. |
 | Auto Reviewer | Complete (schema + page) | `AutoReview.tsx`, `ReviewQueue.tsx`, `reviewEngine.ts`, `reviewReport.ts`. Backed by `review_runs`, `review_flags`, `review_config`, `labor_rates`. |
@@ -526,6 +540,18 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-04-27
+- **DTools — relink UX from the BoM page.** Extracted `DToolsImportPicker` into a reusable component with a generic `onSelect` callback so the New Project flow and the BoM page's "Sync from DTools" button share the same picker. Monday-imported projects no longer need to be created from DTools to use BoM sync — the button now opens the picker, and the new `linkDToolsAndSyncBoM` store action records `dtools_project_id` + DTools number/value before delegating to the existing sync. Already-linked projects re-sync directly with no modal.
+- **DTools — sync indicator dot.** Added `DToolsSyncDot.tsx` (green = linked, red = not linked) next to every project name on the dashboard's My Projects list and the Projects table.
+- **Closeout — render crash fix.** `CloseoutDashboard` had a `useState` call after the `if (!closeout) return ...` early return; when the closeout was created the hook order shifted and React unmounted the entire tree (no error boundary, so the page went blank with no sidebar). Hook hoisted above the return. Same drift potential exists elsewhere — this is the canonical reason hooks belong above early returns.
+- **PDF exports — WinAnsi sanitize layer.** Multi-line descriptions imported from DTools/CSV crashed `drawText` with `WinAnsi cannot encode " " (0x000a)` because pdf-lib's `StandardFonts.Helvetica` uses WinAnsi encoding which rejects control chars. Added a narrow `sanitize()` helper to all five PDF utils (`exportSignOffPDF`, `exportPunchListPDF`, `exportSubmittalPDF`, `exportCloseoutPDF`, `exportRFIPDF`) that collapses CR/LF/TAB/etc. into a single space; smart quotes, em-dashes, ellipsis, and other WinAnsi-supported Unicode pass through untouched.
+- **PDF exports — long project name overflow.** Long project names ran past the page edges on every cover page. Added a `wrapText` helper with a `HERO_MAX_W = CONTENT_W - 80` cap and an auto-fallback to 18pt if a single overlong word still doesn't fit. Title / subtitle / details now anchor to the bottom of the wrapped name block instead of fixed `y` offsets, so a 2-line name pushes everything below down. Applied to punch list, sign-off, and closeout package PDFs.
+- **PDF — new `exportPunchListPDF.ts`.** Instrata-branded cover, items grouped by location with hollow checkboxes for field walkthroughs, item numbers, wrapped descriptions, red-bold `Critical` priority. Pre-checked + green status for already-`Complete` rows. Continuation pages reprint the location header with `(continued)` so context is preserved across page breaks. Wired to a new `Export Punch List PDF` button on the Closeout → Punch List tab.
+- **PDF — rewrote `exportSignOffPDF.ts`.** One page per room (matches the field-walkthrough printable use case). Per room: navy band header, items table with `Done` checkboxes, the sign-off statement *"Instrata has completed the full scope of this room, including installing, configuring, programming and testing all components."*, then a dual signature block — `Client Representative` and `Instrata Representative` side-by-side, each with signature, printed name, and date lines. The whole sign-off block (~130pt) is checked against remaining space and pushed to a fresh continuation page atomically so statement and signatures never split.
+- **PDF — closeout package punch section restyled.** The flat `Description / Location / Status / Priority / Assigned To` table is replaced with the same grouped layout used in the standalone Punch List PDF (orange-accent location header, navy column band, hollow checkboxes). Items with empty `location` strings were being silently dropped; they now group under `Unassigned` instead.
+- **Closeout — restyle to current design tokens.** `Export Closeout PDF` button moved from `btn-primary` (navy) to `btn-orange` (matches `OwnerManual.tsx`, `RFIList.tsx` convention for the page primary CTA). Migrated 46 instances of `text-text-primary` → `text-fg` and `text-text-secondary` → `text-fg-2`. Warranty row hover went from `hover:bg-blue-50/50` to `hover:bg-surface/50` to match the Submittals pattern. Legacy aliases in `index.css` still work for other pages that haven't migrated.
+- **Closeout — Quick Start Guide tool (new).** Schema migration: `quick_start_rooms` (closeout-scoped, `name`, `sort_order`) and `quick_start_steps` (`text`, optional `note`, `sort_order`) — RLS via `is_project_member()` joining through `closeout_packages`. New tab on the closeout dashboard: "Add a Room" modal accepts a custom name (for projects whose BoM is keyed by equipment, e.g. `display, rack, credenza` rather than rooms) or picks from the project's BoM location list with sub-locations; already-added rooms are dimmed. Each room renders as a card; steps are inline-editable with a base text and an optional note, plus delete buttons for both rooms and steps. PDF export not yet wired — follow-up.
 
 ### 2026-04-26
 - **Monday.com — live phase + status sync.** Wired Project Tools to both Monday boards (Pre-Sales `3477536693`, Post-Sales `3523133226`) for real-time tracking, replacing the old "everything defaults to Post-Sales" behavior. Added `INST-YYYY-NNNN` `project_code` as the persistent project link across boards; written to both boards' Project ID text columns so it survives Monday's pre-sales→post-sales duplication automation.
