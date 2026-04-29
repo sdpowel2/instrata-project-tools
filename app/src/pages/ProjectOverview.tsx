@@ -4,6 +4,7 @@ import {
   FileText, MessageSquareWarning, ClipboardCheck, BookOpen,
   Upload, Plus, Package, RefreshCw, Loader2, Check,
   ScanLine, Scale, ChevronRight, Users, ChevronDown,
+  Calendar, Truck,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { Modal } from '../components/Modal';
@@ -12,6 +13,7 @@ import { ProjectHeader } from '../components/ProjectHeader';
 import { Eyebrow } from '../components/ui';
 import { DToolsImportPicker, type DToolsListedProject } from '../components/DToolsImportPicker';
 import { EffortSurveyPrompt, EffortSurveyFooter } from './EffortSurvey';
+import { ProjectLog } from '../components/ProjectLog';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import type {
@@ -153,6 +155,15 @@ export function ProjectOverview() {
     { tool: 'closeout',     icon: ClipboardCheck,       label: 'Closeout',     value: closeout?.punchItems.length ?? 0, sub: closeout ? `${punchOpen} open punch items` : 'Not yet started' },
     { tool: 'manual',       icon: BookOpen,             label: 'Owner Manual', value: manuals.length,    sub: manuals.length > 0 ? `${manuals[0].sections.length} sections` : 'Generated after closeout' },
   ];
+  // Operations is a parallel section. Tools render as quick-link rows that
+  // intentionally don't navigate yet — the underlying schedule / purchasing
+  // / inventory pages are scaffolded but not wired to routes until those
+  // features are built out.
+  const opsItems: ToolItem[] = [
+    { tool: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', value: '—', sub: 'Not yet scheduled' },
+    { tool: 'purchasing', icon: Truck,    label: 'Purchasing',            value: '—', sub: 'No POs issued' },
+    { tool: 'inventory',  icon: Package,  label: 'Inventory',             value: '—', sub: 'Nothing received' },
+  ];
 
   return (
     <div className="px-8 pt-7 pb-10 max-w-[1400px]">
@@ -180,8 +191,8 @@ export function ProjectOverview() {
         <TeamCard ownerId={project.ownerId} />
       </div>
 
-      {/* Tool group cards */}
-      <div className="mt-5 grid grid-cols-2 gap-5">
+      {/* Tool group cards — Pre-Sales / Post-Sales / Operations */}
+      <div className="mt-5 grid grid-cols-3 gap-5">
         <ToolGroupCard
           phase="Pre-Sales"
           items={preItems}
@@ -194,6 +205,18 @@ export function ProjectOverview() {
           description="Delivering the work. Submittals, closeout, and owner handoff."
           onOpen={(tool) => navigate(`/projects/${projectId}/${tool}`)}
         />
+        <ToolGroupCard
+          phase="Operations"
+          items={opsItems}
+          description="Running the work day-to-day. Schedule, purchasing, and inventory."
+          // Operations tool pages exist for styling reference but are not
+          // wired to routes yet — items render but don't navigate.
+        />
+      </div>
+
+      {/* Project Log — comments, files, client/GC log (scaffolded) */}
+      <div className="mt-5">
+        <ProjectLog project={project} />
       </div>
 
       {/* Project Quote — DTools BoM */}
@@ -389,12 +412,16 @@ interface ToolItem {
 }
 
 function ToolGroupCard({ phase, description, items, onOpen }: {
-  phase: ProjectPhase;
+  // Operations is a UI-only section that lives parallel to Pre/Post-Sales.
+  phase: ProjectPhase | 'Operations';
   description: string;
   items: ToolItem[];
-  onOpen: (tool: string) => void;
+  /** Optional. When omitted, items render but don't navigate (used for the
+   *  Operations card while those tools are still being built out). */
+  onOpen?: (tool: string) => void;
 }) {
-  const accent = phaseAccent(phase);
+  const accent = sectionAccent(phase);
+  const disabled = !onOpen;
   return (
     <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
       <div
@@ -412,12 +439,9 @@ function ToolGroupCard({ phase, description, items, onOpen }: {
       <div>
         {items.map((it, i) => {
           const Icon = it.icon;
-          return (
-            <button
-              key={it.tool}
-              onClick={() => onOpen(it.tool)}
-              className={`w-full flex items-center gap-3.5 px-5 py-3.5 text-left hover:bg-surface/60 transition-colors ${i === 0 ? '' : 'border-t border-border'}`}
-            >
+          const rowClass = `w-full flex items-center gap-3.5 px-5 py-3.5 text-left transition-colors ${i === 0 ? '' : 'border-t border-border'}`;
+          const content = (
+            <>
               <div
                 className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
                 style={{ background: `${accent}14`, color: accent }}
@@ -430,6 +454,27 @@ function ToolGroupCard({ phase, description, items, onOpen }: {
               </div>
               <div className="text-lg font-bold text-navy font-mono">{it.value}</div>
               <ChevronRight size={14} className="text-fg-2" />
+            </>
+          );
+          if (disabled) {
+            return (
+              <div
+                key={it.tool}
+                title="Coming soon"
+                aria-disabled="true"
+                className={`${rowClass} cursor-not-allowed opacity-70 select-none`}
+              >
+                {content}
+              </div>
+            );
+          }
+          return (
+            <button
+              key={it.tool}
+              onClick={() => onOpen(it.tool)}
+              className={`${rowClass} hover:bg-surface/60`}
+            >
+              {content}
             </button>
           );
         })}
@@ -768,6 +813,14 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
 
 function phaseAccent(phase: ProjectPhase): string {
   return phase === 'Pre-Sales' ? '#0072CE' : '#F68D2E';
+}
+
+// Section accent extends phase accent to include the Operations section,
+// which is parallel to Pre/Post-Sales in the UI but technically lives
+// under Post-Sales in the data model.
+function sectionAccent(section: ProjectPhase | 'Operations'): string {
+  if (section === 'Operations') return '#22C55E';
+  return phaseAccent(section);
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, ClipboardList, Package,
+  Home, ScanLine, ClipboardList, Package, Calendar, Truck,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,6 +28,15 @@ const postsalesTools = [
   { to: 'rfis', icon: MessageSquareWarning, label: 'RFIs' },
   { to: 'closeout', icon: ClipboardCheck, label: 'Closeout' },
   { to: 'manual', icon: BookOpen, label: 'Owner Manual' },
+];
+// Operations is a parallel section to Pre/Post-Sales. Tools here are
+// scaffolded for a future feature push — sidebar entries render but do not
+// navigate (the tool pages exist as components but are intentionally not
+// wired to routes yet).
+const operationsTools = [
+  { to: 'schedule', icon: Calendar, label: 'Schedule & Milestones' },
+  { to: 'purchasing', icon: Truck, label: 'Purchasing' },
+  { to: 'inventory', icon: Package, label: 'Inventory' },
 ];
 
 export function Layout() {
@@ -101,6 +110,18 @@ export function Layout() {
                   <SidebarLink
                     key={`post-${item.to}`}
                     to={`/projects/${project.id}/${item.to}`}
+                    icon={item.icon}
+                    label={item.label}
+                    indent
+                  />
+                ))}
+              </PhaseGroup>
+
+              {/* Operations group — links are inert until the tools ship. */}
+              <PhaseGroup label="Operations" accent="#22C55E">
+                {operationsTools.map((item) => (
+                  <SidebarDisabledLink
+                    key={`ops-${item.to}`}
                     icon={item.icon}
                     label={item.label}
                     indent
@@ -192,6 +213,32 @@ function SidebarLink({ to, icon: Icon, label, end, indent, badge }: SidebarLinkP
   );
 }
 
+// Inert sidebar entry that mirrors SidebarLink styling but does not
+// navigate. Used for Operations tools, which surface in the sidebar today
+// but won't be functional until the next feature push.
+function SidebarDisabledLink({
+  icon: Icon,
+  label,
+  indent,
+}: Omit<SidebarLinkProps, 'to' | 'badge'>) {
+  return (
+    <div
+      title="Coming soon"
+      aria-disabled="true"
+      className={[
+        'flex items-center gap-3 py-2.5 rounded-lg text-[14px] font-medium',
+        'border-l-2 border-transparent',
+        indent ? 'pl-3.5' : 'pl-2.5',
+        'pr-3',
+        'text-white/40 cursor-not-allowed select-none',
+      ].join(' ')}
+    >
+      <Icon size={17} />
+      <span className="flex-1">{label}</span>
+    </div>
+  );
+}
+
 // Polls the cutsheet_staging table for pending count so admins see the
 // queue depth in the sidebar at a glance. Polls every 60s — Phase 3 doesn't
 // warrant a realtime subscription.
@@ -221,7 +268,12 @@ function PhaseGroup({ label, accent, children }: { label: string; accent: string
   // Active path drives whether the group is highlighted; using location lets us
   // tint the group rail subtly when a tool inside it is open.
   const { pathname } = useLocation();
-  // Pre-Sales rail uses light blue; Post-Sales uses orange.
+  // Rail color matches the eyebrow accent at low opacity. Pre-Sales uses
+  // light blue; Post-Sales uses orange (var); Operations uses green.
+  const railColor =
+    accent.startsWith('var') ? 'rgba(246,141,46,0.28)'
+    : accent === '#22C55E'   ? 'rgba(34,197,94,0.28)'
+    :                          'rgba(111,182,255,0.25)';
   return (
     <div className="mb-3 last:mb-2">
       <div className="px-3.5 mb-1.5">
@@ -234,7 +286,7 @@ function PhaseGroup({ label, accent, children }: { label: string; accent: string
       </div>
       <div
         className="ml-3.5 pl-0.5 border-l"
-        style={{ borderColor: accent.startsWith('var') ? 'rgba(246,141,46,0.28)' : 'rgba(111,182,255,0.25)' }}
+        style={{ borderColor: railColor }}
         data-pathname={pathname}
       >
         {children}
