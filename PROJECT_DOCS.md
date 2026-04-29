@@ -140,6 +140,8 @@
 Base columns: `id`, `project_id` (FK), `manufacturer`, `model`, `description`, `category` (default `'Other'`), `qty` numeric, `notes`, `cut_sheet_url`, `cut_sheet_name`, `sort_order` int, `locations` jsonb (`[{room, qty}]`).
 
 Pricing/labor (added in base + `add_bom_pricing.sql`): `item_type` (default `'Product'`), `unit_cost`, `unit_price`, `labor_hours`, `labor_unit_cost`, `labor_unit_price`, `fixed_labor_cost`, `fixed_labor_price`, `margin_pct` (all numeric, default 0), `owner_furnished`, `optional` boolean.
+
+Vendor (`add_priced_from_to_bom.sql`): `priced_from` text — DTools "Custom Field 1", typically `"VENDOR MM/DD/YY"` (e.g. `"ADI 4/11/26"`). Surfaces in the Purchasing module's Vendor column only — intentionally hidden from the project overview BoM.
 - **RLS:** project members read/manage.
 - Indexed by `project_id`.
 
@@ -157,6 +159,16 @@ Pricing/labor (added in base + `add_bom_pricing.sql`): `item_type` (default `'Pr
 - **Cutsheet repository links** (added by cutsheet migrations):
   - `cutsheet_repository_id` uuid → `cutsheet_repository` ON DELETE SET NULL — auto-attached match
   - `cutsheet_staging_id` uuid → `cutsheet_staging` ON DELETE SET NULL — pending admin review
+- **Per-item approval** (`add_submittal_item_approval.sql`):
+  - `approval_state` text default `'pending'` — CHECK ∈ `('pending', 'approved', 'revise')`
+  - `approval_changed_at` timestamptz, `approval_changed_by` uuid → `profiles`
+  - Coexists with the package-level `submittals.status`. Cascade rules live in the store, not the DB:
+    - Package → `Approved`: cascade all items to `'approved'`
+    - Package → `Draft`: cascade all items to `'pending'`
+    - Package → `Submitted` / `Revise & Resubmit`: preserve existing item marks
+    - All items `'approved'` (per-item edit): auto-promote package to `'Approved'`
+    - Any item `'revise'` (per-item edit): auto-demote package to `'Revise & Resubmit'`
+- **Delete is blocked** in `store.deleteSubmittalItem` if any linked `purchasing_items` row has `purchase_status != 'not_ordered'`. Caller surfaces the error.
 - **RLS:** member-of-parent-project's submittal. Indexed by `submittal_id`.
 
 #### `rfis`
@@ -201,6 +213,63 @@ Pricing/labor (added in base + `add_bom_pricing.sql`): `item_type` (default `'Pr
 - `id` uuid PK, `room_id` uuid → `quick_start_rooms` CASCADE, `text`, `note`, `sort_order`.
 - Ordered operating-instruction steps inside a Quick Start room. `text` is the action ("Press the start button"), `note` is optional clarifying context shown beneath it.
 - **RLS:** project members read/manage (gated by joining through `quick_start_rooms` → `closeout_packages` → `is_project_member`). Indexed by `room_id`.
+
+#### `project_milestones` (`add_project_milestones.sql`)
+- `id` uuid PK, `project_id` uuid → `projects` CASCADE
+- `title`, `description`, `notes` text
+- `milestone_type` text — open enum (no DB CHECK); 17 canonical values defined in `app/src/types.ts` (`MILESTONE_TYPES`) split between contractual project-tier (e.g. `submittal_due`, `substantial_completion`, `closeout_package_due`) and operational phase-tier (e.g. `rough_in_complete`, `programming_complete`, `commissioning_complete`)
+- `tier` text CHECK ∈ `('project', 'phase')`
+- `phase` text nullable — free-form for phase-tier rows (e.g. `'Floor 2'`, `'Wing A'`, `'all'`)
+- `due_date`, `completed_date` date (`completed_date` set when marked complete)
+- `owner_id`, `created_by` uuid → `profiles`
+- `created_at`, `updated_at` timestamptz
+- **Status is computed client-side** by `computeMilestoneStatus()` in `types.ts` from `due_date` / `completed_date`: `complete` / `overdue` / `at_risk` (within 7 days) / `upcoming`. Never persisted — single source of truth lives in the dates.
+- **RLS:** project members read/manage. Indexed by `project_id` and `due_date`.
+
+#### `warehouses` (`add_warehouses.sql`)
+- `id` uuid PK, `name` text NOT NULL
+- `address_line1`, `address_line2`, `city`, `state`, `postal_code`, `notes` text (default `''`)
+- `is_active` boolean default `true` — soft-delete; inactive rows hide from purchasing dropdowns but historical purchasing rows still resolve the name
+- `created_by` uuid → `profiles`, `created_at`, `updated_at` timestamptz
+- **Org-wide table**, not project-scoped — Phase 1 assumption is one warehouse list shared across all Instrata projects.
+- **RLS:** any authenticated user reads (`auth.uid() is not null`); admin only (`profiles.role='admin'`) for INSERT/UPDATE/DELETE. Settings UI exposes the CRUD; non-admins won't see the section.
+- Indexed by `is_active`.
+
+#### `purchasing_modules` (`add_purchasing.sql`)
+- `id` uuid PK, `project_id` uuid → `projects` CASCADE
+- `title`, `notes` text (default `''`)
+- `created_by` uuid → `profiles`, `created_at`, `updated_at` timestamptz
+- A purchasing module is the work surface that converts one or more linked submittals into POs. Multiple modules per project are allowed (e.g. one per submittal, or one aggregating several).
+- **RLS:** project members read/manage. Indexed by `project_id`.
+
+#### `purchasing_module_submittals` (`add_purchasing.sql`)
+- Junction: `purchasing_module_id` uuid → `purchasing_modules` CASCADE, `submittal_id` uuid → `submittals` CASCADE, `linked_at`, `linked_by`. Unique on (`purchasing_module_id`, `submittal_id`).
+- Lets one purchasing module live-link many submittals and one submittal feed many modules. Items flow through automatically — there's no per-item snapshot.
+- **RLS:** project members (resolved via the module's `project_id`).
+
+#### `purchasing_items` (`add_purchasing.sql`)
+- `id` uuid PK
+- `purchasing_module_id` uuid → `purchasing_modules` CASCADE
+- `submittal_item_id` uuid → `submittal_items` CASCADE — ties each persisted purchaser row to the underlying submittal item; cascade-delete keeps the table clean if the upstream item is removed (deletion of ordered+ submittal items is blocked at the store layer)
+- Purchaser-entered: `purchase_unit_price` numeric, `ship_to_warehouse_id` uuid → `warehouses` ON DELETE SET NULL, `ship_to_custom_address` text, `need_by_date` date, `po_number` text, `notes` text
+- `purchase_status` text CHECK ∈ `('not_ordered', 'ordered', 'received')` default `'not_ordered'`. The `'draft'` and `'pending_approval'` visual states are computed at render from the submittal's package status + the item's `approval_state` — never persisted here.
+- `ordered_date`, `received_date` date — auto-set to today by the store when status advances; overridable
+- `updated_by` uuid → `profiles`, `created_at`, `updated_at` timestamptz
+- **Lazy persistence** — a row is only written once the purchaser interacts with the line. Display data (mfr, model, qty, sold-in price, vendor) is always live-resolved from the linked `submittal_items` + `project_bom_items`.
+- Unique on (`purchasing_module_id`, `submittal_item_id`). **RLS:** project members (resolved via the module's `project_id`). Indexed by both module id and submittal item id.
+
+#### `purchasing_freight` (`add_purchasing.sql`)
+- One row per (`purchasing_module_id`, `manufacturer`) — same shape as `purchasing_items` minus the submittal item link, plus a `manufacturer` text column.
+- Columns: `purchase_unit_price`, `ship_to_warehouse_id`, `ship_to_custom_address`, `need_by_date`, `purchase_status`, `ordered_date`, `received_date`, `po_number`, `notes`.
+- The detail page **always renders a freight row** per manufacturer; the DB row is created lazily on first edit.
+- Phase 1 captures actuals only; future "freight margin vs. quoted" math will hang off this table.
+- Unique on (`purchasing_module_id`, `manufacturer`). **RLS:** project members.
+
+#### `purchasing_manufacturer_defaults` (`add_purchasing.sql`)
+- One row per (`purchasing_module_id`, `manufacturer`).
+- Columns: `ship_to_warehouse_id`, `ship_to_custom_address`, `need_by_date`.
+- Per-manufacturer default ship-to and need-by — `purchasing_items` rows inherit these unless explicitly overridden. The detail-page UI greys-out an inherited value to make the override behavior obvious.
+- Unique on (`purchasing_module_id`, `manufacturer`). **RLS:** project members.
 
 ### Database Functions
 
@@ -296,6 +365,7 @@ All under `supabase/functions/`. Deno runtime. CORS allowed from `*`.
 
 ### `dtools-project-lookup`
 - **Purpose:** Search D-Tools by project number, double-fetch detail (aggregated by Location for qty + non-aggregated for `ItemLaborTypes` and `TypeId=2` rate map), compute per-line labor as `hours × rate` with Install fallback, write `project_bom_items` (DELETE then 100-row batches), update `projects.dtools_bom_status`/`value`.
+- **Vendor extraction:** `extractPricedFrom()` walks each item's custom-fields shape (array `CustomFields[]` / `ItemCustomFields[]` plus flat fallbacks `CustomField1` / `customField1` / `PricedFrom`) and writes the value to `project_bom_items.priced_from`. The Purchasing module displays this verbatim in the Vendor column. When the item is grouped (same mfr+model+unit_cost across rows), the first non-empty `priced_from` wins.
 - **External APIs:** D-Tools
 - **Tables touched:** `project_bom_items` (DELETE/INSERT), `projects` (UPDATE)
 
@@ -381,7 +451,7 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Cutsheet Staging Upload (Phase 2) | Complete | `sharepoint-cutsheet` `uploadStaging` op — auto-attached during submittal builder. |
 | Cutsheet Triage (Admin Review) | Complete | `CutsheetReview.tsx` — list/approve/reject/duplicate via `sharepoint-cutsheet`. Promotes pending submittal links to canonical repo links on approval. |
 | Cutsheet My Uploads | Complete | `CutsheetMyUploads.tsx` — uploader can track their own pending items. |
-| Submittals | Complete | `SubmittalList`, `SubmittalDetail`, `exportSubmittalPDF`, `submittalExclusions.ts`. Items link to repo or staging cutsheets via the two FK columns. |
+| Submittals | Complete | `SubmittalList`, `SubmittalDetail`, `exportSubmittalPDF`, `submittalExclusions.ts`. Items link to repo or staging cutsheets via the two FK columns. **Per-item approval** (`add_submittal_item_approval.sql`): `Approve` / `R&R` / `Reset` actions render in the items table when status is Submitted or R&R, hidden in Draft, locked-as-approved badges in Approved. Package status auto-promotes to Approved when every item is approved and auto-demotes to R&R when an item is reverted; package marks preserved across Approved → Submitted transitions. Item delete is blocked downstream if any linked Purchasing module has the item ordered+. |
 | Closeout Package | Complete | `CloseoutDashboard.tsx`, `exportCloseoutPDF.ts`, `exportSignOffPDF.ts`. Six tabs: Warranties, Punch List, Test & Sign-Off, As-Built Drawings, Manuals, Quick Start Guide. Closeout cover-page + punch section restyled to match the standalone Punch List PDF (grouped by location with checkboxes); items with empty location now group under `Unassigned` instead of being silently dropped. |
 | Punch List PDF Export | Complete | `exportPunchListPDF.ts` — Instrata-branded cover, items grouped by location with hollow checkboxes for field walkthroughs, item numbers, wrapped descriptions, red-bold `Critical` priority, pre-checked + green for `Complete` rows. Wired to the Closeout → Punch List tab. |
 | Test & Sign-Off PDF | Complete | `exportSignOffPDF.ts` — one page per room with a navy band header, items table with `Done` checkboxes, then the room sign-off statement (*"Instrata has completed the full scope of this room…"*) and a dual signature block (Client Representative + Instrata Representative — signature, printed name, date lines for each). |
@@ -392,10 +462,11 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Bid Leveling Generator | In Progress | Schema + `BidLevelingPage.tsx` + `bidLevelingEngine.ts` exist; spec is `BidLevelingGenerator_Phase1_Spec.docx` (Phase 1). |
 | Personal Ops Dashboard | In Progress | `PersonalOpsPage.tsx`, `usePersonalOps.ts`, `EmailDigestCard`, `ConnectEmailBanner`, `EmailActionBar`, `SessionSelector`. Functions wired (`ms-graph-auth`, `ms-graph-emails`, `email-triage`). Spec at `personal_ops_feature_spec.html`. |
 | Effort Survey | Complete | `EffortSurvey.tsx`. |
-| Project Sections — Operations | Scaffolded | Sidebar group + Overview tool card render alongside Pre-Sales / Post-Sales with green accent. Sidebar links and overview rows are intentionally inert (`SidebarDisabledLink`, no `onOpen`) until the underlying tools ship. |
+| Project Sections — Operations | Live (Schedule + Purchasing) | Sidebar group + Overview tool card render alongside Pre-Sales / Post-Sales with green accent. Schedule & Milestones and Purchasing are now live links with real counts; Inventory is still scaffolded (`SidebarDisabledLink`, dimmed in the Overview card). |
 | Project Log card (Activity, Files & History) | Scaffolded | `ProjectLog.tsx` on the Overview between the tool grid and BoM. Three tabs (Comments / Files / Client GC Log) with full header, tab pills with counts, and per-tab CTAs (Export PDF on Client/GC Log, Download all on Files). Each tab body renders an empty-state placeholder; full design scaffolding (composer, comment row, file/log meta tables) is kept in the file under `_PROJECT_LOG_SCAFFOLD` for future use. |
-| Schedule & Milestones | Future | `app/src/pages/operations/ScheduleMilestones.tsx` exists with full styling but is not wired to a route. |
-| Purchasing | Future | `app/src/pages/operations/Purchasing.tsx` exists with full styling but is not wired to a route. |
+| Schedule & Milestones | Complete | `pages/operations/ScheduleMilestones.tsx` — two-tier list (project / phase) with computed status badges (`upcoming` / `at_risk` / `overdue` / `complete`), 7-day at-risk window, mark-complete prompt with optional note, edit/delete with confirmation, read-only Timeline view toggle, "Apply Default Commercial AV Template" wizard (12 milestones, +14 to +150 day offsets defined in `utils/milestoneTemplates.ts`). Project Overview surfaces a Next-3 milestones widget below the tool group cards. Phase 1 spec at `Product Spec/milestone-tracking.md`. |
+| Purchasing | Complete | `pages/operations/PurchasingList.tsx` (modules per project) + `pages/operations/PurchasingDetail.tsx` (manufacturer-grouped table). Each module live-links one or more submittals with a persistent `+ Add Submittal` button. Detail view shows mfr/model/desc/qty/sold-in price (`unit_cost`)/vendor (`priced_from`) live-resolved, with inline-editable purchase price, ship-to (warehouse picker + custom address), need-by date, and PO number. Per-manufacturer header carries default ship-to + need-by; per-item rows inherit (greyed) unless overridden. Status advances `not_ordered → ordered → received` with auto-set dates. Always-visible freight row per manufacturer. Persistent red warning banner lists ordered items whose submittal-side approval has been reverted, until re-approved. Phase 1 spec at `Product Spec/02-purchasing-equipment-status.md`; deferred items tracked in `Product Spec/future_features.md`. |
+| Warehouses | Complete | Org-wide ship-to destinations with name + address + active flag. Settings page exposes admin-only CRUD (`SettingsPage.tsx → WarehousesSection`). Backed by `warehouses` table; consumed by Purchasing module ship-to dropdowns. |
 | Inventory | Future | `app/src/pages/operations/Inventory.tsx` exists with full styling but is not wired to a route. |
 | Comments (Project Log) | Future | Inline composer + threaded replies with reactions and notification indicators. Tab placeholder lives in `ProjectLog.tsx`. |
 | Files (Project Log) | Future | Standardized project file repository (Contracts / Drawings / Submittals / Meeting Notes / Photos / Closeout). Tab placeholder lives in `ProjectLog.tsx`. |
@@ -548,6 +619,14 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-04-29
+- **Milestones — feature shipped.** Two-tier model (project + phase) with the 17-value type registry split between contractual project-tier and operational phase-tier. Status (`upcoming` / `at_risk` / `overdue` / `complete`) is **computed client-side** from `due_date` / `completed_date` so it can't drift from reality. Default Commercial AV template (12 milestones, +14 to +150 day offsets, anchored off a project start date) lives in `app/src/utils/milestoneTemplates.ts`. New page `pages/operations/ScheduleMilestones.tsx` replaces the staged scaffold with a list view (sectioned project / phase, action menu per row, mark-complete prompt with optional note) and a read-only Timeline toggle. Project Overview surfaces a Next-3 widget below the tool group cards. Spec: `Product Spec/milestone-tracking.md`. Migration: `add_project_milestones.sql`.
+- **Submittal item-level approval (refactor of the Submittals module).** New `submittal_items.approval_state` column (`pending` / `approved` / `revise`) with `approval_changed_at/by`. SubmittalDetail renders a new Approval column with `Approve` / `R&R` / `Reset` actions visible only when package status is Submitted or R&R, locked-as-approved badges in Approved, hidden in Draft. Cascade rules live in `store.updateSubmittal` and `store.setSubmittalItemApproval`: package → Approved cascades all items to `'approved'`; package → Draft resets all to `'pending'`; package → Submitted/R&R preserves item marks (so an Approved → Submitted revert keeps history). Per-item edits auto-promote the package to Approved when all items hit `'approved'` and auto-demote to R&R when any item is reverted. `deleteSubmittalItem` now throws if any linked Purchasing module already has the item ordered; the SubmittalDetail UI surfaces the message via alert. Migration: `add_submittal_item_approval.sql`.
+- **Warehouses (Settings, admin-only).** New `warehouses` table — org-wide ship-to destinations with `name`, address fields, `is_active` flag, soft-delete (inactive hides from dropdowns but historical purchasing rows still resolve the name). RLS: any authenticated read, admin-only write. Surfaced in SettingsPage as a new admin-gated section with create / edit / delete. Migration: `add_warehouses.sql`.
+- **Purchasing & Equipment Status — feature shipped (Phase 1 scope).** New routes `/projects/:projectId/purchasing` (list) and `/purchasing/:purchasingId` (detail). A purchasing module live-links one or more submittals via `purchasing_module_submittals` junction; persistent `+ Add Submittal` button on the detail page lets a PA aggregate or split as needed. The detail page renders manufacturer-grouped tables: each header carries default ship-to (warehouse picker or custom address) + need-by date that rows inherit, with per-item overrides taking precedence (greyed out on inherited rows for visual clarity). Per-row inline edits: purchase unit price, ship-to, need-by, PO number. Status advances `not_ordered → ordered → received` via badge dropdown with auto-set dates (overridable). Display data (mfr / model / desc / qty / sold-in price / vendor) is **live-resolved** from `submittal_items` + `project_bom_items` — never snapshotted, so changes to the upstream submittal flow through automatically. Always-visible freight row per manufacturer captures actuals (margin-vs-quoted math deferred). Persistent red warning banner lists every item that's been ordered but whose submittal approval has been reverted; clears automatically when the item is re-approved. Spec: `Product Spec/02-purchasing-equipment-status.md`. Migrations: `add_purchasing.sql`, `add_priced_from_to_bom.sql`. Deferred items (Excel PO export, pick list wizard + PDF, partial-qty splits, notes thread per item, long-lead tagging, mobile views, change-order linkage, freight margin math, PO bulk-assign, full equipment status `received → inspected → on_site → installed → commissioned` chain, summary dashboard) are tracked under feature 2 in `Product Spec/future_features.md`.
+- **DTools sync — `priced_from` extraction.** `dtools-project-lookup` now extracts each item's Custom Field 1 ("Priced From", typically `"VENDOR MM/DD/YY"`) via `extractPricedFrom()` (handles `CustomFields[]` / `ItemCustomFields[]` array shapes plus `CustomField1` / `customField1` / `PricedFrom` flat fallbacks) and writes it to `project_bom_items.priced_from`. The Purchasing module renders the value verbatim in the Vendor column. Intentionally hidden from the project overview BoM table — purchasing-only. Edge function deploy required for the new field to populate on next sync; existing rows backfill on the next BoM sync per project.
+- **Operations sidebar/overview — Schedule and Purchasing now live.** `Layout.tsx` operations group entries flipped from `SidebarDisabledLink` to live `SidebarLink` for Schedule & Milestones and Purchasing (Inventory remains scaffolded/dimmed). ProjectOverview's Operations tool card now shows real counts for both: Schedule shows next-up summary (`N overdue` / `N at risk` / `N open · N complete`); Purchasing shows `N modules · N ordered · N received`. Per-item `enabled?: boolean` flag on `ToolItem` lets the Operations card mix live and disabled entries within a single section.
 
 ### 2026-04-28
 - **Project Overview — Operations section + Project Log card.** Tools grid is now 3-up (Pre-Sales / Post-Sales / Operations) with a new green-accent Operations card listing Schedule & Milestones, Purchasing, and Inventory. Inserted a new Project Log card (`components/ProjectLog.tsx`) between the tool grid and the Bill of Materials with three tabs: Comments, Files, Client / GC Log. Tabs render styled empty-state placeholders today; the full design scaffolding (composer, comment row, file repo, change-order timeline meta) is kept in the file for the next push that wires the underlying features.

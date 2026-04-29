@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Truck, ArrowLeft, AlertTriangle, Plus, X, ChevronDown,
+  Truck, ArrowLeft, AlertTriangle, Plus, X,
   Package, Check, MapPin, CalendarDays,
 } from 'lucide-react';
 import { useStore } from '../../store';
