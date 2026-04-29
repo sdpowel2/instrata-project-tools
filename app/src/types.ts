@@ -225,6 +225,9 @@ export interface ProjectBoMItem {
   marginPct: number;
   ownerFurnished: boolean;
   optional: boolean;
+  /** DTools "Priced From" custom field — vendor + last priced date,
+   *  formatted "VENDOR MM/DD/YY". Surfaces in the Purchasing module only. */
+  pricedFrom?: string;
 }
 
 // ===================== SUBMITTALS =====================
@@ -241,6 +244,8 @@ export interface Submittal {
   createdAt: string;
   items: SubmittalItem[];
 }
+
+export type SubmittalItemApprovalState = 'pending' | 'approved' | 'revise';
 
 export interface SubmittalItem {
   id: string;
@@ -264,6 +269,13 @@ export interface SubmittalItem {
   locations: SubmittalItemLocation[];
   notes: string;
   sortOrder: number;
+  /** Per-item approval. Defaults to 'pending' if absent. Editable when the
+   *  package is Submitted or Revise & Resubmit. When the package is forced
+   *  to Approved every item flips to 'approved'. Optional so existing
+   *  callers (CSV import, BoM populate) don't need to pass it explicitly —
+   *  the row mapper and store actions normalize undefined → 'pending'. */
+  approvalState?: SubmittalItemApprovalState;
+  approvalChangedAt?: string;
 }
 
 // ===================== RFIs =====================
@@ -468,6 +480,98 @@ export interface BidLevelingSession {
   updatedAt: string;
 }
 
+// ===================== PROJECT MILESTONES =====================
+
+export type MilestoneTier = 'project' | 'phase';
+export type MilestoneStatus = 'upcoming' | 'at_risk' | 'complete' | 'overdue';
+
+export type MilestoneType =
+  // Contractual / project-tier
+  | 'submittal_due'
+  | 'submittal_approval_expected'
+  | 'material_order_deadline'
+  | 'substantial_completion'
+  | 'final_completion'
+  | 'closeout_package_due'
+  | 'training_scheduled'
+  | 'ahj_inspection'
+  | 'custom'
+  // Operational / phase-tier
+  | 'rough_in_complete'
+  | 'bench_staging_complete'
+  | 'pull_terminate_complete'
+  | 'rack_install_complete'
+  | 'programming_complete'
+  | 'commissioning_complete'
+  | 'punchlist_issued'
+  | 'punchlist_closed';
+
+export interface MilestoneTypeDef {
+  value: MilestoneType;
+  label: string;
+  tier: MilestoneTier;
+}
+
+export const MILESTONE_TYPES: MilestoneTypeDef[] = [
+  { value: 'submittal_due',                label: 'Submittal package due',           tier: 'project' },
+  { value: 'submittal_approval_expected',  label: 'Submittal approval expected',     tier: 'project' },
+  { value: 'material_order_deadline',      label: 'Material order deadline',         tier: 'project' },
+  { value: 'substantial_completion',       label: 'Substantial completion',          tier: 'project' },
+  { value: 'final_completion',             label: 'Final completion',                tier: 'project' },
+  { value: 'closeout_package_due',         label: 'Closeout package due',            tier: 'project' },
+  { value: 'training_scheduled',           label: 'Client training scheduled',       tier: 'project' },
+  { value: 'ahj_inspection',               label: 'AHJ inspection',                  tier: 'project' },
+  { value: 'custom',                       label: 'Custom milestone',                tier: 'project' },
+  { value: 'rough_in_complete',            label: 'Rough-in complete',               tier: 'phase'   },
+  { value: 'bench_staging_complete',       label: 'Bench staging complete',          tier: 'phase'   },
+  { value: 'pull_terminate_complete',      label: 'Pull & terminate complete',       tier: 'phase'   },
+  { value: 'rack_install_complete',        label: 'Rack install complete',           tier: 'phase'   },
+  { value: 'programming_complete',         label: 'Programming complete',            tier: 'phase'   },
+  { value: 'commissioning_complete',       label: 'Commissioning complete',          tier: 'phase'   },
+  { value: 'punchlist_issued',             label: 'Punch list issued',               tier: 'phase'   },
+  { value: 'punchlist_closed',             label: 'Punch list closed',               tier: 'phase'   },
+];
+
+export interface ProjectMilestone {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  milestoneType: MilestoneType;
+  tier: MilestoneTier;
+  /** Optional phase label (e.g. "Floor 2", "Wing A", "all"). Free-form so it can
+   *  match how the GC has broken out the scope. */
+  phase?: string;
+  /** ISO date (YYYY-MM-DD). */
+  dueDate: string;
+  /** ISO date (YYYY-MM-DD), set when the milestone is marked complete. */
+  completedDate?: string;
+  ownerId?: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Days inside the at-risk window. Spec calls this configurable at the system
+ *  level later — kept here for now. */
+export const MILESTONE_AT_RISK_DAYS = 7;
+
+/** Compute the visual status of a milestone from its due / completed dates.
+ *  Pure function — same input always returns the same output. */
+export function computeMilestoneStatus(
+  m: { dueDate: string; completedDate?: string },
+  today: Date = new Date(),
+): MilestoneStatus {
+  if (m.completedDate) return 'complete';
+  if (!m.dueDate) return 'upcoming';
+  const due = new Date(m.dueDate + 'T00:00:00');
+  const t   = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const diffDays = Math.round((due.getTime() - t.getTime()) / 86400000);
+  if (diffDays < 0) return 'overdue';
+  if (diffDays <= MILESTONE_AT_RISK_DAYS) return 'at_risk';
+  return 'upcoming';
+}
+
 // ===================== PERSONAL OPS =====================
 
 export type EmailFlagStatus = 'active' | 'flagged' | 'deferred' | 'dismissed';
@@ -507,3 +611,94 @@ export interface EmailFlag {
   createdAt: string;
   updatedAt: string;
 }
+
+// ===================== WAREHOUSES =====================
+
+export interface Warehouse {
+  id: string;
+  name: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  notes: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function formatWarehouseAddress(w: Warehouse): string {
+  const parts = [w.addressLine1, w.addressLine2, [w.city, w.state, w.postalCode].filter(Boolean).join(' ')]
+    .filter((p) => p && p.trim().length > 0);
+  return parts.join(', ');
+}
+
+// ===================== PURCHASING =====================
+
+export type PurchaseStatus = 'not_ordered' | 'ordered' | 'received';
+
+/** A purchasing module is the work surface for converting one or more
+ *  approved submittals into POs. Items live-link from the submittal so
+ *  changes flow through; purchaser-entered fields persist independently. */
+export interface PurchasingModule {
+  id: string;
+  projectId: string;
+  title: string;
+  notes: string;
+  /** Linked submittal ids — mirrored locally for fast lookups. */
+  submittalIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PurchasingItem {
+  id: string;
+  purchasingModuleId: string;
+  submittalItemId: string;
+  purchaseUnitPrice?: number;
+  shipToWarehouseId?: string;
+  shipToCustomAddress?: string;
+  needByDate?: string;
+  purchaseStatus: PurchaseStatus;
+  orderedDate?: string;
+  receivedDate?: string;
+  poNumber?: string;
+  notes: string;
+}
+
+export interface PurchasingFreight {
+  id: string;
+  purchasingModuleId: string;
+  manufacturer: string;
+  purchaseUnitPrice?: number;
+  shipToWarehouseId?: string;
+  shipToCustomAddress?: string;
+  needByDate?: string;
+  purchaseStatus: PurchaseStatus;
+  orderedDate?: string;
+  receivedDate?: string;
+  poNumber?: string;
+  notes: string;
+}
+
+export interface PurchasingManufacturerDefault {
+  id: string;
+  purchasingModuleId: string;
+  manufacturer: string;
+  shipToWarehouseId?: string;
+  shipToCustomAddress?: string;
+  needByDate?: string;
+}
+
+/** Visual state of a purchasing row, derived from the underlying
+ *  submittal item's approval + the persisted purchase status. Computed at
+ *  render time — never persisted. */
+export type PurchasingDisplayStatus =
+  | 'draft'              // Linked submittal is in Draft — fields read-only
+  | 'pending_approval'   // Submittal is Submitted/R&R, item not yet approved
+  | 'approved_to_order'  // Approved, not yet ordered (= persisted 'not_ordered')
+  | 'ordered'
+  | 'received'
+  | 'reverted_after_order'; // Was approved + ordered, then approval pulled back
+

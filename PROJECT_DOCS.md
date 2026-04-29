@@ -392,6 +392,14 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Bid Leveling Generator | In Progress | Schema + `BidLevelingPage.tsx` + `bidLevelingEngine.ts` exist; spec is `BidLevelingGenerator_Phase1_Spec.docx` (Phase 1). |
 | Personal Ops Dashboard | In Progress | `PersonalOpsPage.tsx`, `usePersonalOps.ts`, `EmailDigestCard`, `ConnectEmailBanner`, `EmailActionBar`, `SessionSelector`. Functions wired (`ms-graph-auth`, `ms-graph-emails`, `email-triage`). Spec at `personal_ops_feature_spec.html`. |
 | Effort Survey | Complete | `EffortSurvey.tsx`. |
+| Project Sections — Operations | Scaffolded | Sidebar group + Overview tool card render alongside Pre-Sales / Post-Sales with green accent. Sidebar links and overview rows are intentionally inert (`SidebarDisabledLink`, no `onOpen`) until the underlying tools ship. |
+| Project Log card (Activity, Files & History) | Scaffolded | `ProjectLog.tsx` on the Overview between the tool grid and BoM. Three tabs (Comments / Files / Client GC Log) with full header, tab pills with counts, and per-tab CTAs (Export PDF on Client/GC Log, Download all on Files). Each tab body renders an empty-state placeholder; full design scaffolding (composer, comment row, file/log meta tables) is kept in the file under `_PROJECT_LOG_SCAFFOLD` for future use. |
+| Schedule & Milestones | Future | `app/src/pages/operations/ScheduleMilestones.tsx` exists with full styling but is not wired to a route. |
+| Purchasing | Future | `app/src/pages/operations/Purchasing.tsx` exists with full styling but is not wired to a route. |
+| Inventory | Future | `app/src/pages/operations/Inventory.tsx` exists with full styling but is not wired to a route. |
+| Comments (Project Log) | Future | Inline composer + threaded replies with reactions and notification indicators. Tab placeholder lives in `ProjectLog.tsx`. |
+| Files (Project Log) | Future | Standardized project file repository (Contracts / Drawings / Submittals / Meeting Notes / Photos / Closeout). Tab placeholder lives in `ProjectLog.tsx`. |
+| Client / GC Log | Future | Auto-generated timeline of client-level changes — meetings, base-bid contracts, change-order tracking (Requested / Proposed / Rejected / On Hold / Accepted), milestone completions. Branded PDF export. Tab placeholder lives in `ProjectLog.tsx`. |
 | Monday Auto Project Creation | Replaced | Was deliberately no-op; `monday-webhook` now actively creates Project Tools rows on `create_pulse` events from either Monday board (different from the old "create on status=Review" behavior — every new Monday item lands in Project Tools). |
 | Settings | Complete | `SettingsPage.tsx`. |
 | Auth (Login / Register) | Complete | `Login.tsx`, `Register.tsx`, `AuthContext.tsx`. |
@@ -540,6 +548,12 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-04-28
+- **Project Overview — Operations section + Project Log card.** Tools grid is now 3-up (Pre-Sales / Post-Sales / Operations) with a new green-accent Operations card listing Schedule & Milestones, Purchasing, and Inventory. Inserted a new Project Log card (`components/ProjectLog.tsx`) between the tool grid and the Bill of Materials with three tabs: Comments, Files, Client / GC Log. Tabs render styled empty-state placeholders today; the full design scaffolding (composer, comment row, file repo, change-order timeline meta) is kept in the file for the next push that wires the underlying features.
+- **Sidebar — Operations group.** Added a third group below Post-Sales with a green rail (`#22C55E`) and three entries: Schedule & Milestones, Purchasing, Inventory. Entries render via a new `SidebarDisabledLink` (cursor-not-allowed, dimmed) since the tools aren't wired yet. `PhaseGroup` rail color is now keyed off the accent so the green rail picks up automatically without a hardcoded branch.
+- **PhaseRibbon — third section.** `PhaseRibbon.tsx` now accepts a `ProjectSection` (`'Pre-Sales' | 'Post-Sales' | 'Operations'`) and renders the breadcrumb dot row generically for an arbitrary set of sections. Operations gets the same green accent as the sidebar group.
+- **Operations tool pages — scaffolded but unwired.** Created `pages/operations/ScheduleMilestones.tsx`, `Purchasing.tsx`, `Inventory.tsx` with full design styling (PhaseRibbon, KPI strip, milestone timeline / data table empty states). Intentionally **not** added to `App.tsx` routes — they exist in the tree so we can borrow shapes when each tool ships, but no link in the app reaches them yet.
 
 ### 2026-04-27
 - **DTools — relink UX from the BoM page.** Extracted `DToolsImportPicker` into a reusable component with a generic `onSelect` callback so the New Project flow and the BoM page's "Sync from DTools" button share the same picker. Monday-imported projects no longer need to be created from DTools to use BoM sync — the button now opens the picker, and the new `linkDToolsAndSyncBoM` store action records `dtools_project_id` + DTools number/value before delegating to the existing sync. Already-linked projects re-sync directly with no modal.

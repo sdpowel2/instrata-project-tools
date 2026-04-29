@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck, Clock } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck, Clock, RotateCcw } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
@@ -9,7 +9,7 @@ import { exportSubmittalPDF } from '../utils/exportSubmittalPDF';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import { listExcludedForSubmittal } from '../utils/submittalExclusions';
-import type { ItemCategory, SubmittalStatus } from '../types';
+import type { ItemCategory, SubmittalStatus, SubmittalItemApprovalState } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
 
@@ -22,6 +22,7 @@ export function SubmittalDetail() {
   const addItem = useStore((s) => s.addSubmittalItem);
   const updateItem = useStore((s) => s.updateSubmittalItem);
   const deleteItem = useStore((s) => s.deleteSubmittalItem);
+  const setItemApproval = useStore((s) => s.setSubmittalItemApproval);
   const populateFromBoM = useStore((s) => s.populateSubmittalFromBoM);
   const allBoM = useStore((s) => s.projectBoM);
   const bomItems = allBoM.filter((b) => b.projectId === projectId);
@@ -155,6 +156,20 @@ export function SubmittalDetail() {
   };
 
   const sortedItems = [...submittal.items].sort((a, b) => a.sortOrder - b.sortOrder);
+
+  // Per-item approval is editable while the package is Submitted or R&R.
+  // Hidden in Draft (no submission yet) and locked in Approved (the package
+  // status forces every item to 'approved' — any change reopens the package).
+  const itemApprovalEditable = submittal.status === 'Submitted' || submittal.status === 'Revise & Resubmit';
+  const showApprovalColumn = submittal.status !== 'Draft';
+
+  const handleDeleteItem = (itemId: string) => {
+    try {
+      deleteItem(submittalId!, itemId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
   // BoM rows the auto-populate filtered out (labor + house manufacturers)
   // that aren't already in the submittal. Recomputes whenever items change,
   // so adding one back removes it from this list automatically.
@@ -315,6 +330,9 @@ export function SubmittalDetail() {
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider">Description</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider">Category</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-center">Qty</th>
+                {showApprovalColumn && (
+                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider">Approval</th>
+                )}
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider">Cutsheet</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider">Notes</th>
                 <th className="w-12 px-3 py-3"></th>
@@ -329,6 +347,15 @@ export function SubmittalDetail() {
                   <td className="px-4 py-3 text-sm text-text-secondary max-w-[200px] truncate">{item.description}</td>
                   <td className="px-4 py-3"><span className="text-xs font-medium px-2 py-0.5 rounded bg-surface text-text-secondary">{item.category}</span></td>
                   <td className="px-4 py-3 text-sm text-text-primary text-center font-medium">{item.qty}</td>
+                  {showApprovalColumn && (
+                    <td className="px-4 py-3">
+                      <ItemApprovalCell
+                        state={(item.approvalState ?? 'pending') as SubmittalItemApprovalState}
+                        editable={itemApprovalEditable}
+                        onChange={(s) => setItemApproval(submittalId!, item.id, s)}
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     {uploadingItemId === item.id ? (
                       <span className="text-xs text-text-secondary inline-flex items-center gap-1.5">
@@ -405,7 +432,7 @@ export function SubmittalDetail() {
                     />
                   </td>
                   <td className="px-3 py-3">
-                    <button onClick={() => deleteItem(submittalId!, item.id)} className="p-1 rounded hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors">
+                    <button onClick={() => handleDeleteItem(item.id)} className="p-1 rounded hover:bg-red-50 text-text-secondary hover:text-red-500 transition-colors">
                       <Trash2 size={14} />
                     </button>
                   </td>
@@ -502,5 +529,78 @@ function InlineNotesField({ value, onSave }: { value: string; onSave: (next: str
       placeholder="—"
       className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-secondary/50 px-2 py-1 -mx-2 -my-1 rounded border border-transparent hover:border-border focus:border-navy focus:bg-white focus:text-text-primary focus:outline-none focus:ring-2 focus:ring-navy/20 transition-colors"
     />
+  );
+}
+
+// =============================================================================
+// ItemApprovalCell — per-row approve / revise toggle. Only interactive while
+// the package is Submitted or R&R; renders a static badge otherwise.
+// =============================================================================
+
+function ItemApprovalCell({
+  state, editable, onChange,
+}: {
+  state: SubmittalItemApprovalState;
+  editable: boolean;
+  onChange: (next: SubmittalItemApprovalState) => void;
+}) {
+  const STATE_BADGE: Record<SubmittalItemApprovalState, { bg: string; fg: string; label: string }> = {
+    pending:  { bg: '#F3F4F6', fg: '#4B5563', label: 'Pending'  },
+    approved: { bg: '#DCFCE7', fg: '#15803D', label: 'Approved' },
+    revise:   { bg: '#FEF3C7', fg: '#A16207', label: 'Revise'   },
+  };
+  const s = STATE_BADGE[state];
+
+  if (!editable) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap"
+        style={{ background: s.bg, color: s.fg }}
+      >
+        {state === 'approved' && <Check size={11} />}
+        {s.label}
+      </span>
+    );
+  }
+
+  // Editable mode — three-segment pill: Pending · Approve · Revise
+  return (
+    <div className="inline-flex items-center gap-1">
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap"
+        style={{ background: s.bg, color: s.fg }}
+      >
+        {s.label}
+      </span>
+      <div className="inline-flex items-center gap-1">
+        {state !== 'approved' && (
+          <button
+            onClick={() => onChange('approved')}
+            className="px-2 py-0.5 text-[11px] font-medium rounded-md text-green-700 hover:bg-green-50 border border-green-200"
+            title="Approve this item"
+          >
+            <Check size={11} />
+          </button>
+        )}
+        {state !== 'revise' && (
+          <button
+            onClick={() => onChange('revise')}
+            className="px-2 py-0.5 text-[11px] font-medium rounded-md text-amber-700 hover:bg-amber-50 border border-amber-200"
+            title="Mark as needing revision"
+          >
+            R&amp;R
+          </button>
+        )}
+        {state !== 'pending' && (
+          <button
+            onClick={() => onChange('pending')}
+            className="p-1 rounded-md text-fg-2 hover:bg-surface"
+            title="Reset to Pending"
+          >
+            <RotateCcw size={11} />
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

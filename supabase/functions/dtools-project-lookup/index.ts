@@ -39,6 +39,27 @@ function num(v: any): number {
   return isNaN(n) ? 0 : n;
 }
 
+/** Pull DTools per-item Custom Field 1 ("Priced From"). Format used by the
+ *  team is "VENDOR MM/DD/YY" (e.g. "ADI 4/11/26"). The string is shown
+ *  verbatim in the Purchasing module's Vendor column. Falls back across the
+ *  array-of-fields shape and a few flat-property aliases. */
+function extractPricedFrom(item: any): string {
+  const candidates: any[] = [];
+  if (Array.isArray(item?.CustomFields)) candidates.push(...item.CustomFields);
+  if (Array.isArray(item?.ItemCustomFields)) candidates.push(...item.ItemCustomFields);
+
+  for (const cf of candidates) {
+    const id = String(cf?.Id ?? cf?.id ?? '');
+    const name = String(cf?.Name ?? cf?.name ?? '').toLowerCase();
+    if (id === '1' || name === 'priced from' || name === 'pricedfrom') {
+      const v = cf?.Value ?? cf?.value;
+      return v ? String(v).trim() : '';
+    }
+  }
+  const flat = item?.CustomField1 ?? item?.customField1 ?? item?.PricedFrom ?? item?.pricedFrom;
+  return flat ? String(flat).trim() : '';
+}
+
 function mapCategory(cat?: string): string {
   if (!cat) return 'Other';
   const c = cat.toLowerCase();
@@ -69,6 +90,7 @@ interface GroupedItem {
   marginPct: number;
   ownerFurnished: boolean;
   optional: boolean;
+  pricedFrom: string;
 }
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
@@ -281,6 +303,7 @@ serve(async (req) => {
       const margin = num(item.Margin);
       const ownerFurnished = item.IsOfe === true;
       const isOptional = item.IsOptional === true;
+      const pricedFrom = extractPricedFrom(item);
 
       const existing = grouped.get(key);
 
@@ -289,6 +312,9 @@ serve(async (req) => {
         if (locName) {
           existing.locations.set(locName, (existing.locations.get(locName) ?? 0) + itemQty);
         }
+        // Prefer the most recent non-empty priced_from we see across merged
+        // dupes — surfacing a vendor string is better than dropping it.
+        if (pricedFrom && !existing.pricedFrom) existing.pricedFrom = pricedFrom;
       } else {
         const locs = new Map<string, number>();
         if (locName) locs.set(locName, itemQty);
@@ -311,6 +337,7 @@ serve(async (req) => {
           marginPct: margin > 0 && margin <= 1 ? margin * 100 : margin,
           ownerFurnished,
           optional: isOptional,
+          pricedFrom,
         });
       }
     }
@@ -339,6 +366,7 @@ serve(async (req) => {
       margin_pct: g.marginPct,
       owner_furnished: g.ownerFurnished,
       optional: g.optional,
+      priced_from: g.pricedFrom || null,
     }));
 
     if (bomRows.length > 0) {

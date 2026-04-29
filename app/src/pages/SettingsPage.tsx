@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useStore } from '../store';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { LaborRate, ReviewConfigEntry } from '../types';
+import { Modal } from '../components/Modal';
+import type { LaborRate, ReviewConfigEntry, Warehouse } from '../types';
 
 interface Profile {
   id: string;
@@ -427,6 +429,151 @@ function LaborRatesSection() {
   );
 }
 
+// =============================================================================
+// Warehouses — admin-only org-wide ship-to destinations used by Purchasing.
+// =============================================================================
+
+function WarehousesSection() {
+  const warehouses = useStore((s) => s.warehouses);
+  const addWarehouse = useStore((s) => s.addWarehouse);
+  const updateWarehouse = useStore((s) => s.updateWarehouse);
+  const deleteWarehouse = useStore((s) => s.deleteWarehouse);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState<Omit<Warehouse, 'id' | 'createdAt' | 'updatedAt'>>({
+    name: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '',
+    notes: '', isActive: true,
+  });
+
+  const sorted = [...warehouses].sort((a, b) => a.name.localeCompare(b.name));
+
+  const openNew = () => {
+    setEditingId(null);
+    setForm({ name: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', notes: '', isActive: true });
+    setShowForm(true);
+  };
+
+  const openEdit = (w: Warehouse) => {
+    setEditingId(w.id);
+    setForm({
+      name: w.name, addressLine1: w.addressLine1, addressLine2: w.addressLine2,
+      city: w.city, state: w.state, postalCode: w.postalCode,
+      notes: w.notes, isActive: w.isActive,
+    });
+    setShowForm(true);
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    if (editingId) updateWarehouse(editingId, form);
+    else           addWarehouse(form);
+    setShowForm(false);
+  };
+
+  const handleDelete = (w: Warehouse) => {
+    if (window.confirm(`Delete warehouse "${w.name}"? Existing purchasing rows that reference it will keep the address text but lose the link.`)) {
+      deleteWarehouse(w.id);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex justify-end mb-3">
+        <button onClick={openNew} className="btn-primary text-sm">
+          <Plus size={14} /> Add Warehouse
+        </button>
+      </div>
+
+      {sorted.length === 0 ? (
+        <p className="text-sm text-text-secondary py-4">No warehouses yet. Add one above so purchasers can pick it as a ship-to destination.</p>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map((w) => (
+            <div
+              key={w.id}
+              className={`flex items-start justify-between p-3 rounded-lg border border-border bg-surface/30 ${w.isActive ? '' : 'opacity-60'}`}
+            >
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <div className="w-9 h-9 rounded-lg bg-navy/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <WarehouseIcon size={16} className="text-navy" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                    {w.name}
+                    {!w.isActive && <span className="text-[10px] font-bold uppercase text-fg-2">Inactive</span>}
+                  </div>
+                  <div className="text-xs text-text-secondary mt-0.5">
+                    {[w.addressLine1, w.addressLine2, [w.city, w.state, w.postalCode].filter(Boolean).join(' ')]
+                      .filter((p) => p && p.trim().length > 0).join(', ') || '— no address —'}
+                  </div>
+                  {w.notes && <div className="text-xs text-fg-2 italic mt-1">{w.notes}</div>}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button onClick={() => openEdit(w)} title="Edit" className="p-1.5 rounded-md text-fg-2 hover:bg-surface hover:text-navy">
+                  <Pencil size={13} />
+                </button>
+                <button onClick={() => handleDelete(w)} title="Delete" className="p-1.5 rounded-md text-fg-2 hover:bg-red-50 hover:text-red-600">
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal open={showForm} onClose={() => setShowForm(false)} title={editingId ? 'Edit Warehouse' : 'Add Warehouse'}>
+        <form onSubmit={submit} className="space-y-4">
+          <label className="block">
+            <span className="text-sm font-medium text-text-primary">Name <span className="text-red-500">*</span></span>
+            <input
+              required value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="input mt-1.5"
+              placeholder="e.g. Instrata HQ Warehouse"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium text-text-primary">Address Line 1</span>
+            <input value={form.addressLine1} onChange={(e) => setForm({ ...form, addressLine1: e.target.value })} className="input mt-1.5" />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium text-text-primary">Address Line 2</span>
+            <input value={form.addressLine2} onChange={(e) => setForm({ ...form, addressLine2: e.target.value })} className="input mt-1.5" />
+          </label>
+          <div className="grid grid-cols-3 gap-3">
+            <label className="block col-span-2">
+              <span className="text-sm font-medium text-text-primary">City</span>
+              <input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} className="input mt-1.5" />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-text-primary">State</span>
+              <input value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} className="input mt-1.5" maxLength={2} />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-sm font-medium text-text-primary">Postal Code</span>
+            <input value={form.postalCode} onChange={(e) => setForm({ ...form, postalCode: e.target.value })} className="input mt-1.5" />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium text-text-primary">Notes</span>
+            <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} className="input mt-1.5" placeholder="Receiving hours, dock contact, etc." />
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+            Active (uncheck to hide from ship-to dropdowns)
+          </label>
+          <div className="flex justify-end gap-2 pt-3 border-t border-border">
+            <button type="button" onClick={() => setShowForm(false)} className="btn-secondary text-sm">Cancel</button>
+            <button type="submit" className="btn-primary text-sm">{editingId ? 'Save Changes' : 'Add Warehouse'}</button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { isAdmin } = useAuth();
   const configured = isSupabaseConfigured();
@@ -517,6 +664,18 @@ export function SettingsPage() {
               Labor types must match exactly what engineers enter in the D-Tools Labor Type column. Any unmatched type generates a High flag.
             </p>
             <LaborRatesSection />
+          </div>
+
+          <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <WarehouseIcon size={18} className="text-navy" />
+              <h2 className="text-base font-semibold text-navy">Warehouses</h2>
+            </div>
+            <p className="text-sm text-text-secondary mb-4">
+              Org-wide ship-to destinations used by the Purchasing module. Purchasers can pick any active
+              warehouse as a default for a manufacturer or override at the line-item level.
+            </p>
+            <WarehousesSection />
           </div>
         </>
       )}
