@@ -29,14 +29,12 @@ const postsalesTools = [
   { to: 'closeout', icon: ClipboardCheck, label: 'Closeout' },
   { to: 'manual', icon: BookOpen, label: 'Owner Manual' },
 ];
-// Operations is a parallel section to Pre/Post-Sales. Tools here are
-// scaffolded for a future feature push — sidebar entries render but do not
-// navigate (the tool pages exist as components but are intentionally not
-// wired to routes yet).
+// Operations is a parallel section to Pre/Post-Sales. Schedule & Milestones
+// and Purchasing are live; Inventory is still scaffolded.
 const operationsTools = [
-  { to: 'schedule', icon: Calendar, label: 'Schedule & Milestones' },
-  { to: 'purchasing', icon: Truck, label: 'Purchasing' },
-  { to: 'inventory', icon: Package, label: 'Inventory' },
+  { to: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', enabled: true  },
+  { to: 'purchasing', icon: Truck,    label: 'Purchasing',             enabled: true  },
+  { to: 'inventory',  icon: Package,  label: 'Inventory',              enabled: false },
 ];
 
 export function Layout() {
@@ -117,15 +115,26 @@ export function Layout() {
                 ))}
               </PhaseGroup>
 
-              {/* Operations group — links are inert until the tools ship. */}
+              {/* Operations group — Schedule & Milestones is live, Purchasing
+                  and Inventory are still scaffolded. */}
               <PhaseGroup label="Operations" accent="#22C55E">
                 {operationsTools.map((item) => (
-                  <SidebarDisabledLink
-                    key={`ops-${item.to}`}
-                    icon={item.icon}
-                    label={item.label}
-                    indent
-                  />
+                  item.enabled ? (
+                    <SidebarLink
+                      key={`ops-${item.to}`}
+                      to={`/projects/${project.id}/${item.to}`}
+                      icon={item.icon}
+                      label={item.label}
+                      indent
+                    />
+                  ) : (
+                    <SidebarDisabledLink
+                      key={`ops-${item.to}`}
+                      icon={item.icon}
+                      label={item.label}
+                      indent
+                    />
+                  )
                 ))}
               </PhaseGroup>
             </>

@@ -19,7 +19,7 @@ import { uploadFile } from '../lib/storage';
 import type {
   ItemCategory, SubmittalItemLocation, ProjectPhase, ProjectStatus,
 } from '../types';
-import { PRE_SALES_STATUSES, POST_SALES_STATUSES } from '../types';
+import { PRE_SALES_STATUSES, POST_SALES_STATUSES, computeMilestoneStatus } from '../types';
 
 const categories: ItemCategory[] = ['Display', 'Audio', 'Control', 'Networking', 'Cabling', 'Other'];
 
@@ -32,6 +32,9 @@ export function ProjectOverview() {
   const allCloseouts = useStore((s) => s.closeouts);
   const allManuals = useStore((s) => s.manuals);
   const allReviewRuns = useStore((s) => s.reviewRuns);
+  const allMilestones = useStore((s) => s.milestones);
+  const allPurchasingModules = useStore((s) => s.purchasingModules);
+  const allPurchasingItems = useStore((s) => s.purchasingItems);
   const projectBoM = useStore((s) => s.projectBoM);
   const addBoMItem = useStore((s) => s.addBoMItem);
   const importBoMItems = useStore((s) => s.importBoMItems);
@@ -43,6 +46,7 @@ export function ProjectOverview() {
   const closeout = useMemo(() => allCloseouts.find((x) => x.projectId === projectId), [allCloseouts, projectId]);
   const manuals = useMemo(() => allManuals.filter((x) => x.projectId === projectId), [allManuals, projectId]);
   const reviewRuns = useMemo(() => allReviewRuns.filter((x) => x.projectId === projectId), [allReviewRuns, projectId]);
+  const milestones = useMemo(() => allMilestones.filter((x) => x.projectId === projectId), [allMilestones, projectId]);
   const bomItems = useMemo(() => projectBoM.filter((x) => x.projectId === projectId), [projectBoM, projectId]);
 
   const [showCSVImport, setShowCSVImport] = useState(false);
@@ -155,13 +159,31 @@ export function ProjectOverview() {
     { tool: 'closeout',     icon: ClipboardCheck,       label: 'Closeout',     value: closeout?.punchItems.length ?? 0, sub: closeout ? `${punchOpen} open punch items` : 'Not yet started' },
     { tool: 'manual',       icon: BookOpen,             label: 'Owner Manual', value: manuals.length,    sub: manuals.length > 0 ? `${manuals[0].sections.length} sections` : 'Generated after closeout' },
   ];
-  // Operations is a parallel section. Tools render as quick-link rows that
-  // intentionally don't navigate yet — the underlying schedule / purchasing
-  // / inventory pages are scaffolded but not wired to routes until those
-  // features are built out.
+  // Operations is a parallel section. Schedule & Milestones and Purchasing
+  // are live; Inventory is still scaffolded.
+  const milestoneOverdue = milestones.filter((m) => computeMilestoneStatus(m) === 'overdue').length;
+  const milestoneAtRisk  = milestones.filter((m) => computeMilestoneStatus(m) === 'at_risk').length;
+  const milestoneOpen    = milestones.filter((m) => !m.completedDate).length;
+  const scheduleSub = milestones.length === 0
+    ? 'Not yet scheduled'
+    : milestoneOverdue > 0
+      ? `${milestoneOverdue} overdue · ${milestoneOpen} open`
+      : milestoneAtRisk > 0
+        ? `${milestoneAtRisk} at risk · ${milestoneOpen} open`
+        : `${milestoneOpen} open · ${milestones.length - milestoneOpen} complete`;
+
+  const purchasingModules = allPurchasingModules.filter((m) => m.projectId === projectId);
+  const purchModuleIds = new Set(purchasingModules.map((m) => m.id));
+  const purchItemsForProject = allPurchasingItems.filter((p) => purchModuleIds.has(p.purchasingModuleId));
+  const purchOrdered  = purchItemsForProject.filter((p) => p.purchaseStatus === 'ordered').length;
+  const purchReceived = purchItemsForProject.filter((p) => p.purchaseStatus === 'received').length;
+  const purchasingSub = purchasingModules.length === 0
+    ? 'No purchasing modules yet'
+    : `${purchOrdered} ordered · ${purchReceived} received`;
+
   const opsItems: ToolItem[] = [
-    { tool: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', value: '—', sub: 'Not yet scheduled' },
-    { tool: 'purchasing', icon: Truck,    label: 'Purchasing',            value: '—', sub: 'No POs issued' },
+    { tool: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', value: milestones.length || '—', sub: scheduleSub, enabled: true },
+    { tool: 'purchasing', icon: Truck,    label: 'Purchasing',            value: purchasingModules.length || '—', sub: purchasingSub, enabled: true },
     { tool: 'inventory',  icon: Package,  label: 'Inventory',             value: '—', sub: 'Nothing received' },
   ];
 
@@ -209,10 +231,22 @@ export function ProjectOverview() {
           phase="Operations"
           items={opsItems}
           description="Running the work day-to-day. Schedule, purchasing, and inventory."
-          // Operations tool pages exist for styling reference but are not
-          // wired to routes yet — items render but don't navigate.
+          // Schedule & Milestones is live; Purchasing / Inventory are flagged
+          // disabled per-item so they still render dimmed.
+          onOpen={(tool) => navigate(`/projects/${projectId}/${tool}`)}
         />
       </div>
+
+      {/* Milestone summary — next 3 upcoming/at-risk milestones per spec §6.
+          Hidden until at least one milestone exists. */}
+      {milestones.length > 0 && (
+        <div className="mt-5">
+          <MilestoneSummaryCard
+            milestones={milestones}
+            onOpen={() => navigate(`/projects/${projectId}/schedule`)}
+          />
+        </div>
+      )}
 
       {/* Project Log — comments, files, client/GC log (scaffolded) */}
       <div className="mt-5">
@@ -409,6 +443,10 @@ interface ToolItem {
   label: string;
   value: number | string;
   sub: string;
+  /** Per-item override — used when the section's onOpen is set but a single
+   *  row should still render as disabled (e.g. Operations: Schedule is live,
+   *  Purchasing / Inventory aren't). Defaults to true. */
+  enabled?: boolean;
 }
 
 function ToolGroupCard({ phase, description, items, onOpen }: {
@@ -456,7 +494,8 @@ function ToolGroupCard({ phase, description, items, onOpen }: {
               <ChevronRight size={14} className="text-fg-2" />
             </>
           );
-          if (disabled) {
+          const itemEnabled = it.enabled !== false;
+          if (disabled || !itemEnabled || !onOpen) {
             return (
               <div
                 key={it.tool}
@@ -831,5 +870,93 @@ function Field({ label, required, children }: { label: string; required?: boolea
       </span>
       <div className="mt-1.5">{children}</div>
     </label>
+  );
+}
+
+// =============================================================================
+// MilestoneSummaryCard — next 3 upcoming/at-risk + overdue + completion %
+// (Surfaces here per milestone-tracking spec §6.)
+// =============================================================================
+
+interface MilestoneRow {
+  id: string;
+  title: string;
+  dueDate: string;
+  completedDate?: string;
+  ownerId?: string;
+}
+
+function MilestoneSummaryCard({ milestones, onOpen }: { milestones: MilestoneRow[]; onOpen: () => void }) {
+  const total = milestones.length;
+  const complete = milestones.filter((m) => !!m.completedDate).length;
+  const overdue = milestones.filter((m) => computeMilestoneStatus(m) === 'overdue').length;
+  const pct = total ? Math.round((complete / total) * 100) : 0;
+
+  // Next 3 upcoming/at-risk/overdue, soonest first.
+  const upcoming = milestones
+    .filter((m) => !m.completedDate)
+    .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
+    .slice(0, 3);
+
+  return (
+    <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
+      <div
+        className="px-5 py-3.5 border-b border-border flex items-center justify-between gap-3"
+        style={{ background: '#22C55E08' }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-[30px] rounded" style={{ background: '#22C55E' }} />
+          <div>
+            <div className="text-[10px] font-bold tracking-[0.15em] uppercase" style={{ color: '#22C55E' }}>
+              Milestones
+            </div>
+            <div className="text-sm font-semibold text-navy mt-0.5">
+              <strong style={{ color: '#15803D' }}>{complete}</strong> of {total} complete
+              {overdue > 0 && (
+                <span className="ml-2.5 inline-flex items-center gap-1 text-red-700 text-xs font-bold align-middle">
+                  <Calendar size={11} /> {overdue} overdue
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-xl font-bold text-navy font-mono">{pct}%</div>
+          <button onClick={onOpen} className="btn-secondary text-xs">Open Schedule</button>
+        </div>
+      </div>
+      {upcoming.length === 0 ? (
+        <div className="px-5 py-6 text-center text-sm text-fg-2">
+          All milestones complete. 🎉
+        </div>
+      ) : (
+        <div>
+          {upcoming.map((m, i) => {
+            const status = computeMilestoneStatus(m);
+            const color = status === 'overdue' ? '#B91C1C' : status === 'at_risk' ? '#A16207' : '#4B5563';
+            return (
+              <div
+                key={m.id}
+                className={`flex items-center gap-3.5 px-5 py-3 ${i === 0 ? '' : 'border-t border-border'}`}
+              >
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                  style={{ background: `${color}14`, color }}
+                >
+                  <Calendar size={16} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-fg truncate">{m.title}</div>
+                  <div className="text-xs text-fg-2 mt-0.5 capitalize">{status.replace('_', ' ')}</div>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono text-[13px]" style={{ color }}>{m.dueDate || '—'}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

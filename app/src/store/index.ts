@@ -8,6 +8,11 @@ import type {
   SubmittalItemLocation,
   ReviewRun, ReviewFlag, ReviewRunStatus, ReviewFlagStatus,
   BidLevelingSession, BidLevelingMappingTemplate,
+  ProjectMilestone, MilestoneTier, MilestoneType,
+  SubmittalItemApprovalState,
+  Warehouse,
+  PurchasingModule, PurchasingItem, PurchasingFreight, PurchasingManufacturerDefault,
+  PurchaseStatus,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { isExcludedFromSubmittal } from '../utils/submittalExclusions';
@@ -103,6 +108,7 @@ function rowToBoMItem(r: any): ProjectBoMItem {
     marginPct: Number(r.margin_pct) || 0,
     ownerFurnished: r.owner_furnished ?? false,
     optional: r.optional ?? false,
+    pricedFrom: r.priced_from ?? undefined,
   };
 }
 function bomItemToRow(item: Partial<ProjectBoMItem>): Record<string, any> {
@@ -130,6 +136,7 @@ function bomItemToRow(item: Partial<ProjectBoMItem>): Record<string, any> {
   if (item.marginPct !== undefined) row.margin_pct = item.marginPct;
   if (item.ownerFurnished !== undefined) row.owner_furnished = item.ownerFurnished;
   if (item.optional !== undefined) row.optional = item.optional;
+  if (item.pricedFrom !== undefined) row.priced_from = item.pricedFrom || null;
   return row;
 }
 
@@ -164,6 +171,8 @@ function rowToSubmittalItem(r: any): SubmittalItem {
     cutsheetRepositoryId: r.cutsheet_repository_id ?? undefined,
     cutsheetStagingId: r.cutsheet_staging_id ?? undefined,
     locations: r.locations ?? [], notes: r.notes ?? '', sortOrder: r.sort_order ?? 0,
+    approvalState: (r.approval_state as SubmittalItemApprovalState) ?? 'pending',
+    approvalChangedAt: r.approval_changed_at ? toDate(r.approval_changed_at) : undefined,
   };
 }
 function submittalItemToRow(item: Partial<SubmittalItem>): Record<string, any> {
@@ -182,6 +191,8 @@ function submittalItemToRow(item: Partial<SubmittalItem>): Record<string, any> {
   if (item.locations !== undefined) row.locations = item.locations;
   if (item.notes !== undefined) row.notes = item.notes;
   if (item.sortOrder !== undefined) row.sort_order = item.sortOrder;
+  if (item.approvalState !== undefined) row.approval_state = item.approvalState;
+  if (item.approvalChangedAt !== undefined) row.approval_changed_at = item.approvalChangedAt;
   return row;
 }
 
@@ -486,6 +497,30 @@ const seedManuals: OwnerManual[] = [
   },
 ];
 
+// Demo milestones — anchored off today so the status badges (upcoming /
+// at_risk / overdue) demo correctly without needing fresh seeds.
+const seedMilestones: ProjectMilestone[] = (() => {
+  const t = new Date();
+  const offset = (days: number) => {
+    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  const today = offset(0);
+  return [
+    { id: 'm-seed-1', projectId: 'p1', title: 'Submittal package due',     description: '', milestoneType: 'submittal_due',          tier: 'project', dueDate: offset(-3), notes: '', createdAt: today, updatedAt: today },
+    { id: 'm-seed-2', projectId: 'p1', title: 'Material order deadline',   description: 'Hit longest lead time (Crestron NVX).', milestoneType: 'material_order_deadline', tier: 'project', dueDate: offset(5),  notes: '', createdAt: today, updatedAt: today },
+    { id: 'm-seed-3', projectId: 'p1', title: 'Substantial completion',    description: '', milestoneType: 'substantial_completion', tier: 'project', dueDate: offset(60), notes: '', createdAt: today, updatedAt: today },
+    { id: 'm-seed-4', projectId: 'p1', title: 'Bench staging complete',    description: '', milestoneType: 'bench_staging_complete', tier: 'phase',   phase: 'all', dueDate: offset(20), notes: '', createdAt: today, updatedAt: today },
+    { id: 'm-seed-5', projectId: 'p1', title: 'Programming complete',      description: '', milestoneType: 'programming_complete',   tier: 'phase',   phase: 'all', dueDate: offset(45), completedDate: offset(-1), notes: '', createdAt: today, updatedAt: today },
+  ];
+})();
+
+// Demo warehouses — visible only when Supabase isn't configured.
+const seedWarehouses: Warehouse[] = [
+  { id: 'wh1', name: 'Instrata HQ Warehouse',  addressLine1: '125 Industrial Blvd',  addressLine2: '', city: 'Long Island City', state: 'NY', postalCode: '11101', notes: '', isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+  { id: 'wh2', name: 'Instrata SE Warehouse',   addressLine1: '4400 Logistics Way', addressLine2: '', city: 'Atlanta',           state: 'GA', postalCode: '30318', notes: '', isActive: true, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+];
+
 // ---------------------------------------------------------------------------
 // Review row mappers
 // ---------------------------------------------------------------------------
@@ -562,6 +597,182 @@ function bidLevelingTemplateToRow(t: Partial<BidLevelingMappingTemplate> & { cre
   return row;
 }
 
+// --- Project Milestones ---
+function rowToMilestone(r: any): ProjectMilestone {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    title: r.title ?? '',
+    description: r.description ?? '',
+    milestoneType: r.milestone_type as MilestoneType,
+    tier: r.tier as MilestoneTier,
+    phase: r.phase ?? undefined,
+    dueDate: toDate(r.due_date),
+    completedDate: r.completed_date ? toDate(r.completed_date) : undefined,
+    ownerId: r.owner_id ?? undefined,
+    notes: r.notes ?? '',
+    createdAt: toDate(r.created_at),
+    updatedAt: toDate(r.updated_at),
+  };
+}
+function milestoneToRow(m: Partial<ProjectMilestone> & { createdBy?: string }): Record<string, any> {
+  const row: any = {};
+  if (m.id !== undefined)            row.id = m.id;
+  if (m.projectId !== undefined)     row.project_id = m.projectId;
+  if (m.title !== undefined)         row.title = m.title;
+  if (m.description !== undefined)   row.description = m.description;
+  if (m.milestoneType !== undefined) row.milestone_type = m.milestoneType;
+  if (m.tier !== undefined)          row.tier = m.tier;
+  if (m.phase !== undefined)         row.phase = m.phase || null;
+  if (m.dueDate !== undefined)       row.due_date = m.dueDate || null;
+  if (m.completedDate !== undefined) row.completed_date = m.completedDate || null;
+  if (m.ownerId !== undefined)       row.owner_id = m.ownerId || null;
+  if (m.notes !== undefined)         row.notes = m.notes;
+  if ((m as any).createdBy !== undefined) row.created_by = (m as any).createdBy;
+  return row;
+}
+
+// --- Warehouses ---
+function rowToWarehouse(r: any): Warehouse {
+  return {
+    id: r.id,
+    name: r.name ?? '',
+    addressLine1: r.address_line1 ?? '',
+    addressLine2: r.address_line2 ?? '',
+    city: r.city ?? '',
+    state: r.state ?? '',
+    postalCode: r.postal_code ?? '',
+    notes: r.notes ?? '',
+    isActive: r.is_active ?? true,
+    createdAt: toDate(r.created_at),
+    updatedAt: toDate(r.updated_at),
+  };
+}
+function warehouseToRow(w: Partial<Warehouse>): Record<string, any> {
+  const row: any = {};
+  if (w.id !== undefined) row.id = w.id;
+  if (w.name !== undefined) row.name = w.name;
+  if (w.addressLine1 !== undefined) row.address_line1 = w.addressLine1;
+  if (w.addressLine2 !== undefined) row.address_line2 = w.addressLine2;
+  if (w.city !== undefined) row.city = w.city;
+  if (w.state !== undefined) row.state = w.state;
+  if (w.postalCode !== undefined) row.postal_code = w.postalCode;
+  if (w.notes !== undefined) row.notes = w.notes;
+  if (w.isActive !== undefined) row.is_active = w.isActive;
+  return row;
+}
+
+// --- Purchasing Modules ---
+function rowToPurchasingModule(r: any, submittalIds: string[] = []): PurchasingModule {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    title: r.title ?? '',
+    notes: r.notes ?? '',
+    submittalIds,
+    createdAt: toDate(r.created_at),
+    updatedAt: toDate(r.updated_at),
+  };
+}
+function purchasingModuleToRow(m: Partial<PurchasingModule>): Record<string, any> {
+  const row: any = {};
+  if (m.id !== undefined) row.id = m.id;
+  if (m.projectId !== undefined) row.project_id = m.projectId;
+  if (m.title !== undefined) row.title = m.title;
+  if (m.notes !== undefined) row.notes = m.notes;
+  return row;
+}
+
+// --- Purchasing Items ---
+function rowToPurchasingItem(r: any): PurchasingItem {
+  return {
+    id: r.id,
+    purchasingModuleId: r.purchasing_module_id,
+    submittalItemId: r.submittal_item_id,
+    purchaseUnitPrice: r.purchase_unit_price !== null && r.purchase_unit_price !== undefined ? Number(r.purchase_unit_price) : undefined,
+    shipToWarehouseId: r.ship_to_warehouse_id ?? undefined,
+    shipToCustomAddress: r.ship_to_custom_address ?? undefined,
+    needByDate: r.need_by_date ? toDate(r.need_by_date) : undefined,
+    purchaseStatus: (r.purchase_status as PurchaseStatus) ?? 'not_ordered',
+    orderedDate: r.ordered_date ? toDate(r.ordered_date) : undefined,
+    receivedDate: r.received_date ? toDate(r.received_date) : undefined,
+    poNumber: r.po_number ?? undefined,
+    notes: r.notes ?? '',
+  };
+}
+function purchasingItemToRow(p: Partial<PurchasingItem>): Record<string, any> {
+  const row: any = {};
+  if (p.id !== undefined) row.id = p.id;
+  if (p.purchasingModuleId !== undefined) row.purchasing_module_id = p.purchasingModuleId;
+  if (p.submittalItemId !== undefined) row.submittal_item_id = p.submittalItemId;
+  if (p.purchaseUnitPrice !== undefined) row.purchase_unit_price = p.purchaseUnitPrice ?? null;
+  if (p.shipToWarehouseId !== undefined) row.ship_to_warehouse_id = p.shipToWarehouseId || null;
+  if (p.shipToCustomAddress !== undefined) row.ship_to_custom_address = p.shipToCustomAddress || null;
+  if (p.needByDate !== undefined) row.need_by_date = p.needByDate || null;
+  if (p.purchaseStatus !== undefined) row.purchase_status = p.purchaseStatus;
+  if (p.orderedDate !== undefined) row.ordered_date = p.orderedDate || null;
+  if (p.receivedDate !== undefined) row.received_date = p.receivedDate || null;
+  if (p.poNumber !== undefined) row.po_number = p.poNumber || null;
+  if (p.notes !== undefined) row.notes = p.notes;
+  return row;
+}
+
+// --- Purchasing Freight ---
+function rowToPurchasingFreight(r: any): PurchasingFreight {
+  return {
+    id: r.id,
+    purchasingModuleId: r.purchasing_module_id,
+    manufacturer: r.manufacturer,
+    purchaseUnitPrice: r.purchase_unit_price !== null && r.purchase_unit_price !== undefined ? Number(r.purchase_unit_price) : undefined,
+    shipToWarehouseId: r.ship_to_warehouse_id ?? undefined,
+    shipToCustomAddress: r.ship_to_custom_address ?? undefined,
+    needByDate: r.need_by_date ? toDate(r.need_by_date) : undefined,
+    purchaseStatus: (r.purchase_status as PurchaseStatus) ?? 'not_ordered',
+    orderedDate: r.ordered_date ? toDate(r.ordered_date) : undefined,
+    receivedDate: r.received_date ? toDate(r.received_date) : undefined,
+    poNumber: r.po_number ?? undefined,
+    notes: r.notes ?? '',
+  };
+}
+function purchasingFreightToRow(f: Partial<PurchasingFreight>): Record<string, any> {
+  const row: any = {};
+  if (f.id !== undefined) row.id = f.id;
+  if (f.purchasingModuleId !== undefined) row.purchasing_module_id = f.purchasingModuleId;
+  if (f.manufacturer !== undefined) row.manufacturer = f.manufacturer;
+  if (f.purchaseUnitPrice !== undefined) row.purchase_unit_price = f.purchaseUnitPrice ?? null;
+  if (f.shipToWarehouseId !== undefined) row.ship_to_warehouse_id = f.shipToWarehouseId || null;
+  if (f.shipToCustomAddress !== undefined) row.ship_to_custom_address = f.shipToCustomAddress || null;
+  if (f.needByDate !== undefined) row.need_by_date = f.needByDate || null;
+  if (f.purchaseStatus !== undefined) row.purchase_status = f.purchaseStatus;
+  if (f.orderedDate !== undefined) row.ordered_date = f.orderedDate || null;
+  if (f.receivedDate !== undefined) row.received_date = f.receivedDate || null;
+  if (f.poNumber !== undefined) row.po_number = f.poNumber || null;
+  if (f.notes !== undefined) row.notes = f.notes;
+  return row;
+}
+
+// --- Manufacturer Defaults ---
+function rowToMfrDefault(r: any): PurchasingManufacturerDefault {
+  return {
+    id: r.id,
+    purchasingModuleId: r.purchasing_module_id,
+    manufacturer: r.manufacturer,
+    shipToWarehouseId: r.ship_to_warehouse_id ?? undefined,
+    shipToCustomAddress: r.ship_to_custom_address ?? undefined,
+    needByDate: r.need_by_date ? toDate(r.need_by_date) : undefined,
+  };
+}
+function mfrDefaultToRow(d: Partial<PurchasingManufacturerDefault>): Record<string, any> {
+  const row: any = {};
+  if (d.id !== undefined) row.id = d.id;
+  if (d.purchasingModuleId !== undefined) row.purchasing_module_id = d.purchasingModuleId;
+  if (d.manufacturer !== undefined) row.manufacturer = d.manufacturer;
+  if (d.shipToWarehouseId !== undefined) row.ship_to_warehouse_id = d.shipToWarehouseId || null;
+  if (d.shipToCustomAddress !== undefined) row.ship_to_custom_address = d.shipToCustomAddress || null;
+  if (d.needByDate !== undefined) row.need_by_date = d.needByDate || null;
+  return row;
+}
+
 // ---------------------------------------------------------------------------
 // Store Interface
 // ---------------------------------------------------------------------------
@@ -577,6 +788,12 @@ interface AppState {
   reviewRuns: ReviewRun[];
   bidLevelingSessions: BidLevelingSession[];
   bidLevelingTemplates: BidLevelingMappingTemplate[];
+  milestones: ProjectMilestone[];
+  warehouses: Warehouse[];
+  purchasingModules: PurchasingModule[];
+  purchasingItems: PurchasingItem[];
+  purchasingFreight: PurchasingFreight[];
+  purchasingMfrDefaults: PurchasingManufacturerDefault[];
 
   // Loading state
   isLoading: boolean;
@@ -679,6 +896,35 @@ interface AppState {
   addBidLevelingTemplate: (t: Omit<BidLevelingMappingTemplate, 'id' | 'createdAt' | 'updatedAt'>) => string;
   updateBidLevelingTemplate: (id: string, t: Partial<BidLevelingMappingTemplate>) => void;
   deleteBidLevelingTemplate: (id: string) => void;
+
+  // Milestone actions
+  addMilestone: (m: Omit<ProjectMilestone, 'id' | 'createdAt' | 'updatedAt'>) => string;
+  addMilestonesBatch: (items: Omit<ProjectMilestone, 'id' | 'createdAt' | 'updatedAt'>[]) => void;
+  updateMilestone: (id: string, m: Partial<ProjectMilestone>) => void;
+  deleteMilestone: (id: string) => void;
+  markMilestoneComplete: (id: string, note?: string) => void;
+
+  // Submittal item-level approval — separate action so the package status
+  // can auto-advance (all items approved → package Approved; one item
+  // reverted → package R&R) without leaking that logic into every caller.
+  setSubmittalItemApproval: (submittalId: string, itemId: string, state: SubmittalItemApprovalState) => void;
+
+  // Warehouse actions (admin-only on the DB, gated client-side too)
+  addWarehouse: (w: Omit<Warehouse, 'id' | 'createdAt' | 'updatedAt'>) => string;
+  updateWarehouse: (id: string, w: Partial<Warehouse>) => void;
+  deleteWarehouse: (id: string) => void;
+
+  // Purchasing actions
+  addPurchasingModule: (m: { projectId: string; title: string; submittalIds: string[] }) => string;
+  updatePurchasingModule: (id: string, m: Partial<PurchasingModule>) => void;
+  deletePurchasingModule: (id: string) => void;
+  linkSubmittalToPurchasingModule: (purchasingModuleId: string, submittalId: string) => void;
+  unlinkSubmittalFromPurchasingModule: (purchasingModuleId: string, submittalId: string) => void;
+  /** Insert or update the persisted purchasing row for a given submittal item.
+   *  No-op rows aren't worth saving — caller should pass meaningful data. */
+  upsertPurchasingItem: (input: { purchasingModuleId: string; submittalItemId: string; updates: Partial<PurchasingItem> }) => void;
+  upsertPurchasingFreight: (input: { purchasingModuleId: string; manufacturer: string; updates: Partial<PurchasingFreight> }) => void;
+  upsertMfrDefault: (input: { purchasingModuleId: string; manufacturer: string; updates: Partial<PurchasingManufacturerDefault> }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +944,12 @@ export const useStore = create<AppState>((set, get) => ({
   reviewRuns: [],
   bidLevelingSessions: [],
   bidLevelingTemplates: [],
+  milestones: DB ? [] : seedMilestones,
+  warehouses: DB ? [] : seedWarehouses,
+  purchasingModules: [],
+  purchasingItems: [],
+  purchasingFreight: [],
+  purchasingMfrDefaults: [],
 
   isLoading: DB,      // start loading if Supabase is configured
   isInitialized: !DB, // already initialized in demo mode
@@ -736,6 +988,16 @@ export const useStore = create<AppState>((set, get) => ({
         // Bid Leveling
         supabase.from('bid_leveling_sessions').select('*'),
         supabase.from('bid_leveling_mapping_templates').select('*'),
+        // Milestones
+        supabase.from('project_milestones').select('*'),
+        // Warehouses (org-wide)
+        supabase.from('warehouses').select('*'),
+        // Purchasing
+        supabase.from('purchasing_modules').select('*'),
+        supabase.from('purchasing_module_submittals').select('*'),
+        supabase.from('purchasing_items').select('*'),
+        supabase.from('purchasing_freight').select('*'),
+        supabase.from('purchasing_manufacturer_defaults').select('*'),
       ]);
 
       const timeout = new Promise<never>((_, reject) =>
@@ -759,10 +1021,17 @@ export const useStore = create<AppState>((set, get) => ({
         reviewRunsRes,
         bidLevelingSessionsRes,
         bidLevelingTemplatesRes,
+        milestonesRes,
+        warehousesRes,
+        purchasingModulesRes,
+        purchasingModSubsRes,
+        purchasingItemsRes,
+        purchasingFreightRes,
+        purchasingMfrDefaultsRes,
       ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes]) {
+      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes, milestonesRes, warehousesRes, purchasingModulesRes, purchasingModSubsRes, purchasingItemsRes, purchasingFreightRes, purchasingMfrDefaultsRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
@@ -774,6 +1043,22 @@ export const useStore = create<AppState>((set, get) => ({
       const reviewRuns = (reviewRunsRes.data ?? []).map(rowToReviewRun);
       const bidLevelingSessions = (bidLevelingSessionsRes.data ?? []).map(rowToBidLevelingSession);
       const bidLevelingTemplates = (bidLevelingTemplatesRes.data ?? []).map(rowToBidLevelingTemplate);
+      const milestones = (milestonesRes.data ?? []).map(rowToMilestone);
+      const warehouses = (warehousesRes.data ?? []).map(rowToWarehouse);
+
+      // Purchasing — collapse junction rows into submittalIds[] on each module
+      const modSubByModule = new Map<string, string[]>();
+      for (const link of (purchasingModSubsRes.data ?? [])) {
+        const arr = modSubByModule.get(link.purchasing_module_id) ?? [];
+        arr.push(link.submittal_id);
+        modSubByModule.set(link.purchasing_module_id, arr);
+      }
+      const purchasingModules = (purchasingModulesRes.data ?? []).map((r: any) =>
+        rowToPurchasingModule(r, modSubByModule.get(r.id) ?? []),
+      );
+      const purchasingItems = (purchasingItemsRes.data ?? []).map(rowToPurchasingItem);
+      const purchasingFreight = (purchasingFreightRes.data ?? []).map(rowToPurchasingFreight);
+      const purchasingMfrDefaults = (purchasingMfrDefaultsRes.data ?? []).map(rowToMfrDefault);
 
       // Nest submittal items into submittals
       const submittalItems = (submittalItemsRes.data ?? []).map(rowToSubmittalItem);
@@ -852,7 +1137,8 @@ export const useStore = create<AppState>((set, get) => ({
 
       set({
         projects, projectBoM, submittals, rfis, closeouts, manuals, reviewRuns,
-        bidLevelingSessions, bidLevelingTemplates,
+        bidLevelingSessions, bidLevelingTemplates, milestones,
+        warehouses, purchasingModules, purchasingItems, purchasingFreight, purchasingMfrDefaults,
         isLoading: false, isInitialized: true,
       });
     } catch (err) {
@@ -896,6 +1182,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteProject: (id) => {
+    const purgedModuleIds = new Set(
+      get().purchasingModules.filter((m) => m.projectId === id).map((m) => m.id),
+    );
     set((s) => ({
       projects: s.projects.filter((x) => x.id !== id),
       projectBoM: s.projectBoM.filter((x) => x.projectId !== id),
@@ -903,6 +1192,11 @@ export const useStore = create<AppState>((set, get) => ({
       rfis: s.rfis.filter((x) => x.projectId !== id),
       closeouts: s.closeouts.filter((x) => x.projectId !== id),
       manuals: s.manuals.filter((x) => x.projectId !== id),
+      milestones: s.milestones.filter((x) => x.projectId !== id),
+      purchasingModules: s.purchasingModules.filter((x) => x.projectId !== id),
+      purchasingItems: s.purchasingItems.filter((x) => !purgedModuleIds.has(x.purchasingModuleId)),
+      purchasingFreight: s.purchasingFreight.filter((x) => !purgedModuleIds.has(x.purchasingModuleId)),
+      purchasingMfrDefaults: s.purchasingMfrDefaults.filter((x) => !purgedModuleIds.has(x.purchasingModuleId)),
     }));
     // DB cascade deletes will handle child rows if FK ON DELETE CASCADE is set.
     // If not, we delete explicitly.
@@ -1092,13 +1386,39 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   updateSubmittal: (id, sub) => {
+    // Package status changes can cascade to per-item approval states:
+    //   * → Approved  : every item becomes 'approved'
+    //   * → Draft     : every item resets to 'pending' (nothing has been submitted)
+    //   * → Submitted : preserve existing item marks (intentional — supports
+    //                    Approved → Submitted reverts that keep history)
+    //   * → R&R       : preserve existing item marks (same reason)
+    const cascadeAllItems: SubmittalItemApprovalState | null =
+      sub.status === 'Approved' ? 'approved'
+      : sub.status === 'Draft'  ? 'pending'
+      : null;
+
+    const today = now();
     set((s) => ({
-      submittals: s.submittals.map((x) => x.id === id ? { ...x, ...sub } : x),
+      submittals: s.submittals.map((x) => {
+        if (x.id !== id) return x;
+        const items = cascadeAllItems
+          ? x.items.map((i) => ({ ...i, approvalState: cascadeAllItems, approvalChangedAt: today }))
+          : x.items;
+        return { ...x, ...sub, items };
+      }),
     }));
-    // Don't send nested `items` to the submittals table
-    const { items, ...rest } = sub;
+
+    const { items: _ignoredItems, ...rest } = sub;
     if (Object.keys(rest).length > 0) {
       dbExec(() => supabase.from('submittals').update(submittalToRow(rest)).eq('id', id));
+    }
+    if (cascadeAllItems) {
+      dbExec(() =>
+        supabase
+          .from('submittal_items')
+          .update({ approval_state: cascadeAllItems, approval_changed_at: new Date().toISOString() })
+          .eq('submittal_id', id),
+      );
     }
   },
 
@@ -1113,7 +1433,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   addSubmittalItem: (submittalId, item) => {
     const id = genId();
-    const newItem: SubmittalItem = { ...item, id, submittalId };
+    const newItem: SubmittalItem = {
+      ...item,
+      id,
+      submittalId,
+      approvalState: item.approvalState ?? 'pending',
+    };
     set((s) => ({
       submittals: s.submittals.map((x) => x.id === submittalId ? { ...x, items: [...x.items, newItem] } : x),
     }));
@@ -1130,6 +1455,16 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteSubmittalItem: (submittalId, itemId) => {
+    // Block deletion if any linked purchasing module has already ordered or
+    // received this item. Caller should surface the error to the user.
+    const ordered = get().purchasingItems.some(
+      (p) => p.submittalItemId === itemId && p.purchaseStatus !== 'not_ordered',
+    );
+    if (ordered) {
+      throw new Error(
+        'Cannot delete this submittal item — it has already been ordered through a Purchasing module. Cancel the PO first or revert the purchasing status to Not Ordered.',
+      );
+    }
     set((s) => ({
       submittals: s.submittals.map((x) => x.id === submittalId ? {
         ...x, items: x.items.filter((i) => i.id !== itemId),
@@ -2048,5 +2383,333 @@ export const useStore = create<AppState>((set, get) => ({
     dbExec(async () => {
       return supabase.from('bid_leveling_mapping_templates').delete().eq('id', id);
     });
+  },
+
+  // =========================================================================
+  // Project Milestones
+  // =========================================================================
+  addMilestone: (m) => {
+    const id = genId();
+    const today = now();
+    const milestone: ProjectMilestone = { ...m, id, createdAt: today, updatedAt: today };
+    set((s) => ({ milestones: [...s.milestones, milestone] }));
+
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const userId = user?.id;
+      return supabase
+        .from('project_milestones')
+        .insert(milestoneToRow({ ...milestone, createdBy: userId } as any));
+    });
+
+    return id;
+  },
+
+  addMilestonesBatch: (items) => {
+    if (items.length === 0) return;
+    const today = now();
+    const newOnes: ProjectMilestone[] = items.map((m) => ({
+      ...m, id: genId(), createdAt: today, updatedAt: today,
+    }));
+    set((s) => ({ milestones: [...s.milestones, ...newOnes] }));
+
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const userId = user?.id;
+      const rows = newOnes.map((m) => milestoneToRow({ ...m, createdBy: userId } as any));
+      return supabase.from('project_milestones').insert(rows);
+    });
+  },
+
+  updateMilestone: (id, updates) => {
+    const updatedAt = now();
+    set((s) => ({
+      milestones: s.milestones.map((m) => m.id === id ? { ...m, ...updates, updatedAt } : m),
+    }));
+    dbExec(() =>
+      supabase.from('project_milestones').update(milestoneToRow({ ...updates, updatedAt })).eq('id', id),
+    );
+  },
+
+  deleteMilestone: (id) => {
+    set((s) => ({ milestones: s.milestones.filter((m) => m.id !== id) }));
+    dbExec(() => supabase.from('project_milestones').delete().eq('id', id));
+  },
+
+  markMilestoneComplete: (id, note) => {
+    const today = now();
+    set((s) => ({
+      milestones: s.milestones.map((m) => m.id === id
+        ? { ...m, completedDate: today, notes: note ? (m.notes ? `${m.notes}\n\n${note}` : note) : m.notes, updatedAt: today }
+        : m,
+      ),
+    }));
+    const m = get().milestones.find((x) => x.id === id);
+    if (!m) return;
+    dbExec(() =>
+      supabase
+        .from('project_milestones')
+        .update(milestoneToRow({ completedDate: today, notes: m.notes, updatedAt: today }))
+        .eq('id', id),
+    );
+  },
+
+  // =========================================================================
+  // Submittal item-level approval — handles auto promote/demote of the
+  // package status. Rules (mirroring the spec the user spelled out):
+  //   * All items 'approved' → package auto-promotes to 'Approved'
+  //   * Any item 'revise'    → package auto-demotes to 'Revise & Resubmit'
+  //   * Otherwise            → leave package status alone
+  // =========================================================================
+  setSubmittalItemApproval: (submittalId, itemId, state) => {
+    const today = now();
+    const sub = get().submittals.find((s) => s.id === submittalId);
+    if (!sub) return;
+
+    // Compute next item set + derived package status BEFORE we set state, so
+    // the same calculation drives both the local update and the DB writes.
+    const nextItems = sub.items.map((i) =>
+      i.id === itemId ? { ...i, approvalState: state, approvalChangedAt: today } : i,
+    );
+    const allApproved = nextItems.length > 0 && nextItems.every((i) => i.approvalState === 'approved');
+    const anyRevise  = nextItems.some((i) => i.approvalState === 'revise');
+    const nextStatus =
+      allApproved      ? 'Approved' as const
+      : anyRevise      ? 'Revise & Resubmit' as const
+      : sub.status;
+
+    set((s) => ({
+      submittals: s.submittals.map((x) => x.id === submittalId
+        ? { ...x, items: nextItems, status: nextStatus }
+        : x,
+      ),
+    }));
+
+    dbExec(() =>
+      supabase
+        .from('submittal_items')
+        .update({ approval_state: state, approval_changed_at: new Date().toISOString() })
+        .eq('id', itemId),
+    );
+    if (nextStatus !== sub.status) {
+      dbExec(() => supabase.from('submittals').update({ status: nextStatus }).eq('id', submittalId));
+    }
+  },
+
+  // =========================================================================
+  // Warehouses
+  // =========================================================================
+  addWarehouse: (w) => {
+    const id = genId();
+    const today = now();
+    const wh: Warehouse = { ...w, id, createdAt: today, updatedAt: today };
+    set((s) => ({ warehouses: [...s.warehouses, wh] }));
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const row = warehouseToRow(wh);
+      if (user?.id) row.created_by = user.id;
+      return supabase.from('warehouses').insert(row);
+    });
+    return id;
+  },
+
+  updateWarehouse: (id, updates) => {
+    const today = now();
+    set((s) => ({
+      warehouses: s.warehouses.map((w) => w.id === id ? { ...w, ...updates, updatedAt: today } : w),
+    }));
+    dbExec(() =>
+      supabase.from('warehouses').update({ ...warehouseToRow(updates), updated_at: new Date().toISOString() }).eq('id', id),
+    );
+  },
+
+  deleteWarehouse: (id) => {
+    set((s) => ({ warehouses: s.warehouses.filter((w) => w.id !== id) }));
+    dbExec(() => supabase.from('warehouses').delete().eq('id', id));
+  },
+
+  // =========================================================================
+  // Purchasing
+  // =========================================================================
+  addPurchasingModule: ({ projectId, title, submittalIds }) => {
+    const id = genId();
+    const today = now();
+    const module: PurchasingModule = {
+      id, projectId, title, notes: '', submittalIds: [...submittalIds],
+      createdAt: today, updatedAt: today,
+    };
+    set((s) => ({ purchasingModules: [...s.purchasingModules, module] }));
+
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const userId = user?.id;
+      const moduleRow: any = purchasingModuleToRow(module);
+      if (userId) moduleRow.created_by = userId;
+      const insertRes = await supabase.from('purchasing_modules').insert(moduleRow);
+      if (insertRes.error) return insertRes;
+      if (submittalIds.length > 0) {
+        const linkRows = submittalIds.map((sid) => ({
+          purchasing_module_id: id,
+          submittal_id: sid,
+          linked_by: userId ?? null,
+        }));
+        const linkRes = await supabase.from('purchasing_module_submittals').insert(linkRows);
+        if (linkRes.error) return linkRes;
+      }
+      return { error: null } as any;
+    });
+
+    return id;
+  },
+
+  updatePurchasingModule: (id, updates) => {
+    const today = now();
+    set((s) => ({
+      purchasingModules: s.purchasingModules.map((m) => m.id === id ? { ...m, ...updates, updatedAt: today } : m),
+    }));
+    const { submittalIds: _ignored, ...persistable } = updates;
+    if (Object.keys(persistable).length > 0) {
+      dbExec(() =>
+        supabase.from('purchasing_modules').update({ ...purchasingModuleToRow(persistable), updated_at: new Date().toISOString() }).eq('id', id),
+      );
+    }
+  },
+
+  deletePurchasingModule: (id) => {
+    set((s) => ({
+      purchasingModules: s.purchasingModules.filter((m) => m.id !== id),
+      purchasingItems: s.purchasingItems.filter((p) => p.purchasingModuleId !== id),
+      purchasingFreight: s.purchasingFreight.filter((p) => p.purchasingModuleId !== id),
+      purchasingMfrDefaults: s.purchasingMfrDefaults.filter((p) => p.purchasingModuleId !== id),
+    }));
+    dbExec(() => supabase.from('purchasing_modules').delete().eq('id', id));
+  },
+
+  linkSubmittalToPurchasingModule: (purchasingModuleId, submittalId) => {
+    set((s) => ({
+      purchasingModules: s.purchasingModules.map((m) => m.id === purchasingModuleId
+        ? { ...m, submittalIds: m.submittalIds.includes(submittalId) ? m.submittalIds : [...m.submittalIds, submittalId] }
+        : m,
+      ),
+    }));
+    dbExec(async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      return supabase.from('purchasing_module_submittals').insert({
+        purchasing_module_id: purchasingModuleId,
+        submittal_id: submittalId,
+        linked_by: user?.id ?? null,
+      });
+    });
+  },
+
+  unlinkSubmittalFromPurchasingModule: (purchasingModuleId, submittalId) => {
+    // Drop both the link and any persisted purchasing rows for items that
+    // belonged to that submittal — they have no display anchor anymore.
+    const purgedItemIds = new Set(
+      get().submittals
+        .filter((s) => s.id === submittalId)
+        .flatMap((s) => s.items.map((i) => i.id)),
+    );
+    set((s) => ({
+      purchasingModules: s.purchasingModules.map((m) => m.id === purchasingModuleId
+        ? { ...m, submittalIds: m.submittalIds.filter((id) => id !== submittalId) }
+        : m,
+      ),
+      purchasingItems: s.purchasingItems.filter((p) =>
+        !(p.purchasingModuleId === purchasingModuleId && purgedItemIds.has(p.submittalItemId)),
+      ),
+    }));
+    dbExec(async () => {
+      await supabase
+        .from('purchasing_module_submittals')
+        .delete()
+        .eq('purchasing_module_id', purchasingModuleId)
+        .eq('submittal_id', submittalId);
+      return { error: null } as any;
+    });
+  },
+
+  upsertPurchasingItem: ({ purchasingModuleId, submittalItemId, updates }) => {
+    const existing = get().purchasingItems.find(
+      (p) => p.purchasingModuleId === purchasingModuleId && p.submittalItemId === submittalItemId,
+    );
+    if (existing) {
+      const merged: PurchasingItem = { ...existing, ...updates };
+      set((s) => ({
+        purchasingItems: s.purchasingItems.map((p) => p.id === existing.id ? merged : p),
+      }));
+      dbExec(() =>
+        supabase.from('purchasing_items').update({ ...purchasingItemToRow(updates), updated_at: new Date().toISOString() }).eq('id', existing.id),
+      );
+    } else {
+      const id = genId();
+      const fresh: PurchasingItem = {
+        id,
+        purchasingModuleId,
+        submittalItemId,
+        purchaseStatus: 'not_ordered',
+        notes: '',
+        ...updates,
+      };
+      set((s) => ({ purchasingItems: [...s.purchasingItems, fresh] }));
+      dbExec(async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        const row = purchasingItemToRow(fresh);
+        if (user?.id) row.updated_by = user.id;
+        return supabase.from('purchasing_items').insert(row);
+      });
+    }
+  },
+
+  upsertPurchasingFreight: ({ purchasingModuleId, manufacturer, updates }) => {
+    const existing = get().purchasingFreight.find(
+      (f) => f.purchasingModuleId === purchasingModuleId && f.manufacturer === manufacturer,
+    );
+    if (existing) {
+      const merged: PurchasingFreight = { ...existing, ...updates };
+      set((s) => ({
+        purchasingFreight: s.purchasingFreight.map((f) => f.id === existing.id ? merged : f),
+      }));
+      dbExec(() =>
+        supabase.from('purchasing_freight').update({ ...purchasingFreightToRow(updates), updated_at: new Date().toISOString() }).eq('id', existing.id),
+      );
+    } else {
+      const id = genId();
+      const fresh: PurchasingFreight = {
+        id,
+        purchasingModuleId,
+        manufacturer,
+        purchaseStatus: 'not_ordered',
+        notes: '',
+        ...updates,
+      };
+      set((s) => ({ purchasingFreight: [...s.purchasingFreight, fresh] }));
+      dbExec(() => supabase.from('purchasing_freight').insert(purchasingFreightToRow(fresh)));
+    }
+  },
+
+  upsertMfrDefault: ({ purchasingModuleId, manufacturer, updates }) => {
+    const existing = get().purchasingMfrDefaults.find(
+      (d) => d.purchasingModuleId === purchasingModuleId && d.manufacturer === manufacturer,
+    );
+    if (existing) {
+      const merged: PurchasingManufacturerDefault = { ...existing, ...updates };
+      set((s) => ({
+        purchasingMfrDefaults: s.purchasingMfrDefaults.map((d) => d.id === existing.id ? merged : d),
+      }));
+      dbExec(() =>
+        supabase.from('purchasing_manufacturer_defaults').update({ ...mfrDefaultToRow(updates), updated_at: new Date().toISOString() }).eq('id', existing.id),
+      );
+    } else {
+      const id = genId();
+      const fresh: PurchasingManufacturerDefault = {
+        id,
+        purchasingModuleId,
+        manufacturer,
+        ...updates,
+      };
+      set((s) => ({ purchasingMfrDefaults: [...s.purchasingMfrDefaults, fresh] }));
+      dbExec(() => supabase.from('purchasing_manufacturer_defaults').insert(mfrDefaultToRow(fresh)));
+    }
   },
 }));

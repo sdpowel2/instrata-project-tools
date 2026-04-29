@@ -21,6 +21,9 @@ import { CutsheetRepositoryPage } from './pages/CutsheetRepository';
 import { CutsheetMyUploadsPage } from './pages/CutsheetMyUploads';
 import { ProductsPage } from './pages/ProductsPage';
 import { EffortSurveyPage } from './pages/EffortSurvey';
+import { ScheduleMilestonesPage } from './pages/operations/ScheduleMilestones';
+import { PurchasingListPage } from './pages/operations/PurchasingList';
+import { PurchasingDetailPage } from './pages/operations/PurchasingDetail';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -97,6 +100,9 @@ export default function App() {
                 <Route path="bid-leveling" element={<BidLevelingPage />} />
                 <Route path="pre-survey" element={<EffortSurveyPage kind="pre-sales" />} />
                 <Route path="post-survey" element={<EffortSurveyPage kind="post-sales" />} />
+                <Route path="schedule" element={<ScheduleMilestonesPage />} />
+                <Route path="purchasing" element={<PurchasingListPage />} />
+                <Route path="purchasing/:purchasingId" element={<PurchasingDetailPage />} />
               </Route>
               <Route path="products" element={<ProductsPage />} />
               <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
