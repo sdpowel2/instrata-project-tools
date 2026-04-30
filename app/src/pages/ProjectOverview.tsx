@@ -193,9 +193,12 @@ export function ProjectOverview() {
 
       <EffortSurveyPrompt project={project} onNavigate={(p) => navigate(p)} />
 
-      {/* Timeline + Team */}
-      <div className="mt-5.5 grid grid-cols-[2fr_1fr] gap-5" style={{ marginTop: 22 }}>
-        <div className="bg-white border border-border rounded-xl shadow-sm">
+      {/* Timeline + Team — share the same 3-col grid as the tool cards below
+          so the Timeline aligns with Pre-Sales+Post-Sales and Team aligns
+          with Operations. Without col-span-2, a 2fr/1fr grid leaves the
+          right edge of Timeline G/3 short of Post-Sales. */}
+      <div className="mt-5.5 grid grid-cols-3 gap-5" style={{ marginTop: 22 }}>
+        <div className="col-span-2 bg-white border border-border rounded-xl shadow-sm">
           <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
             <div>
               <Eyebrow>Monday.com</Eyebrow>
@@ -462,16 +465,28 @@ function ToolGroupCard({ phase, description, items, onOpen }: {
   const disabled = !onOpen;
   return (
     <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
+      {/* Header — items-start + a 2-line min-height on the description keeps
+          the eyebrow at the same y across all three cards even when the
+          description is short enough to fit on one line. */}
       <div
-        className="px-5 py-3.5 border-b border-border flex items-center gap-3"
+        className="px-5 py-3.5 border-b border-border flex items-start gap-3"
         style={{ background: `${accent}08` }}
       >
-        <div className="w-2 h-[30px] rounded" style={{ background: accent }} />
+        <div className="w-2 h-[30px] rounded flex-shrink-0" style={{ background: accent }} />
         <div className="flex-1">
           <div className="text-[10px] font-bold tracking-[0.15em] uppercase" style={{ color: accent }}>
             {phase}
           </div>
-          <div className="text-[13px] text-fg-2 mt-0.5">{description}</div>
+          <div
+            className="text-[13px] text-fg-2 mt-0.5"
+            // Explicit line-height + 2× min-height so single-line copy
+            // (Post-Sales) takes the same vertical space as 2-line copy
+            // (Pre-Sales / Operations). Without pinning line-height, the
+            // browser default of ~1.5 makes 2.6em fall short of two lines.
+            style={{ lineHeight: 1.45, minHeight: 'calc(2 * 1.45 * 13px)' }}
+          >
+            {description}
+          </div>
         </div>
       </div>
       <div>

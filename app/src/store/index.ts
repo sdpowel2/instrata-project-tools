@@ -13,6 +13,7 @@ import type {
   Warehouse,
   PurchasingModule, PurchasingItem, PurchasingFreight, PurchasingManufacturerDefault,
   PurchaseStatus,
+  ProjectComment, CommentReaction,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { isExcludedFromSubmittal } from '../utils/submittalExclusions';
@@ -795,6 +796,12 @@ interface AppState {
   purchasingFreight: PurchasingFreight[];
   purchasingMfrDefaults: PurchasingManufacturerDefault[];
 
+  // Project comments — lazy-loaded per project. Fetched the first time a
+  // user opens the Comments tab; subsequent visits hit the cache and a
+  // background refresh pulls anything posted by other users.
+  projectComments: ProjectComment[];
+  commentsLoadedFor: Set<string>;
+
   // Loading state
   isLoading: boolean;
   isInitialized: boolean;
@@ -925,6 +932,15 @@ interface AppState {
   upsertPurchasingItem: (input: { purchasingModuleId: string; submittalItemId: string; updates: Partial<PurchasingItem> }) => void;
   upsertPurchasingFreight: (input: { purchasingModuleId: string; manufacturer: string; updates: Partial<PurchasingFreight> }) => void;
   upsertMfrDefault: (input: { purchasingModuleId: string; manufacturer: string; updates: Partial<PurchasingManufacturerDefault> }) => void;
+
+  // Project comment actions — lazy-loaded per project. fetchProjectComments
+  // is safe to call on every tab open; it short-circuits on the cached
+  // projectId and refreshes silently in the background.
+  fetchProjectComments: (projectId: string) => Promise<void>;
+  addProjectComment: (input: { projectId: string; parentId: string | null; body: string }) => Promise<string | null>;
+  updateProjectComment: (commentId: string, body: string) => Promise<void>;
+  deleteProjectComment: (commentId: string) => Promise<void>;
+  toggleCommentReaction: (commentId: string, emoji: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -950,6 +966,9 @@ export const useStore = create<AppState>((set, get) => ({
   purchasingItems: [],
   purchasingFreight: [],
   purchasingMfrDefaults: [],
+
+  projectComments: [],
+  commentsLoadedFor: new Set<string>(),
 
   isLoading: DB,      // start loading if Supabase is configured
   isInitialized: !DB, // already initialized in demo mode
@@ -2711,5 +2730,159 @@ export const useStore = create<AppState>((set, get) => ({
       set((s) => ({ purchasingMfrDefaults: [...s.purchasingMfrDefaults, fresh] }));
       dbExec(() => supabase.from('purchasing_manufacturer_defaults').insert(mfrDefaultToRow(fresh)));
     }
+  },
+
+  // =========================================================================
+  // Project comments — chat thread on the Project Overview page.
+  //
+  // Loaded lazily per project (only when the Comments tab opens) so we
+  // don't pay for every project's chat history on app boot. Reactions live
+  // on the same row as a JSONB array of `{emoji, userIds}`.
+  // =========================================================================
+  fetchProjectComments: async (projectId) => {
+    if (!isSupabaseConfigured()) return;
+
+    const { data, error } = await supabase
+      .from('project_comments')
+      .select('id, project_id, parent_id, author_id, body, reactions, edited, created_at, updated_at, profiles:author_id(email, full_name)')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('[fetchProjectComments]', error);
+      return;
+    }
+
+    const mapped: ProjectComment[] = (data ?? []).map((r: any) => ({
+      id: r.id,
+      projectId: r.project_id,
+      parentId: r.parent_id ?? null,
+      authorId: r.author_id,
+      authorName: r.profiles?.full_name || r.profiles?.email || 'Unknown',
+      authorEmail: r.profiles?.email ?? '',
+      body: r.body ?? '',
+      reactions: Array.isArray(r.reactions) ? r.reactions : [],
+      edited: !!r.edited,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+
+    set((s) => {
+      // Drop any cached comments for this project so deletes from other
+      // sessions get reflected — then merge in the freshly fetched rows.
+      const others = s.projectComments.filter((c) => c.projectId !== projectId);
+      const loaded = new Set(s.commentsLoadedFor);
+      loaded.add(projectId);
+      return { projectComments: [...others, ...mapped], commentsLoadedFor: loaded };
+    });
+  },
+
+  addProjectComment: async ({ projectId, parentId, body }) => {
+    if (!isSupabaseConfigured()) return null;
+    const trimmed = body.trim();
+    if (!trimmed) return null;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    const { data, error } = await supabase
+      .from('project_comments')
+      .insert({
+        project_id: projectId,
+        parent_id: parentId,
+        author_id: user.id,
+        body: trimmed,
+      })
+      .select('id, project_id, parent_id, author_id, body, reactions, edited, created_at, updated_at, profiles:author_id(email, full_name)')
+      .single();
+
+    if (error || !data) {
+      console.error('[addProjectComment]', error);
+      return null;
+    }
+
+    const fresh: ProjectComment = {
+      id: data.id,
+      projectId: data.project_id,
+      parentId: data.parent_id ?? null,
+      authorId: data.author_id,
+      authorName: (data as any).profiles?.full_name || (data as any).profiles?.email || 'You',
+      authorEmail: (data as any).profiles?.email ?? '',
+      body: data.body ?? '',
+      reactions: Array.isArray(data.reactions) ? data.reactions : [],
+      edited: !!data.edited,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
+    set((s) => ({ projectComments: [...s.projectComments, fresh] }));
+    return fresh.id;
+  },
+
+  updateProjectComment: async (commentId, body) => {
+    if (!isSupabaseConfigured()) return;
+    const trimmed = body.trim();
+    if (!trimmed) return;
+
+    const updatedAt = new Date().toISOString();
+    set((s) => ({
+      projectComments: s.projectComments.map((c) =>
+        c.id === commentId ? { ...c, body: trimmed, edited: true, updatedAt } : c,
+      ),
+    }));
+
+    const { error } = await supabase
+      .from('project_comments')
+      .update({ body: trimmed, edited: true, updated_at: updatedAt })
+      .eq('id', commentId);
+    if (error) console.error('[updateProjectComment]', error);
+  },
+
+  deleteProjectComment: async (commentId) => {
+    if (!isSupabaseConfigured()) return;
+    // Optimistically drop the comment and any replies (cascade matches the DB).
+    set((s) => ({
+      projectComments: s.projectComments.filter(
+        (c) => c.id !== commentId && c.parentId !== commentId,
+      ),
+    }));
+    const { error } = await supabase.from('project_comments').delete().eq('id', commentId);
+    if (error) console.error('[deleteProjectComment]', error);
+  },
+
+  toggleCommentReaction: async (commentId, emoji) => {
+    if (!isSupabaseConfigured()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const existing = get().projectComments.find((c) => c.id === commentId);
+    if (!existing) return;
+
+    // Build the next reactions array: toggle this user in/out of the
+    // emoji's bucket. If the bucket goes empty, drop it entirely.
+    const next: CommentReaction[] = [];
+    let touched = false;
+    for (const r of existing.reactions) {
+      if (r.emoji === emoji) {
+        touched = true;
+        const has = r.userIds.includes(user.id);
+        const userIds = has ? r.userIds.filter((id) => id !== user.id) : [...r.userIds, user.id];
+        if (userIds.length > 0) next.push({ emoji, userIds });
+      } else {
+        next.push(r);
+      }
+    }
+    if (!touched) next.push({ emoji, userIds: [user.id] });
+
+    set((s) => ({
+      projectComments: s.projectComments.map((c) =>
+        c.id === commentId ? { ...c, reactions: next } : c,
+      ),
+    }));
+
+    const { error } = await supabase
+      .from('project_comments')
+      .update({ reactions: next })
+      .eq('id', commentId);
+    if (error) console.error('[toggleCommentReaction]', error);
   },
 }));

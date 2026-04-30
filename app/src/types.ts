@@ -702,3 +702,31 @@ export type PurchasingDisplayStatus =
   | 'received'
   | 'reverted_after_order'; // Was approved + ordered, then approval pulled back
 
+// ===================== PROJECT COMMENTS =====================
+
+/** A single emoji reaction on a comment. `userIds` is the set of users who
+ *  added that emoji — toggling a reaction adds/removes the current user from
+ *  this list. The count surfaced in the UI is `userIds.length`. */
+export interface CommentReaction {
+  emoji: string;
+  userIds: string[];
+}
+
+/** A comment on the project overview page. Top-level comments have
+ *  `parentId == null`; replies point at the top-level comment. Nested
+ *  replies (reply-to-reply) are not supported in v1 — the composer is
+ *  hidden from existing replies. */
+export interface ProjectComment {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  authorId: string;
+  authorName: string;   // denormalized from profiles at fetch time
+  authorEmail: string;  // denormalized; falls back to "Unknown" if profile gone
+  body: string;
+  reactions: CommentReaction[];
+  edited: boolean;
+  createdAt: string;    // ISO timestamp from Postgres
+  updatedAt: string;
+}
+

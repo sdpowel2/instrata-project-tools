@@ -1,19 +1,22 @@
-// Project Log — three tabbed sub-views (Comments, Files, Client / GC Log)
-// that live on the Project Overview between the tool quick-links and the
-// Bill of Materials. Tabs are intentionally unwired right now: each renders
-// a styled empty state so the scaffolding is in place for when the
-// underlying features (comments persistence, file repo, change-order log)
-// get built out. The full view-level sub-components (composer, folder rail,
-// timeline) are sketched here for future reference and intentionally not
-// rendered until there's real data to drive them.
-import { useState, type ComponentType } from 'react';
+// Project Log — three tabbed sub-views (Comments, Files, Client / GC Log).
+// Comments are live as of this commit. Files and Client / GC Log render
+// styled empty states until the underlying features land. The Comments
+// view follows the design originally staged in this file: an avatar chip
+// with the author's name + timestamp, threaded replies that default to
+// collapsed behind a notification badge showing the reply count, and a
+// scrollable history bounded to a fixed height that the user can expand
+// when the thread outgrows it.
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   MessageSquareWarning, Folder, ClipboardCheck, BookOpen,
-  Download, Paperclip, Smile, Send, Reply, ChevronRight,
-  Users, FileText, Zap, Flag,
+  Download, Smile, Send, Reply, ChevronRight, ChevronDown,
+  Pencil, Trash2, Check, X, Loader2,
 } from 'lucide-react';
-import type { Project } from '../types';
+import type { Project, ProjectComment } from '../types';
 import { Eyebrow } from './ui';
+import { useStore } from '../store';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 
 type TabKey = 'comments' | 'files' | 'client';
 
@@ -24,13 +27,25 @@ interface TabDef {
   count: number;
 }
 
-export function ProjectLog({ project: _project }: { project: Project }) {
+export function ProjectLog({ project }: { project: Project }) {
   const [tab, setTab] = useState<TabKey>('comments');
 
-  // Counts default to 0 until the backing data is wired up. They render in
-  // the tab-pill regardless so the styling matches the design today.
+  // Pre-fetch comments on mount so the tab badge count is accurate even
+  // before the user opens the tab. The store dedupes by projectId on the
+  // commentsLoadedFor set, so re-mounts are cheap.
+  const fetchProjectComments = useStore((s) => s.fetchProjectComments);
+  useEffect(() => {
+    fetchProjectComments(project.id);
+  }, [project.id, fetchProjectComments]);
+
+  const allComments = useStore((s) => s.projectComments);
+  const projectCommentCount = useMemo(
+    () => allComments.filter((c) => c.projectId === project.id).length,
+    [allComments, project.id],
+  );
+
   const tabs: TabDef[] = [
-    { key: 'comments', label: 'Comments',          icon: MessageSquareWarning, count: 0 },
+    { key: 'comments', label: 'Comments',          icon: MessageSquareWarning, count: projectCommentCount },
     { key: 'files',    label: 'Files',             icon: Folder,               count: 0 },
     { key: 'client',   label: 'Client / GC Log',   icon: ClipboardCheck,       count: 0 },
   ];
@@ -99,7 +114,7 @@ export function ProjectLog({ project: _project }: { project: Project }) {
       </div>
 
       <div>
-        {tab === 'comments' && <CommentsTabPlaceholder />}
+        {tab === 'comments' && <CommentsTab projectId={project.id} />}
         {tab === 'files'    && <FilesTabPlaceholder />}
         {tab === 'client'   && <ClientLogTabPlaceholder />}
       </div>
@@ -108,25 +123,569 @@ export function ProjectLog({ project: _project }: { project: Project }) {
 }
 
 // =============================================================================
-// Tab placeholders — each tab renders a styled empty state. The full
-// sub-components below are kept in this file so the design scaffolding is
-// available when the corresponding feature is built out.
+// CommentsTab — live chat thread for the project. Top-level comments + flat
+// replies (no nesting beyond one level), reactions, edit/delete on your own,
+// scrollable history bounded by a fixed height that can be expanded.
 // =============================================================================
 
-function CommentsTabPlaceholder() {
-  return (
-    <div className="px-6 py-14 text-center">
-      <div className="w-12 h-12 rounded-xl bg-navy/[0.06] text-navy flex items-center justify-center mx-auto mb-3.5">
-        <MessageSquareWarning size={22} />
+const COLLAPSED_HEIGHT = 480;
+const EXPANDED_HEIGHT = 820;
+const REACTION_PALETTE = ['👍', '❤️', '😂', '🎉', '🚀', '👀'];
+
+function CommentsTab({ projectId }: { projectId: string }) {
+  const { user } = useAuth();
+
+  const allComments = useStore((s) => s.projectComments);
+  const loaded = useStore((s) => s.commentsLoadedFor.has(projectId));
+  const addProjectComment = useStore((s) => s.addProjectComment);
+  const updateProjectComment = useStore((s) => s.updateProjectComment);
+  const deleteProjectComment = useStore((s) => s.deleteProjectComment);
+  const toggleCommentReaction = useStore((s) => s.toggleCommentReaction);
+
+  const [draft, setDraft] = useState('');
+  const [posting, setPosting] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const projectComments = useMemo(
+    () => allComments.filter((c) => c.projectId === projectId),
+    [allComments, projectId],
+  );
+
+  // Top-level threads, oldest first (chat-style: scroll down for newer).
+  const topLevel = useMemo(
+    () =>
+      projectComments
+        .filter((c) => !c.parentId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [projectComments],
+  );
+
+  // Index replies by their top-level parent so each thread can render its
+  // own reply list without re-scanning the full comment array.
+  const repliesByParent = useMemo(() => {
+    const map = new Map<string, ProjectComment[]>();
+    for (const c of projectComments) {
+      if (!c.parentId) continue;
+      const arr = map.get(c.parentId) ?? [];
+      arr.push(c);
+      map.set(c.parentId, arr);
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    }
+    return map;
+  }, [projectComments]);
+
+  // Detect whether the thread overflows the collapsed height. Re-runs on
+  // every comments / expanded change so the toggle button surfaces and
+  // hides as the thread grows or shrinks.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      setOverflowing(false);
+      return;
+    }
+    setOverflowing(el.scrollHeight > el.clientHeight + 1);
+  }, [projectComments, expanded]);
+
+  if (!isSupabaseConfigured()) {
+    return (
+      <div className="px-6 py-14 text-center">
+        <div className="w-12 h-12 rounded-xl bg-navy/[0.06] text-navy flex items-center justify-center mx-auto mb-3.5">
+          <MessageSquareWarning size={22} />
+        </div>
+        <div className="text-base font-semibold text-navy">Comments require Supabase</div>
+        <div className="text-[13px] text-fg-2 max-w-[440px] mx-auto mt-1.5">
+          Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable the project chat.
+          Demo mode runs without persistence.
+        </div>
       </div>
-      <div className="text-base font-semibold text-navy">Comments coming soon</div>
-      <div className="text-[13px] text-fg-2 max-w-[440px] mx-auto mt-1.5">
-        Inline comments with reactions, replies, and notification indicators will live here.
-        Posts will be timestamped and appended in real time.
+    );
+  }
+
+  const handlePost = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed || posting) return;
+    setPosting(true);
+    const id = await addProjectComment({ projectId, parentId: null, body: trimmed });
+    setPosting(false);
+    if (id) setDraft('');
+  };
+
+  const handleComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // ⌘/Ctrl-Enter posts; plain Enter inserts a newline so multi-line
+    // comments work like every other chat tool.
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handlePost();
+    }
+  };
+
+  const meId = user?.id ?? '';
+  const isAdmin = user?.role === 'admin';
+  const myInitials = initialsOf(user?.fullName || user?.email || 'You');
+  const myColor = userColor(meId || user?.email || 'guest');
+
+  return (
+    <div className="flex flex-col">
+      {/* Composer */}
+      <div className="px-5.5 py-4.5 border-b border-border bg-surface/40" style={{ paddingLeft: 22, paddingRight: 22 }}>
+        <div className="flex gap-3">
+          <Avatar initials={myInitials} color={myColor} />
+          <div className="flex-1">
+            <textarea
+              rows={2}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleComposerKey}
+              placeholder="Post a comment to the project log..."
+              className="w-full px-3 py-2.5 text-[13px] border border-border rounded-lg bg-white resize-y outline-none box-border focus:border-navy/50"
+            />
+            <div className="mt-2 flex items-center justify-between">
+              <div className="text-[11px] text-fg-2">
+                <kbd className="px-1.5 py-px rounded border border-border bg-white font-mono text-[10px]">⌘</kbd>
+                {' '}+{' '}
+                <kbd className="px-1.5 py-px rounded border border-border bg-white font-mono text-[10px]">Enter</kbd>
+                {' '}to post
+              </div>
+              <button
+                onClick={handlePost}
+                disabled={!draft.trim() || posting}
+                className="btn-orange text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {posting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Post
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* History — scrollable bounded container */}
+      <div
+        ref={scrollRef}
+        style={{ maxHeight: expanded ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT, overflowY: 'auto' }}
+      >
+        {!loaded ? (
+          <div className="px-6 py-14 flex items-center justify-center text-sm text-fg-2 gap-2">
+            <Loader2 size={14} className="animate-spin" /> Loading comments…
+          </div>
+        ) : topLevel.length === 0 ? (
+          <div className="px-6 py-14 text-center">
+            <div className="w-12 h-12 rounded-xl bg-navy/[0.06] text-navy flex items-center justify-center mx-auto mb-3.5">
+              <MessageSquareWarning size={22} />
+            </div>
+            <div className="text-base font-semibold text-navy">Start the conversation</div>
+            <div className="text-[13px] text-fg-2 max-w-[440px] mx-auto mt-1.5">
+              No comments yet. Post a question, share a status update, or kick off a discussion above.
+            </div>
+          </div>
+        ) : (
+          <div>
+            {topLevel.map((c, i) => (
+              <CommentRow
+                key={c.id}
+                comment={c}
+                replies={repliesByParent.get(c.id) ?? []}
+                isFirst={i === 0}
+                isLast={i === topLevel.length - 1}
+                projectId={projectId}
+                meId={meId}
+                isAdmin={isAdmin}
+                onAddReply={(body) => addProjectComment({ projectId, parentId: c.id, body })}
+                onEdit={updateProjectComment}
+                onDelete={deleteProjectComment}
+                onToggleReaction={toggleCommentReaction}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Expand / Collapse toggle — shows once content exceeds the
+          default container, or any time the thread is currently expanded. */}
+      {(overflowing || expanded) && (
+        <div className="border-t border-border bg-surface/40 px-5.5 py-2 flex items-center justify-center" style={{ paddingLeft: 22, paddingRight: 22 }}>
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            className="appearance-none border-0 bg-transparent cursor-pointer text-xs font-semibold text-navy hover:underline inline-flex items-center gap-1.5"
+          >
+            <ChevronDown
+              size={12}
+              style={{ transform: expanded ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }}
+            />
+            {expanded ? 'Collapse' : 'Expand'} history
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// CommentRow — one top-level comment plus its (collapsed-by-default) replies.
+// =============================================================================
+
+interface CommentRowProps {
+  comment: ProjectComment;
+  replies: ProjectComment[];
+  isFirst: boolean;
+  isLast: boolean;
+  projectId: string;
+  meId: string;
+  isAdmin: boolean;
+  onAddReply: (body: string) => Promise<string | null>;
+  onEdit: (commentId: string, body: string) => Promise<void>;
+  onDelete: (commentId: string) => Promise<void>;
+  onToggleReaction: (commentId: string, emoji: string) => Promise<void>;
+}
+
+function CommentRow({
+  comment, replies, isFirst, isLast, meId, isAdmin,
+  onAddReply, onEdit, onDelete, onToggleReaction,
+}: CommentRowProps) {
+  const [showReplies, setShowReplies] = useState(false);
+  const [showReplyComposer, setShowReplyComposer] = useState(false);
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const replyCount = replies.length;
+
+  return (
+    <div
+      className="px-5.5 py-4"
+      style={{
+        paddingLeft: 22,
+        paddingRight: 22,
+        borderTop: isFirst ? 'none' : '1px solid var(--color-border)',
+        borderBottom: isLast ? 'none' : undefined,
+      }}
+    >
+      <CommentBody
+        comment={comment}
+        meId={meId}
+        isAdmin={isAdmin}
+        size="md"
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onToggleReaction={onToggleReaction}
+        showReactionPicker={showReactionPicker}
+        setShowReactionPicker={setShowReactionPicker}
+        actionRow={
+          <>
+            <button
+              onClick={() => {
+                setShowReplyComposer((s) => !s);
+                if (!showReplies && replyCount > 0) setShowReplies(true);
+              }}
+              className="appearance-none border-0 bg-transparent cursor-pointer p-0 inline-flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-navy transition-colors"
+            >
+              <Reply size={12} /> Reply
+            </button>
+            {replyCount > 0 && (
+              <button
+                onClick={() => setShowReplies((s) => !s)}
+                className="appearance-none border-0 bg-transparent cursor-pointer text-xs font-semibold inline-flex items-center gap-1.5 p-0"
+                style={{ color: '#0072CE' }}
+                title={`${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`}
+              >
+                <span
+                  className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-[5px] rounded-[9px] text-white text-[10.5px] font-bold font-mono"
+                  style={{ background: '#0072CE' }}
+                >
+                  {replyCount}
+                </span>
+                <span>{showReplies ? 'Hide' : 'Show'} {replyCount === 1 ? 'reply' : 'replies'}</span>
+                <ChevronRight size={11} style={{ transform: showReplies ? 'rotate(90deg)' : undefined, transition: 'transform .15s' }} />
+              </button>
+            )}
+          </>
+        }
+      />
+
+      {(showReplies || showReplyComposer) && (
+        <div className="mt-3.5 pl-3.5 border-l-2 border-border flex flex-col gap-3.5">
+          {showReplies && replies.map((r) => (
+            <CommentBody
+              key={r.id}
+              comment={r}
+              meId={meId}
+              isAdmin={isAdmin}
+              size="sm"
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onToggleReaction={onToggleReaction}
+              actionRow={null}
+            />
+          ))}
+
+          {showReplyComposer && (
+            <ReplyComposer
+              onCancel={() => setShowReplyComposer(false)}
+              onSubmit={async (body) => {
+                const id = await onAddReply(body);
+                if (id) {
+                  setShowReplyComposer(false);
+                  setShowReplies(true);
+                }
+              }}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// CommentBody — shared chrome for top-level comments and replies. Owns the
+// avatar, header, body (edit-in-place), reactions, and actions row.
+// =============================================================================
+
+interface CommentBodyProps {
+  comment: ProjectComment;
+  meId: string;
+  isAdmin: boolean;
+  size: 'md' | 'sm';
+  onEdit: (commentId: string, body: string) => Promise<void>;
+  onDelete: (commentId: string) => Promise<void>;
+  onToggleReaction: (commentId: string, emoji: string) => Promise<void>;
+  showReactionPicker?: boolean;
+  setShowReactionPicker?: (v: boolean) => void;
+  actionRow: React.ReactNode;
+}
+
+function CommentBody({
+  comment, meId, isAdmin, size, onEdit, onDelete, onToggleReaction,
+  showReactionPicker, setShowReactionPicker, actionRow,
+}: CommentBodyProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(comment.body);
+  const [saving, setSaving] = useState(false);
+  // Local state for replies that don't share a picker with their parent.
+  const [localPickerOpen, setLocalPickerOpen] = useState(false);
+  const pickerOpen = setShowReactionPicker ? !!showReactionPicker : localPickerOpen;
+  const setPickerOpen = setShowReactionPicker ?? setLocalPickerOpen;
+
+  const canManage = comment.authorId === meId || isAdmin;
+  const avatarSize = size === 'sm' ? 26 : 32;
+  const initials = initialsOf(comment.authorName || comment.authorEmail || 'U');
+  const color = userColor(comment.authorId);
+
+  const startEdit = () => {
+    setDraft(comment.body);
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed || saving) return;
+    if (trimmed === comment.body.trim()) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    await onEdit(comment.id, trimmed);
+    setSaving(false);
+    setEditing(false);
+  };
+
+  const cancelEdit = () => {
+    setDraft(comment.body);
+    setEditing(false);
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm('Delete this comment? This cannot be undone.')) return;
+    await onDelete(comment.id);
+  };
+
+  return (
+    <div className="flex gap-2.5">
+      <Avatar initials={initials} color={color} size={avatarSize} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span
+            className="font-semibold text-fg"
+            style={{ fontSize: size === 'sm' ? 12.5 : 13 }}
+          >
+            {comment.authorName}
+          </span>
+          <span
+            className="text-fg-2 font-mono"
+            style={{ fontSize: size === 'sm' ? 11 : 12 }}
+            title={new Date(comment.createdAt).toLocaleString()}
+          >
+            {formatTimestamp(comment.createdAt)}
+            {comment.edited && <span className="ml-1.5 italic">(edited)</span>}
+          </span>
+        </div>
+
+        {editing ? (
+          <div className="mt-1.5">
+            <textarea
+              autoFocus
+              rows={3}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className="w-full px-3 py-2 text-[13px] border border-border rounded-lg bg-white resize-y outline-none box-border focus:border-navy/50"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={saveEdit}
+                disabled={saving || !draft.trim()}
+                className="btn-orange text-xs disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Save
+              </button>
+              <button
+                onClick={cancelEdit}
+                className="btn-secondary text-xs"
+              >
+                <X size={12} /> Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="mt-1 leading-[1.55] text-fg whitespace-pre-wrap break-words"
+            style={{ fontSize: size === 'sm' ? 13 : 13.5 }}
+          >
+            {comment.body}
+          </div>
+        )}
+
+        {/* Reactions */}
+        {!editing && comment.reactions.length > 0 && (
+          <div className="mt-2 flex gap-1.5 flex-wrap">
+            {comment.reactions.map((r) => {
+              const mine = !!meId && r.userIds.includes(meId);
+              return (
+                <button
+                  key={r.emoji}
+                  onClick={() => onToggleReaction(comment.id, r.emoji)}
+                  className="appearance-none cursor-pointer inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-fg transition-colors"
+                  style={{
+                    background: mine ? 'rgba(0,114,206,0.16)' : 'rgba(0,114,206,0.08)',
+                    border: `1px solid ${mine ? 'rgba(0,114,206,0.5)' : 'rgba(0,114,206,0.18)'}`,
+                  }}
+                  title={mine ? 'Remove your reaction' : 'Add your reaction'}
+                >
+                  <span>{r.emoji}</span>
+                  <span className="font-mono font-semibold" style={{ color: '#0072CE' }}>{r.userIds.length}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Action row */}
+        {!editing && (
+          <div className="mt-2 flex items-center gap-3.5 text-xs flex-wrap relative">
+            <button
+              onClick={() => setPickerOpen(!pickerOpen)}
+              className="appearance-none border-0 bg-transparent cursor-pointer p-0 inline-flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-navy transition-colors"
+            >
+              <Smile size={12} /> React
+            </button>
+            {actionRow}
+            {canManage && (
+              <>
+                <button
+                  onClick={startEdit}
+                  className="appearance-none border-0 bg-transparent cursor-pointer p-0 inline-flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-navy transition-colors"
+                >
+                  <Pencil size={12} /> Edit
+                </button>
+                <button
+                  onClick={handleDelete}
+                  className="appearance-none border-0 bg-transparent cursor-pointer p-0 inline-flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-red-700 transition-colors"
+                >
+                  <Trash2 size={12} /> Delete
+                </button>
+              </>
+            )}
+
+            {pickerOpen && (
+              <div
+                className="absolute z-10 left-0 top-full mt-1 bg-white border border-border rounded-lg shadow-md flex gap-1 px-2 py-1.5"
+              >
+                {REACTION_PALETTE.map((emoji) => (
+                  <button
+                    key={emoji}
+                    onClick={() => {
+                      onToggleReaction(comment.id, emoji);
+                      setPickerOpen(false);
+                    }}
+                    className="appearance-none border-0 bg-transparent cursor-pointer text-base hover:bg-surface rounded p-1 leading-none"
+                    title={emoji}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+// =============================================================================
+// ReplyComposer — inline reply textarea under a top-level comment.
+// =============================================================================
+
+function ReplyComposer({
+  onSubmit, onCancel,
+}: { onSubmit: (body: string) => Promise<void>; onCancel: () => void }) {
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleSubmit = async () => {
+    const trimmed = body.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    await onSubmit(trimmed);
+    setBusy(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <textarea
+        autoFocus
+        rows={2}
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            handleSubmit();
+          }
+        }}
+        placeholder="Write a reply..."
+        className="w-full px-3 py-2 text-[13px] border border-border rounded-lg bg-white resize-y outline-none box-border focus:border-navy/50"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={!body.trim() || busy}
+          className="btn-orange text-xs disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Reply
+        </button>
+        <button onClick={onCancel} className="btn-secondary text-xs">
+          <X size={12} /> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// Files / Client Log placeholders — unchanged from the original scaffold.
+// Will be wired up in their own follow-up passes.
+// =============================================================================
 
 function FilesTabPlaceholder() {
   return (
@@ -160,139 +719,8 @@ function ClientLogTabPlaceholder() {
 }
 
 // =============================================================================
-// Background reference scaffolding — the full design styling for each tab
-// kept in code so we can borrow shapes when the features are built out.
-// These components are intentionally unused for now.
+// Helpers
 // =============================================================================
-
-interface CommentBody {
-  id: string;
-  author: string;
-  initials: string;
-  color: string;
-  at: string;
-  body: string;
-  reactions: { e: string; n: number }[];
-  replies: {
-    id: string; author: string; initials: string; color: string; at: string; body: string;
-  }[];
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _CommentsScaffold({ comments }: { comments: CommentBody[] }) {
-  return (
-    <div className="flex flex-col">
-      {/* Composer */}
-      <div className="px-5.5 py-4.5 border-b border-border bg-surface/40" style={{ paddingLeft: 22, paddingRight: 22 }}>
-        <div className="flex gap-3">
-          <Avatar initials="ME" color="var(--color-orange)" />
-          <div className="flex-1">
-            <textarea
-              rows={2}
-              placeholder="Post a comment to the project log..."
-              className="w-full px-3 py-2.5 text-[13px] border border-border rounded-lg bg-white resize-y outline-none box-border"
-            />
-            <div className="mt-2 flex items-center justify-between">
-              <div className="flex gap-1.5 text-fg-2">
-                <IconBtn icon={Paperclip} title="Attach file" />
-                <IconBtn icon={Smile} title="Add reaction" />
-              </div>
-              <button className="btn-orange text-sm">
-                <Send size={14} /> Post
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        {comments.map((c, i) => (
-          <_CommentRow key={c.id} comment={c} isLast={i === comments.length - 1} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function _CommentRow({ comment, isLast }: { comment: CommentBody; isLast: boolean }) {
-  const [showReplies, setShowReplies] = useState(false);
-  const replyCount = comment.replies?.length || 0;
-  const reacts = comment.reactions || [];
-
-  return (
-    <div
-      className="px-5.5 py-4.5"
-      style={{ paddingLeft: 22, paddingRight: 22, borderBottom: isLast ? 'none' : '1px solid var(--color-border)' }}
-    >
-      <div className="flex gap-3">
-        <Avatar initials={comment.initials} color={comment.color} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="text-[13px] font-semibold text-fg">{comment.author}</span>
-            <span className="text-xs text-fg-2 font-mono">{comment.at}</span>
-          </div>
-          <div className="mt-1 text-[13.5px] leading-[1.55] text-fg">{comment.body}</div>
-
-          {reacts.length > 0 && (
-            <div className="mt-2 flex gap-1.5">
-              {reacts.map((r, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-fg"
-                  style={{
-                    background: 'rgba(0,114,206,0.08)',
-                    border: '1px solid rgba(0,114,206,0.18)',
-                  }}
-                >
-                  <span>{r.e}</span>
-                  <span className="font-mono font-semibold" style={{ color: '#0072CE' }}>{r.n}</span>
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-2 flex items-center gap-3.5 text-xs">
-            <ActionLink icon={Smile} label="React" />
-            <ActionLink icon={Reply} label="Reply" />
-            {replyCount > 0 && (
-              <button
-                onClick={() => setShowReplies((s) => !s)}
-                className="appearance-none border-0 bg-transparent cursor-pointer text-xs font-semibold inline-flex items-center gap-1.5 p-0"
-                style={{ color: '#0072CE' }}
-              >
-                <span
-                  className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-[5px] rounded-[9px] text-white text-[10.5px] font-bold font-mono"
-                  style={{ background: '#0072CE' }}
-                >
-                  {replyCount}
-                </span>
-                <span>{showReplies ? 'Hide' : 'Show'} {replyCount === 1 ? 'reply' : 'replies'}</span>
-                <ChevronRight size={11} style={{ transform: showReplies ? 'rotate(90deg)' : undefined, transition: 'transform .15s' }} />
-              </button>
-            )}
-          </div>
-
-          {showReplies && replyCount > 0 && (
-            <div className="mt-3.5 pl-3.5 border-l-2 border-border flex flex-col gap-3.5">
-              {comment.replies.map((r) => (
-                <div key={r.id} className="flex gap-2.5">
-                  <Avatar initials={r.initials} color={r.color} size={26} />
-                  <div className="flex-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-[12.5px] font-semibold text-fg">{r.author}</span>
-                      <span className="text-[11px] text-fg-2 font-mono">{r.at}</span>
-                    </div>
-                    <div className="mt-1 text-[13px] leading-[1.55] text-fg">{r.body}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Avatar({ initials, color, size = 32 }: { initials: string; color: string; size?: number }) {
   return (
@@ -310,60 +738,41 @@ function Avatar({ initials, color, size = 32 }: { initials: string; color: strin
   );
 }
 
-function ActionLink({ icon: Icon, label }: { icon: ComponentType<{ size?: number }>; label: string }) {
-  return (
-    <button className="appearance-none border-0 bg-transparent cursor-pointer p-0 inline-flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-navy transition-colors">
-      <Icon size={12} />
-      <span>{label}</span>
-    </button>
-  );
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/[\s@.]+/).filter(Boolean);
+  if (parts.length === 0) return 'U';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function IconBtn({ icon: Icon, title }: { icon: ComponentType<{ size?: number }>; title: string }) {
-  return (
-    <button
-      title={title}
-      className="appearance-none border border-transparent bg-transparent cursor-pointer rounded-md p-1.5 text-fg-2 inline-flex hover:bg-white hover:border-border"
-    >
-      <Icon size={14} />
-    </button>
-  );
+// Deterministic color per user — hashes the user id (or email fallback)
+// into a fixed palette so the same person always gets the same chip.
+const AVATAR_PALETTE = [
+  '#0072CE', '#F68D2E', '#15803D', '#A16207',
+  '#7C3AED', '#B91C1C', '#0891B2', '#DB2777',
+];
+function userColor(seed: string): string {
+  if (!seed) return AVATAR_PALETTE[0];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
+  }
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 }
 
-// File / log scaffolding kept here so the styling vocabulary is available.
-
-const _FILE_KIND_META = {
-  pdf: { color: '#B91C1C', label: 'PDF' },
-  doc: { color: '#0072CE', label: 'DOC' },
-  xls: { color: '#15803D', label: 'XLS' },
-  zip: { color: '#6B7280', label: 'ZIP' },
-  img: { color: '#A16207', label: 'IMG' },
-} as const;
-
-const _LOG_KIND_META = {
-  meeting:        { icon: Users,    color: '#0072CE',                 label: 'Meeting' },
-  contract:       { icon: FileText, color: 'var(--color-navy)',       label: 'Contract' },
-  'change-order': { icon: Zap,      color: '#A16207',                 label: 'Change Order' },
-  milestone:      { icon: Flag,     color: '#15803D',                 label: 'Milestone' },
-} as const;
-
-const _COR_STATUS_META = {
-  Requested: { bg: '#DBEAFE', fg: '#1D4ED8' },
-  Proposed:  { bg: '#FEF9C3', fg: '#A16207' },
-  Rejected:  { bg: '#FEE2E2', fg: '#B91C1C' },
-  'On Hold': { bg: '#F3F4F6', fg: '#4B5563' },
-  Accepted:  { bg: '#DCFCE7', fg: '#15803D' },
-} as const;
-
-// Surface the unused symbols so the linter doesn't strip the file. These
-// will be wired up when the corresponding feature ships.
-export const _PROJECT_LOG_SCAFFOLD = {
-  Avatar,
-  ActionLink,
-  IconBtn,
-  CommentsScaffold: _CommentsScaffold,
-  CommentRow: _CommentRow,
-  FILE_KIND_META: _FILE_KIND_META,
-  LOG_KIND_META: _LOG_KIND_META,
-  COR_STATUS_META: _COR_STATUS_META,
-};
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const datePart = d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: sameYear ? undefined : 'numeric',
+  });
+  const timePart = d.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${datePart} · ${timePart}`;
+}
