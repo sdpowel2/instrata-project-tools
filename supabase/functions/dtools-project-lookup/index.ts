@@ -60,6 +60,41 @@ function extractPricedFrom(item: any): string {
   return flat ? String(flat).trim() : '';
 }
 
+/** Map a DTools change-order status string to our enum.
+ *  DTools commonly returns "Pending" / "Approved" / "Rejected" verbatim, but
+ *  also surfaces "Open" / "Submitted" (treated as Pending) and "Denied"
+ *  (treated as Rejected) on older records. Anything we don't recognise
+ *  defaults to Pending so the row is at least visible to the PM. */
+function mapCOStatus(raw: any): 'Pending' | 'Approved' | 'Rejected' {
+  const s = String(raw ?? '').toLowerCase();
+  if (s.includes('approve')) return 'Approved';
+  if (s.includes('reject') || s.includes('denied') || s.includes('decline')) return 'Rejected';
+  return 'Pending';
+}
+
+/** Map DTools' internal/external flag. In our tenant the canonical field
+ *  is COType ("Internal" / "External"), but we keep older shapes in the
+ *  fallback chain so a tenant migration can't silently break the read.
+ *  Anything that doesn't read as Internal is treated as External (the
+ *  contract-facing case) so we never lose track of a contract impact. */
+function mapCOCategory(co: any): 'Internal' | 'External' {
+  if (typeof co?.IsInternal === 'boolean') return co.IsInternal ? 'Internal' : 'External';
+  if (typeof co?.IsExternal === 'boolean') return co.IsExternal ? 'External' : 'Internal';
+  const flag = String(co?.COType ?? co?.Category ?? co?.Type ?? co?.Kind ?? '').toLowerCase();
+  if (flag.includes('internal')) return 'Internal';
+  return 'External';
+}
+
+/** ISO date (YYYY-MM-DD) or null. DTools serializes dates a few different
+ *  ways depending on the field; we normalise to a calendar date so the
+ *  client doesn't have to think about timezones. */
+function toDate(v: any): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
 function mapCategory(cat?: string): string {
   if (!cat) return 'Other';
   const c = cat.toLowerCase();
@@ -401,13 +436,113 @@ serve(async (req) => {
 
     await supabase.from('projects').update(projectUpdate).eq('id', projectId);
 
-    console.log(`[dtools-lookup] Imported ${bomRows.length} line items for project ${projectId}${formattedValue ? ` (value=${formattedValue})` : ''}`);
+    // ── Step 9: Fetch + upsert change orders ───────────────────────────────
+    // Per the DTools SI API docs, /Subscribe/Projects returns "projects and
+    // change orders published by a SI user". A CO surfaces here as its own
+    // Project record with IsChangeOrder=true and the CO metadata flat on
+    // the row (CONumber, COName, CONotes, COType, COStatus, COCreatedOn,
+    // COAcceptedOn, CORejectedOn, Price). We list by project number with a
+    // generous pageSize, filter for IsChangeOrder, fetch detail, and map.
+    //
+    // GOTCHA: DTools' API is pure publish/subscribe. A CO only enters our
+    // subscription when a SI user explicitly publishes it
+    // (POST /Publish/Projects/NewChangeOrder). If a CO exists in DTools
+    // desktop but was never published to the API integration, the cloud
+    // API has no record of it and this loop returns 0 — that's expected,
+    // not a bug. Fix is on the SI user's side: publish the CO, then re-sync.
+    let coCount = 0;
+    try {
+      const siblingSearch = await dtoolsFetch(
+        apiKey,
+        `/Subscribe/Projects?projectNumber=${encodeURIComponent(projectNumber)}&pageSize=200&pageNumber=1`,
+      );
+      const siblings = Array.isArray(siblingSearch)
+        ? siblingSearch
+        : (siblingSearch?.Projects ?? siblingSearch?.projects ?? []);
+      let rawCOs: any[] = siblings.filter((p: any) => p?.IsChangeOrder === true);
+
+      // List rows are usually summaries — fetch each CO's full detail by Id
+      // so CONumber/COStatus/COType are populated for the mapper.
+      if (rawCOs.length > 0 && rawCOs.some((p: any) => !p?.COStatus && !p?.COType)) {
+        const detailed: any[] = [];
+        for (const summary of rawCOs) {
+          const coId = summary?.Id;
+          if (!coId) { detailed.push(summary); continue; }
+          try {
+            const detail = await dtoolsFetch(apiKey, `/Subscribe/Projects?id=${encodeURIComponent(coId)}`);
+            detailed.push(detail?.Project ?? detail ?? summary);
+          } catch (detailErr) {
+            console.warn(`[dtools-lookup] CO detail fetch failed for ${coId}, using summary:`, detailErr instanceof Error ? detailErr.message : detailErr);
+            detailed.push(summary);
+          }
+        }
+        rawCOs = detailed;
+      }
+
+      const coRows = rawCOs.map((co: any) => {
+        // Canonical fields in our DTools tenant: COId / CONumber / COName /
+        // CONotes / COType / COStatus / COCreatedOn / COAcceptedOn /
+        // CORejectedOn. We keep generic fallbacks so older rows (or another
+        // tenant on the same code path) still map cleanly.
+        // We prefer the CO record's own Id over COId — Id is what
+        // /Subscribe/Projects?id=... will resolve, which keeps re-syncs
+        // idempotent against the (project_id, dtools_id) unique index.
+        const dtoolsCoId = String(co.Id ?? co.COId ?? co.id ?? '');
+        const number = String(co.CONumber ?? co.Number ?? co.Code ?? '').trim();
+        const title  = String(co.COName ?? co.Name ?? co.Title ?? '').trim();
+        const desc   = String(co.CONotes ?? co.ScopeOfWork ?? co.Description ?? co.Notes ?? '').trim();
+        // CO Price is the dollar delta of the CO's items — positive for
+        // adds, negative for credits.
+        const amount = num(co.Price ?? co.TotalPrice ?? co.Total ?? co.Amount ?? 0);
+        const requestedAt = toDate(co.COCreatedOn ?? co.RequestedDate ?? co.RequestedOn ?? co.CreatedOn);
+        const status = mapCOStatus(co.COStatus ?? co.Status);
+        const resolvedAt = status === 'Approved'
+          ? toDate(co.COAcceptedOn ?? co.ApprovedOn ?? co.ApprovedDate ?? co.ResolvedOn)
+          : status === 'Rejected'
+            ? toDate(co.CORejectedOn ?? co.RejectedOn ?? co.RejectedDate ?? co.ResolvedOn)
+            : null;
+
+        return {
+          project_id: projectId,
+          number,
+          title,
+          description: desc,
+          amount,
+          status,
+          category: mapCOCategory(co),
+          requested_at: requestedAt,
+          resolved_at: resolvedAt,
+          dtools_id: dtoolsCoId,
+          updated_at: new Date().toISOString(),
+        };
+      }).filter((r: any) => r.dtools_id); // drop rows without a stable id
+
+      // Wipe + re-insert: COs are read-only and (project_id, dtools_id)
+      // uniqueness keeps re-syncs idempotent — but a delete-first approach
+      // also prunes any CO that DTools removed since the last sync.
+      await supabase.from('change_orders').delete().eq('project_id', projectId);
+      if (coRows.length > 0) {
+        for (let i = 0; i < coRows.length; i += 100) {
+          const batch = coRows.slice(i, i + 100);
+          const { error: coErr } = await supabase.from('change_orders').insert(batch);
+          if (coErr) console.error('[dtools-lookup] CO insert batch error:', coErr);
+        }
+      }
+      coCount = coRows.length;
+    } catch (coErr) {
+      // Don't fail the whole sync over COs — the BoM is the user's primary
+      // ask. Surface the issue in logs so we can diagnose it later.
+      console.error('[dtools-lookup] CO sync failed (BoM still imported):', coErr);
+    }
+
+    console.log(`[dtools-lookup] Imported ${bomRows.length} line items, ${coCount} change orders for project ${projectId}${formattedValue ? ` (value=${formattedValue})` : ''}`);
 
     return new Response(JSON.stringify({
       status: 'found',
       dtoolsProjectId,
       dtoolsProjectName: match.Name,
       itemsImported: bomRows.length,
+      changeOrdersImported: coCount,
       value: formattedValue,
     }), {
       headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
