@@ -165,6 +165,42 @@ export type SignOffStatus = 'Pending' | 'Passed' | 'Failed' | 'N/A';
 
 export type DToolsBomStatus = '' | 'found' | 'not_found' | 'error' | 'loading';
 
+// ===================== CHANGE ORDERS =====================
+
+/** DTools change-order status. Pending values are tracked but excluded from
+ *  the contract total; Approved values modify it; Rejected values are kept
+ *  for the audit trail. */
+export type ChangeOrderStatus = 'Pending' | 'Approved' | 'Rejected';
+
+/** DTools categorizes COs as either Internal (e.g. estimating cleanup,
+ *  scope clarifications absorbed by Instrata) or External (client-facing,
+ *  contract-modifying). Both kinds adjust the bottom line — the flag is
+ *  surfaced so PMs can see at a glance which side of the deal owns it. */
+export type ChangeOrderCategory = 'Internal' | 'External';
+
+/** A read-only change order pulled from DTools alongside the BoM. We never
+ *  edit these locally — the next sync overwrites them. */
+export interface ProjectChangeOrder {
+  id: string;
+  projectId: string;
+  /** DTools-issued CO number, e.g. "COR-001". */
+  number: string;
+  title: string;
+  description: string;
+  /** Signed dollar delta to the contract. Positive for adds, negative for
+   *  credits. Pending values are still recorded — they just don't roll into
+   *  the current contract total until Approved. */
+  amount: number;
+  status: ChangeOrderStatus;
+  category: ChangeOrderCategory;
+  /** ISO date (YYYY-MM-DD). */
+  requestedAt: string;
+  /** ISO date the CO was Approved or Rejected; null while Pending. */
+  resolvedAt?: string;
+  /** DTools internal id for cross-referencing. Display-only. */
+  dToolsId: string;
+}
+
 export interface Project {
   id: string;
   name: string;

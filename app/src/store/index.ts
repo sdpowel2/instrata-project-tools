@@ -14,6 +14,7 @@ import type {
   PurchasingModule, PurchasingItem, PurchasingFreight, PurchasingManufacturerDefault,
   PurchaseStatus,
   ProjectComment, CommentReaction,
+  ProjectChangeOrder,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { isExcludedFromSubmittal } from '../utils/submittalExclusions';
@@ -498,6 +499,19 @@ const seedManuals: OwnerManual[] = [
   },
 ];
 
+// Demo change orders — pulled read-only from DTools alongside the BoM.
+// p1 (Vanderbilt) showcases all three groups so the UI is exercised; other
+// projects stay quiet so empty / single-state cases also render cleanly.
+const seedChangeOrders: ProjectChangeOrder[] = [
+  { id: 'co1', projectId: 'p1', number: 'COR-001', title: 'Wireless mic upgrade',           description: 'Upgrade from MXW1 to MXW2 transmitters across 6 conference rooms.', amount: 6200,  status: 'Approved', category: 'External', requestedAt: '2026-03-04', resolvedAt: '2026-03-08', dToolsId: 'DT-CO-22041' },
+  { id: 'co2', projectId: 'p1', number: 'COR-002', title: 'Added rooms 21B & 21C',          description: 'Owner-requested addition of two huddle rooms to the original scope.', amount: 18400, status: 'Approved', category: 'External', requestedAt: '2026-04-02', resolvedAt: '2026-04-11', dToolsId: 'DT-CO-22128' },
+  { id: 'co3', projectId: 'p1', number: 'COR-003', title: 'Acoustic treatment — Boardroom A', description: 'GPR found beam interference; acoustic panels needed for ceiling array performance.', amount: 4800, status: 'Pending', category: 'External', requestedAt: '2026-04-21', dToolsId: 'DT-CO-22241' },
+  { id: 'co4', projectId: 'p1', number: 'COR-004', title: 'Network upgrade — IDF-3',        description: 'Switch upgrade to support PoE++ requirements for revised camera spec.', amount: 13600, status: 'Pending',  category: 'Internal', requestedAt: '2026-04-24', dToolsId: 'DT-CO-22288' },
+  { id: 'co5', projectId: 'p1', number: 'COR-005', title: 'Premium DSP option',             description: 'Client requested premium DSP — cost prohibitive, withdrawn.',     amount: 9200,  status: 'Rejected', category: 'External', requestedAt: '2026-04-08', resolvedAt: '2026-04-14', dToolsId: 'DT-CO-22155' },
+  { id: 'co6', projectId: 'p2', number: 'COR-001', title: 'Replace damaged display',         description: 'Display damaged during freight; covered by claim, no contract impact.', amount: 0, status: 'Approved', category: 'Internal', requestedAt: '2026-03-15', resolvedAt: '2026-03-18', dToolsId: 'DT-CO-21712' },
+  { id: 'co7', projectId: 'p4', number: 'COR-001', title: 'Add lobby video wall',            description: 'Owner-requested 3x2 video wall addition to lobby scope.', amount: 42000, status: 'Pending', category: 'External', requestedAt: '2026-04-26', dToolsId: 'DT-CO-22301' },
+];
+
 // Demo milestones — anchored off today so the status badges (upcoming /
 // at_risk / overdue) demo correctly without needing fresh seeds.
 const seedMilestones: ProjectMilestone[] = (() => {
@@ -631,6 +645,26 @@ function milestoneToRow(m: Partial<ProjectMilestone> & { createdBy?: string }): 
   if (m.notes !== undefined)         row.notes = m.notes;
   if ((m as any).createdBy !== undefined) row.created_by = (m as any).createdBy;
   return row;
+}
+
+// --- Change Orders ---
+// COs are read-only on the client — the dtools-project-lookup Edge Function
+// is the only writer. We never need a *ToRow helper; only the row → object
+// mapper used to hydrate the store from Supabase.
+function rowToChangeOrder(r: any): ProjectChangeOrder {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    number: r.number ?? '',
+    title: r.title ?? '',
+    description: r.description ?? '',
+    amount: typeof r.amount === 'number' ? r.amount : Number(r.amount ?? 0),
+    status: r.status,
+    category: r.category,
+    requestedAt: r.requested_at ? toDate(r.requested_at) : '',
+    resolvedAt: r.resolved_at ? toDate(r.resolved_at) : undefined,
+    dToolsId: r.dtools_id ?? '',
+  };
 }
 
 // --- Warehouses ---
@@ -790,6 +824,7 @@ interface AppState {
   bidLevelingSessions: BidLevelingSession[];
   bidLevelingTemplates: BidLevelingMappingTemplate[];
   milestones: ProjectMilestone[];
+  changeOrders: ProjectChangeOrder[];
   warehouses: Warehouse[];
   purchasingModules: PurchasingModule[];
   purchasingItems: PurchasingItem[];
@@ -961,6 +996,7 @@ export const useStore = create<AppState>((set, get) => ({
   bidLevelingSessions: [],
   bidLevelingTemplates: [],
   milestones: DB ? [] : seedMilestones,
+  changeOrders: DB ? [] : seedChangeOrders,
   warehouses: DB ? [] : seedWarehouses,
   purchasingModules: [],
   purchasingItems: [],
@@ -1009,6 +1045,9 @@ export const useStore = create<AppState>((set, get) => ({
         supabase.from('bid_leveling_mapping_templates').select('*'),
         // Milestones
         supabase.from('project_milestones').select('*'),
+        // Change orders — read-only, populated by the dtools-project-lookup
+        // Edge Function alongside the BoM.
+        supabase.from('change_orders').select('*'),
         // Warehouses (org-wide)
         supabase.from('warehouses').select('*'),
         // Purchasing
@@ -1041,6 +1080,7 @@ export const useStore = create<AppState>((set, get) => ({
         bidLevelingSessionsRes,
         bidLevelingTemplatesRes,
         milestonesRes,
+        changeOrdersRes,
         warehousesRes,
         purchasingModulesRes,
         purchasingModSubsRes,
@@ -1050,7 +1090,7 @@ export const useStore = create<AppState>((set, get) => ({
       ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes, milestonesRes, warehousesRes, purchasingModulesRes, purchasingModSubsRes, purchasingItemsRes, purchasingFreightRes, purchasingMfrDefaultsRes]) {
+      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes, milestonesRes, changeOrdersRes, warehousesRes, purchasingModulesRes, purchasingModSubsRes, purchasingItemsRes, purchasingFreightRes, purchasingMfrDefaultsRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
@@ -1063,6 +1103,7 @@ export const useStore = create<AppState>((set, get) => ({
       const bidLevelingSessions = (bidLevelingSessionsRes.data ?? []).map(rowToBidLevelingSession);
       const bidLevelingTemplates = (bidLevelingTemplatesRes.data ?? []).map(rowToBidLevelingTemplate);
       const milestones = (milestonesRes.data ?? []).map(rowToMilestone);
+      const changeOrders = (changeOrdersRes.data ?? []).map(rowToChangeOrder);
       const warehouses = (warehousesRes.data ?? []).map(rowToWarehouse);
 
       // Purchasing — collapse junction rows into submittalIds[] on each module
@@ -1156,7 +1197,7 @@ export const useStore = create<AppState>((set, get) => ({
 
       set({
         projects, projectBoM, submittals, rfis, closeouts, manuals, reviewRuns,
-        bidLevelingSessions, bidLevelingTemplates, milestones,
+        bidLevelingSessions, bidLevelingTemplates, milestones, changeOrders,
         warehouses, purchasingModules, purchasingItems, purchasingFreight, purchasingMfrDefaults,
         isLoading: false, isInitialized: true,
       });
@@ -1212,6 +1253,7 @@ export const useStore = create<AppState>((set, get) => ({
       closeouts: s.closeouts.filter((x) => x.projectId !== id),
       manuals: s.manuals.filter((x) => x.projectId !== id),
       milestones: s.milestones.filter((x) => x.projectId !== id),
+      changeOrders: s.changeOrders.filter((x) => x.projectId !== id),
       purchasingModules: s.purchasingModules.filter((x) => x.projectId !== id),
       purchasingItems: s.purchasingItems.filter((x) => !purgedModuleIds.has(x.purchasingModuleId)),
       purchasingFreight: s.purchasingFreight.filter((x) => !purgedModuleIds.has(x.purchasingModuleId)),
@@ -1303,6 +1345,7 @@ export const useStore = create<AppState>((set, get) => ({
         Promise.all([
           supabase.from('projects').select('*').eq('id', projectId).single(),
           supabase.from('project_bom_items').select('*').eq('project_id', projectId),
+          supabase.from('change_orders').select('*').eq('project_id', projectId),
         ]),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('post-sync refresh timed out')), 15000),
@@ -1310,7 +1353,7 @@ export const useStore = create<AppState>((set, get) => ({
       ]);
 
       try {
-        const [projRes, bomRes] = await refreshWithTimeout;
+        const [projRes, bomRes, coRes] = await refreshWithTimeout;
         if (projRes.data) {
           const updated = rowToProject(projRes.data);
           set((s) => ({
@@ -1323,6 +1366,15 @@ export const useStore = create<AppState>((set, get) => ({
             projectBoM: [
               ...s.projectBoM.filter((b) => b.projectId !== projectId),
               ...newBom,
+            ],
+          }));
+        }
+        if (coRes.data) {
+          const newCOs = coRes.data.map(rowToChangeOrder);
+          set((s) => ({
+            changeOrders: [
+              ...s.changeOrders.filter((c) => c.projectId !== projectId),
+              ...newCOs,
             ],
           }));
         }

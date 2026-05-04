@@ -4,7 +4,7 @@ import {
   FileText, MessageSquareWarning, ClipboardCheck, BookOpen,
   Upload, Plus, Package, RefreshCw, Loader2, Check,
   ScanLine, Scale, ChevronRight, Users, ChevronDown,
-  Calendar, Truck,
+  Calendar, Truck, ShieldCheck,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { Modal } from '../components/Modal';
@@ -18,6 +18,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import type {
   ItemCategory, SubmittalItemLocation, ProjectPhase, ProjectStatus,
+  ProjectChangeOrder, ChangeOrderStatus,
 } from '../types';
 import { PRE_SALES_STATUSES, POST_SALES_STATUSES, computeMilestoneStatus } from '../types';
 
@@ -35,6 +36,7 @@ export function ProjectOverview() {
   const allMilestones = useStore((s) => s.milestones);
   const allPurchasingModules = useStore((s) => s.purchasingModules);
   const allPurchasingItems = useStore((s) => s.purchasingItems);
+  const allChangeOrders = useStore((s) => s.changeOrders);
   const projectBoM = useStore((s) => s.projectBoM);
   const addBoMItem = useStore((s) => s.addBoMItem);
   const importBoMItems = useStore((s) => s.importBoMItems);
@@ -48,6 +50,10 @@ export function ProjectOverview() {
   const reviewRuns = useMemo(() => allReviewRuns.filter((x) => x.projectId === projectId), [allReviewRuns, projectId]);
   const milestones = useMemo(() => allMilestones.filter((x) => x.projectId === projectId), [allMilestones, projectId]);
   const bomItems = useMemo(() => projectBoM.filter((x) => x.projectId === projectId), [projectBoM, projectId]);
+  const changeOrders = useMemo(
+    () => allChangeOrders.filter((x) => x.projectId === projectId),
+    [allChangeOrders, projectId],
+  );
 
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
@@ -261,6 +267,7 @@ export function ProjectOverview() {
         <ProjectQuoteSection
           project={project}
           bomItems={bomItems}
+          changeOrders={changeOrders}
           onSync={() => {
             if (!projectId) return;
             // Linked already → re-sync against the same DTools project.
@@ -547,6 +554,7 @@ interface ProjectQuoteSectionProps {
     id: string; qty: number; manufacturer: string; model: string; description: string;
     unitPrice: number; locations: SubmittalItemLocation[];
   }[];
+  changeOrders: ProjectChangeOrder[];
   onSync: () => void;
   onCsvImport: () => void;
   onAddItem: () => void;
@@ -618,7 +626,7 @@ function countNode(node: LocationNode): number {
   return count;
 }
 
-function ProjectQuoteSection({ project, bomItems, onSync, onCsvImport, onAddItem }: ProjectQuoteSectionProps) {
+function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImport, onAddItem }: ProjectQuoteSectionProps) {
   const syncing = project.dtoolsBomStatus === 'loading';
   const synced = project.dtoolsBomStatus === 'found';
   // Header badge shows the canonical DTools value only — equipment-level
@@ -699,8 +707,319 @@ function ProjectQuoteSection({ project, bomItems, onSync, onCsvImport, onAddItem
           <div className="px-5.5 py-2.5 border-t border-border text-xs text-fg-2" style={{ paddingLeft: 22, paddingRight: 22 }}>
             {bomItems.length} line items{synced ? ' · pulled from DTools' : ''}
           </div>
+
+          {/* Change Orders — pulled from DTools alongside the BoM. All groups
+              collapsed by default so the BoM stays the focal point until a
+              user drills in. */}
+          <div className="border-t border-border">
+            <div className="flex items-center justify-between gap-3" style={{ padding: '14px 22px 4px' }}>
+              <div className="text-[10px] font-bold text-fg-2 tracking-[0.15em] uppercase">
+                Change Orders
+              </div>
+              <span className="text-[11px] text-fg-2 inline-flex items-center gap-1.5">
+                <ShieldCheck size={11} /> Read-only · DTools is authoritative
+              </span>
+            </div>
+            <ChangeOrderGroups changeOrders={changeOrders} />
+          </div>
+
+          {/* Contract Value summary — Original + Approved = Current, with
+              pending exposure surfaced separately so it can never be
+              confused with the contracted total. */}
+          <ContractValueSummary projectValue={project.value} changeOrders={changeOrders} />
         </div>
       )}
+    </div>
+  );
+}
+
+// =============================================================================
+// Change Orders — read-only blocks rendered inside the Project Quote card.
+// =============================================================================
+
+function parseProjectValue(s: string | undefined): number {
+  if (!s) return 0;
+  const m = s.match(/\$?\s*([\d,.]+)\s*([KM])?/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(n)) return 0;
+  const suffix = (m[2] || '').toUpperCase();
+  return n * (suffix === 'M' ? 1_000_000 : suffix === 'K' ? 1_000 : 1);
+}
+
+const fmtUSD = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US');
+const fmtSigned = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US');
+
+interface ChangeOrderGroupsProps {
+  changeOrders: ProjectChangeOrder[];
+}
+
+function ChangeOrderGroups({ changeOrders }: ChangeOrderGroupsProps) {
+  if (changeOrders.length === 0) {
+    return (
+      <div className="text-center text-fg-2 text-[13px] border-t border-border" style={{ padding: '28px 22px' }}>
+        No change orders for this project yet.
+      </div>
+    );
+  }
+
+  const approved = changeOrders.filter((c) => c.status === 'Approved');
+  const pending = changeOrders.filter((c) => c.status === 'Pending');
+  const rejected = changeOrders.filter((c) => c.status === 'Rejected');
+
+  return (
+    <div>
+      <COGroup label="Approved" status="Approved" accent="#15803D" items={approved} />
+      <COGroup label="Pending"  status="Pending"  accent="var(--color-orange)" items={pending} />
+      <COGroup label="Rejected" status="Rejected" accent="#9CA3AF" items={rejected} isLast />
+    </div>
+  );
+}
+
+interface COGroupProps {
+  label: string;
+  status: ChangeOrderStatus;
+  accent: string;
+  items: ProjectChangeOrder[];
+  isLast?: boolean;
+}
+
+function COGroup({ label, status, accent, items, isLast }: COGroupProps) {
+  const [open, setOpen] = useState(false);
+  if (items.length === 0) return null;
+
+  const total = items.reduce((s, c) => s + c.amount, 0);
+  const muted = status === 'Rejected';
+
+  return (
+    <div style={{ borderBottom: isLast ? 'none' : '1px solid var(--color-border)' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-3 text-left transition-colors hover:bg-surface/50"
+        style={{ padding: '14px 22px' }}
+      >
+        <ChevronRight
+          size={12}
+          className="text-fg-2 transition-transform"
+          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0)' }}
+        />
+        <span className="inline-block w-2 h-2 rounded-full" style={{ background: accent }} />
+        <span className="text-[11px] font-bold tracking-[0.12em] uppercase" style={{ color: accent }}>
+          {label}
+        </span>
+        <span className="text-xs text-fg-2">
+          · {items.length} change order{items.length === 1 ? '' : 's'}
+        </span>
+        <span className="flex-1" />
+        <span
+          className="font-mono text-[13px] font-semibold"
+          style={{
+            color: muted ? 'var(--color-fg-2)' : accent,
+            textDecoration: muted ? 'line-through' : 'none',
+          }}
+        >
+          {fmtSigned(total)}
+        </span>
+      </button>
+      {open && (
+        <div style={{ paddingBottom: 6 }}>
+          {items.map((co) => (
+            <CORow key={co.id} co={co} status={status} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface CORowProps {
+  co: ProjectChangeOrder;
+  status: ChangeOrderStatus;
+}
+
+function CORow({ co, status }: CORowProps) {
+  const muted = status === 'Rejected';
+  const amountColor =
+    status === 'Approved' ? '#15803D' : status === 'Pending' ? 'var(--color-orange)' : 'var(--color-fg-2)';
+
+  // Internal vs External chip — both sides modify the bottom line, so we
+  // colour by category just for at-a-glance attribution: navy = Internal
+  // (Instrata absorbed), orange = External (client/contract-facing).
+  const isInternal = co.category === 'Internal';
+  const chipBg = isInternal ? 'rgba(34,50,110,0.08)' : 'rgba(246,141,46,0.10)';
+  const chipBorder = isInternal ? 'rgba(34,50,110,0.25)' : 'rgba(246,141,46,0.30)';
+  const chipColor = isInternal ? 'var(--color-navy)' : 'var(--color-orange-dark)';
+
+  return (
+    <div
+      className="flex items-start gap-3.5 border-t border-border"
+      style={{ padding: '12px 22px 12px 50px', opacity: muted ? 0.7 : 1 }}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2.5 flex-wrap">
+          <span className="text-[13px] font-bold font-mono text-fg">{co.number}</span>
+          <span
+            className="text-[13.5px] font-semibold text-fg"
+            style={{ textDecoration: muted ? 'line-through' : 'none' }}
+          >
+            {co.title}
+          </span>
+          <span
+            className="text-[10px] font-bold tracking-[0.1em] uppercase"
+            style={{
+              padding: '2px 7px',
+              borderRadius: 4,
+              background: chipBg,
+              color: chipColor,
+              border: `1px solid ${chipBorder}`,
+            }}
+          >
+            {co.category}
+          </span>
+          {status === 'Pending' && (
+            <span
+              className="text-[10px] font-bold tracking-[0.1em] uppercase"
+              style={{
+                padding: '2px 7px',
+                borderRadius: 4,
+                background: 'rgba(246,141,46,0.12)',
+                color: 'var(--color-orange)',
+                border: '1px solid rgba(246,141,46,0.3)',
+              }}
+            >
+              Not in contract
+            </span>
+          )}
+        </div>
+        <div className="mt-1 text-[12.5px] text-fg-2 leading-relaxed">{co.description}</div>
+        <div className="mt-1.5 flex items-center gap-3.5 text-[11px] text-fg-2 flex-wrap">
+          <span className="inline-flex items-center gap-1">
+            <Calendar size={11} /> Requested {co.requestedAt}
+          </span>
+          {co.resolvedAt && (
+            <span>· {status === 'Rejected' ? 'Rejected' : 'Approved'} {co.resolvedAt}</span>
+          )}
+          <span className="font-mono">· {co.dToolsId}</span>
+        </div>
+      </div>
+      <div
+        className="flex-shrink-0 text-right font-mono text-[15px] font-bold"
+        style={{
+          color: amountColor,
+          textDecoration: muted ? 'line-through' : 'none',
+        }}
+      >
+        {fmtSigned(co.amount)}
+      </div>
+    </div>
+  );
+}
+
+interface ContractValueSummaryProps {
+  projectValue?: string;
+  changeOrders: ProjectChangeOrder[];
+}
+
+function ContractValueSummary({ projectValue, changeOrders }: ContractValueSummaryProps) {
+  const approved = changeOrders.filter((c) => c.status === 'Approved');
+  const pending = changeOrders.filter((c) => c.status === 'Pending');
+
+  // Nothing to summarize if the project has no anchor value AND no COs —
+  // the existing footer "DTools Project Total" already covers that case.
+  if (!projectValue && approved.length === 0 && pending.length === 0) return null;
+
+  const original = parseProjectValue(projectValue);
+  const approvedDelta = approved.reduce((s, c) => s + c.amount, 0);
+  const pendingExposure = pending.reduce((s, c) => s + c.amount, 0);
+  const current = original + approvedDelta;
+
+  return (
+    <div
+      className="border-t border-border"
+      style={{ padding: '22px 22px 24px', background: 'rgba(34,50,110,0.03)' }}
+    >
+      <div className="text-[10px] font-bold text-fg-2 tracking-[0.15em] uppercase mb-4">
+        Contract Value
+      </div>
+      <div
+        className="grid items-center gap-4"
+        style={{ gridTemplateColumns: '1fr auto 1fr auto 1.25fr' }}
+      >
+        <SummaryCol eyebrow="Original Contract" value={fmtUSD(original)} tone="neutral" />
+        <SummaryOp symbol="+" />
+        <SummaryCol
+          eyebrow={`Approved CO${approved.length === 1 ? '' : 's'} · ${approved.length}`}
+          value={fmtSigned(approvedDelta)}
+          tone="approved"
+        />
+        <SummaryOp symbol="=" />
+        <SummaryCol eyebrow="Current Contract Value" value={fmtUSD(current)} tone="hero" />
+      </div>
+
+      {pending.length > 0 && (
+        <div
+          className="mt-4 flex items-center justify-between gap-3.5 flex-wrap"
+          style={{
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: 'rgba(246,141,46,0.08)',
+            border: '1px solid rgba(246,141,46,0.28)',
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-[0.12em] uppercase text-orange">
+              <span className="inline-block w-[7px] h-[7px] rounded-full bg-orange" />
+              Pending Exposure
+            </span>
+            <span className="text-[13px] text-fg">
+              <strong className="font-mono">{fmtSigned(pendingExposure)}</strong>
+              <span className="text-fg-2">
+                {' '}across {pending.length} pending CO{pending.length === 1 ? '' : 's'}
+              </span>
+            </span>
+          </div>
+          <span className="text-xs text-fg-2 italic">Not yet part of the contract</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SummaryColProps {
+  eyebrow: string;
+  value: string;
+  tone: 'neutral' | 'approved' | 'hero';
+}
+
+function SummaryCol({ eyebrow, value, tone }: SummaryColProps) {
+  const isHero = tone === 'hero';
+  const isApproved = tone === 'approved';
+  const color = isHero ? 'var(--color-navy)' : isApproved ? '#15803D' : 'var(--color-fg)';
+  return (
+    <div>
+      <div className="text-[10px] font-bold text-fg-2 tracking-[0.12em] uppercase">{eyebrow}</div>
+      <div
+        className="font-mono font-bold"
+        style={{
+          marginTop: 6,
+          fontSize: isHero ? 30 : 22,
+          color,
+          letterSpacing: isHero ? '-0.01em' : 0,
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function SummaryOp({ symbol }: { symbol: string }) {
+  return (
+    <div
+      className="font-mono text-fg-2 text-center select-none"
+      style={{ fontSize: 22, fontWeight: 300 }}
+    >
+      {symbol}
     </div>
   );
 }
