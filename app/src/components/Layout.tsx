@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, ClipboardList, Package, Calendar, Truck,
+  Home, ScanLine, ClipboardList, Package, Calendar, Truck, Library,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
+import { useDocNav } from '../store/docNavStore';
 import { StatusBadge } from './StatusBadge';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import instrataLogo from '../assets/instrata-logo-white.png';
@@ -42,6 +43,10 @@ export function Layout() {
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
   const { user, signOut, isAdmin } = useAuth();
   const pendingCutsheets = usePendingCutsheetCount(isAdmin);
+  const { pathname } = useLocation();
+  const docCrumbs = useDocNav((s) => s.crumbs);
+  const docNavigate = useDocNav((s) => s.navigate);
+  const onDocPage = pathname === '/documentation';
 
   return (
     <div className="flex h-full">
@@ -65,6 +70,35 @@ export function Layout() {
               label="Manager Dashboard"
               badge={pendingCutsheets > 0 ? pendingCutsheets : undefined}
             />
+          )}
+          <SidebarLink
+            to="/documentation"
+            icon={Library}
+            label="Documentation"
+            onClick={onDocPage ? () => docNavigate?.('#/') : undefined}
+          />
+          {onDocPage && docCrumbs.length > 0 && (
+            <div className="mx-2.5 mb-1 pl-3 border-l border-white/10">
+              {docCrumbs.map((crumb, i) => {
+                const isLast = i === docCrumbs.length - 1;
+                const clickable = !isLast && !!crumb.href;
+                return (
+                  <div
+                    key={i}
+                    onClick={clickable ? () => docNavigate?.(crumb.href!) : undefined}
+                    className={[
+                      'text-[11px] leading-[1.35] py-0.5',
+                      isLast ? 'text-white font-medium' : 'text-white/45',
+                      clickable ? 'cursor-pointer hover:text-white transition-colors' : '',
+                    ].join(' ')}
+                    style={{ paddingLeft: `${i * 8}px` }}
+                  >
+                    {i > 0 && <span className="mr-1 text-white/25">›</span>}
+                    {crumb.label}
+                  </div>
+                );
+              })}
+            </div>
           )}
           <SidebarLink to="/settings" icon={Settings} label="Settings" />
 
@@ -192,13 +226,15 @@ interface SidebarLinkProps {
   indent?: boolean;
   /** Optional count badge rendered on the right side. Hidden when undefined or 0. */
   badge?: number;
+  onClick?: () => void;
 }
 
-function SidebarLink({ to, icon: Icon, label, end, indent, badge }: SidebarLinkProps) {
+function SidebarLink({ to, icon: Icon, label, end, indent, badge, onClick }: SidebarLinkProps) {
   return (
     <NavLink
       to={to}
       end={end}
+      onClick={onClick}
       className={({ isActive }) =>
         [
           'flex items-center gap-3 py-2.5 rounded-lg text-[14px] font-medium transition-colors',

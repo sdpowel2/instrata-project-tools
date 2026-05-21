@@ -24,6 +24,7 @@ import { EffortSurveyPage } from './pages/EffortSurvey';
 import { ScheduleMilestonesPage } from './pages/operations/ScheduleMilestones';
 import { PurchasingListPage } from './pages/operations/PurchasingList';
 import { PurchasingDetailPage } from './pages/operations/PurchasingDetail';
+import { DocumentationPage } from './pages/DocumentationPage';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -106,6 +107,7 @@ export default function App() {
               </Route>
               <Route path="products" element={<ProductsPage />} />
               <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
+              <Route path="documentation" element={<DocumentationPage />} />
               <Route path="settings" element={<SettingsPage />} />
 
               {/* Routes below are not exposed in the sidebar but kept

@@ -1,0 +1,34 @@
+%% Instrata Pre-Sales Flow — System Map
+%% High-level view: Phase 1 → Branch selection → Exits & rollover paths
+
+flowchart TD
+    Start([New Lead]) --> P1[Phase 1: Intake & Qualification]
+    P1 --> Triage{Project Type?}
+    Triage -->|Design| BR1[Branch 1: Design]
+    Triage -->|Design-Build| BR2[Branch 2: Design-Build]
+    Triage -->|Bid| BR3[Branch 3: Bid]
+    Triage -->|Public Bid| BR4[Branch 4: Public Bid]
+    Triage -->|Budget| BR5[Branch 5: Budget]
+
+    BR1 --> BR1End([Design Complete])
+    BR1End -.rollover.-> BR2_P3[Design-Build @ Phase 3]
+    BR1End -.rollover.-> BR3_P3[Bid @ Phase 3]
+
+    BR5 --> BR5End([Budget Submitted])
+    BR5End -.rollover.-> BR2_P3
+    BR5End -.rollover.-> BR3_P3
+    BR5End -.rollover.-> BR4_P3[Public Bid @ Phase 3]
+
+    BR2 --> Won([Won → Post-Sales Handoff])
+    BR3 --> Won
+    BR4 --> Won
+
+    classDef phase fill:#1e3a5f,stroke:#0f1e30,color:#fff
+    classDef branch fill:#e8eef5,stroke:#1e3a5f,color:#1e3a5f
+    classDef rollover fill:#fff4e6,stroke:#d97706,color:#7c2d12
+    classDef terminal fill:#dcfce7,stroke:#16a34a,color:#14532d
+
+    class P1 phase
+    class BR1,BR2,BR3,BR4,BR5 branch
+    class BR2_P3,BR3_P3,BR4_P3 rollover
+    class Won,BR1End,BR5End terminal
