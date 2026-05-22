@@ -252,9 +252,13 @@ async function getDownloadUrlFor(itemId: string): Promise<string> {
 }
 
 interface UploadStagingInput {
-  /** PDF bytes encoded as base64 (no data: prefix). Capped at ~5MB by the
-   *  Supabase function body limit. */
-  fileBase64: string;
+  /** Path within the cutsheet-temp Supabase Storage bucket. Preferred over
+   *  fileBase64 — bypasses the edge function body-size limit entirely. The
+   *  function downloads the file, uploads to SharePoint, then deletes it. */
+  storagePath?: string;
+  /** PDF bytes encoded as base64 (no data: prefix). Legacy fallback — capped
+   *  at ~5MB by the Supabase function body limit. */
+  fileBase64?: string;
   filename: string;
   manufacturer: string;
   model: string;
@@ -292,8 +296,11 @@ async function uploadStaging(
   if (!STAGING_FOLDER_ID) {
     throw new Error('SHAREPOINT_STAGING_FOLDER_ID env var not set');
   }
-  if (!input.fileBase64 || !input.filename) {
-    throw new Error('fileBase64 and filename required');
+  if (!input.storagePath && !input.fileBase64) {
+    throw new Error('storagePath or fileBase64 required');
+  }
+  if (!input.filename) {
+    throw new Error('filename required');
   }
   const mfr = input.manufacturer.trim();
   const model = input.model.trim();
@@ -309,21 +316,37 @@ async function uploadStaging(
       .ilike('model_number', model)
       .maybeSingle();
     if (existing) {
+      // Clean up the temp file even on early-return dedup hits.
+      if (input.storagePath) {
+        await supabase.storage.from('cutsheet-temp').remove([input.storagePath])
+          .catch((e: unknown) => console.warn('[uploadStaging] temp cleanup failed:', e));
+      }
       return { matched: { repositoryId: existing.id, sharepointPath: existing.sharepoint_path } };
     }
   }
 
-  // 2. Upload PDF to SharePoint /Staging/. Filename collisions inside
-  //    Staging are tolerated by Graph (it'll return a 409 conflict). To
-  //    avoid that, prefix with a short timestamp so two users uploading
-  //    "datasheet.pdf" don't collide.
+  // 2. Resolve file bytes: prefer storagePath (no body-size limit) over
+  //    legacy fileBase64 encoding.
+  let binary: Uint8Array;
+  if (input.storagePath) {
+    const { data, error: dlErr } = await supabase.storage
+      .from('cutsheet-temp')
+      .download(input.storagePath);
+    if (dlErr || !data) {
+      throw new Error(`Temp storage download failed: ${dlErr?.message ?? 'no data'}`);
+    }
+    binary = new Uint8Array(await data.arrayBuffer());
+  } else {
+    binary = Uint8Array.from(atob(input.fileBase64!), (c) => c.charCodeAt(0));
+  }
+
+  // 3. Upload PDF to SharePoint /Staging/. Prefix with a short timestamp so
+  //    two users uploading "datasheet.pdf" don't collide.
   const safeName = input.filename.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120);
   const uniquePrefix = Date.now().toString(36);
   const stagedFilename = `${uniquePrefix}_${safeName}`;
 
-  // Decode base64 → bytes for the upload body
-  const binary = Uint8Array.from(atob(input.fileBase64), (c) => c.charCodeAt(0));
-
+  try {
   const uploadRes = await graphFetch(
     `/drives/${DRIVE_ID}/items/${STAGING_FOLDER_ID}:/${encodeURIComponent(stagedFilename)}:/content`,
     {
@@ -380,6 +403,13 @@ async function uploadStaging(
       sharepointPath,
     },
   };
+  } finally {
+    // Always delete the temp Storage file whether the upload succeeded or failed.
+    if (input.storagePath) {
+      await supabase.storage.from('cutsheet-temp').remove([input.storagePath])
+        .catch((e: unknown) => console.warn('[uploadStaging] temp cleanup failed:', e));
+    }
+  }
 }
 
 interface ListStagingInput {
