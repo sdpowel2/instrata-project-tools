@@ -280,8 +280,8 @@ create policy "Admins full access to profiles"
   on public.profiles for all using (public.is_admin());
 
 -- ---- projects ----
-create policy "Members can view their projects"
-  on public.projects for select using (public.is_project_member(id));
+create policy "Authenticated users can view all projects"
+  on public.projects for select using (auth.uid() is not null);
 
 create policy "Authenticated users can create projects"
   on public.projects for insert with check (auth.uid() is not null);
