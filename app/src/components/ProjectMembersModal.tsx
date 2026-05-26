@@ -141,7 +141,7 @@ export function ProjectMembersModal({ open, onClose, projectId, projectName }: P
             value={selectedUserId}
             onChange={(e) => setSelectedUserId(e.target.value)}
             disabled={loadingUsers || userFetchFailed || nonMembers.length === 0}
-            className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-navy/20 focus:border-navy disabled:bg-surface disabled:text-text-secondary disabled:cursor-not-allowed"
+            className="flex-1 min-w-0 text-sm border border-border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-navy/20 focus:border-navy disabled:bg-surface disabled:text-text-secondary disabled:cursor-not-allowed"
           >
             {loadingUsers ? (
               <option value="">Loading team members...</option>
@@ -163,7 +163,7 @@ export function ProjectMembersModal({ open, onClose, projectId, projectName }: P
           <button
             onClick={handleAdd}
             disabled={!selectedUserId || adding || loadingUsers}
-            className="flex items-center gap-1.5 px-4 py-2 bg-navy text-white text-sm font-medium rounded-lg hover:bg-navy-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 bg-navy text-white text-sm font-medium rounded-lg hover:bg-navy-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {adding ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
             Add
