@@ -12,7 +12,23 @@
       "Bash(git push:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Seth.Powell\\\\CLAUDE CODE\\\\Instrata Project Tools\\\\instrata-project-tools-main\" -Force)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Seth.Powell\\\\CLAUDE CODE\\\\Instrata Project Tools\\\\instrata-project-tools-main\\\\AVSS Onboarding Site\" -Recurse)",
+      "Bash(Select-Object -Property FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(head -100)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git ls-remote *)",
+      "Bash(git fetch *)",
+      "Bash(git reset *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\Seth.Powell\\\\CLAUDE CODE\\\\Instrata Project Tools\\\\instrata-project-tools-main\" -Recurse -Directory | Select-Object -First 20 | ForEach-Object { $_.FullName })",
+      "Bash(cd '/mnt/c/Users/Seth.Powell/CLAUDE CODE/Instrata Project Tools/instrata-project-tools-main' && grep -r \"\\\\.from\\\\\\(\" app/src --include=\"*.tsx\" --include=\"*.ts\" | grep -E \"\\(profiles|project_members\\)\" | head -20)",
+      "Bash(powershell -Command 'Select-String -Path \"app/src/**/*.tsx\",\"app/src/**/*.ts\" -Pattern \"\\(availableUsers|fetchAvailable|fetchProfiles\\)\" | Select-Object -First 10')",
+      "Bash(powershell -Command ' *)",
+      "Bash(powershell -Command \"Select-String -Path 'store/index.ts' -Pattern 'fetchAllData|from.*profiles' | Select-Object -First 20 LineNumber, Line\")"
     ]
   }
 }
