@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, ClipboardList, Package, Calendar, Truck, Library,
+  Home, ScanLine, Package, Calendar, Truck, Library,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,11 +12,11 @@ import { StatusBadge } from './StatusBadge';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import instrataLogo from '../assets/instrata-logo-white.png';
 
-const mainNav = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/projects', icon: FolderOpen, label: 'Projects' },
-  { to: '/products', icon: Package, label: 'Products' },
-];
+// Cutsheet count is rendered as a badge on Dashboard for admins only — the
+// admin section on Dashboard hosts the Cutsheet Review card now that the
+// standalone Manager Dashboard page is gone.
+const PROJECTS_NAV = { to: '/projects', icon: FolderOpen, label: 'Projects' };
+const PRODUCTS_NAV = { to: '/products', icon: Package, label: 'Products' };
 
 const presalesTools = [
   { to: 'review', icon: ScanLine, label: 'Auto-Review' },
@@ -60,17 +60,15 @@ export function Layout() {
         {/* Nav */}
         <nav className="flex-1 px-2.5 py-3.5 overflow-y-auto flex flex-col gap-0.5">
           <SidebarEyebrow color="rgba(255,255,255,0.35)">Workspace</SidebarEyebrow>
-          {mainNav.map((item) => (
-            <SidebarLink key={item.to} to={item.to} icon={item.icon} label={item.label} end={item.to === '/'} />
-          ))}
-          {isAdmin && (
-            <SidebarLink
-              to="/manager-dashboard"
-              icon={ClipboardList}
-              label="Manager Dashboard"
-              badge={pendingCutsheets > 0 ? pendingCutsheets : undefined}
-            />
-          )}
+          <SidebarLink
+            to="/"
+            icon={LayoutDashboard}
+            label="Dashboard"
+            end
+            badge={isAdmin && pendingCutsheets > 0 ? pendingCutsheets : undefined}
+          />
+          <SidebarLink to={PROJECTS_NAV.to} icon={PROJECTS_NAV.icon} label={PROJECTS_NAV.label} />
+          <SidebarLink to={PRODUCTS_NAV.to} icon={PRODUCTS_NAV.icon} label={PRODUCTS_NAV.label} />
           <SidebarLink
             to="/documentation"
             icon={Library}

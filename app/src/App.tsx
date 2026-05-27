@@ -15,7 +15,6 @@ import { AutoReviewPage } from './pages/AutoReview';
 import { ReviewQueuePage } from './pages/ReviewQueue';
 import { BidLevelingPage } from './pages/BidLevelingPage';
 import { PersonalOpsPage } from './pages/PersonalOpsPage';
-import { ManagerDashboardPage } from './pages/ManagerDashboard';
 import { CutsheetReviewPage } from './pages/CutsheetReview';
 import { CutsheetRepositoryPage } from './pages/CutsheetRepository';
 import { CutsheetMyUploadsPage } from './pages/CutsheetMyUploads';
@@ -106,7 +105,6 @@ export default function App() {
                 <Route path="purchasing/:purchasingId" element={<PurchasingDetailPage />} />
               </Route>
               <Route path="products" element={<ProductsPage />} />
-              <Route path="manager-dashboard" element={<ManagerDashboardPage />} />
               <Route path="documentation" element={<DocumentationPage />} />
               <Route path="settings" element={<SettingsPage />} />
 
@@ -114,7 +112,7 @@ export default function App() {
                   reachable so the code remains warm and any deep links
                   (submittal upload confirmations, review action links,
                   etc.) still resolve. Cutsheet Review is surfaced from
-                  the Manager Dashboard instead. */}
+                  the admin section on Dashboard instead. */}
               <Route path="review-queue" element={<ReviewQueuePage />} />
               <Route path="cutsheet-review" element={<CutsheetReviewPage />} />
               <Route path="cutsheet-repository" element={<CutsheetRepositoryPage />} />

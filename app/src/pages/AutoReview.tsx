@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle2, MinusCircle, MessageSquare, ChevronDown,
   ChevronUp, Clock, RefreshCw, ThumbsUp, AlertCircle, Info, Loader2,
-  Upload, FileSpreadsheet, ScanLine,
+  Upload, FileSpreadsheet, ScanLine, Send,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -33,19 +33,21 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 const RUN_STATUS_LABEL: Record<ReviewRunStatus, string> = {
-  pending_review:     'Pending Review',
-  in_review:          'In Review',
-  changes_requested:  'Changes Requested',
-  quick_fix:          'Quick Fix',
-  approved:           'Approved',
+  pending_review:       'Pre-Review',
+  submitted_for_review: 'Submitted for Review',
+  in_review:            'In Review',
+  changes_requested:    'Changes Requested',
+  quick_fix:            'Quick Fix',
+  approved:             'Approved',
 };
 
 const RUN_STATUS_STYLE: Record<ReviewRunStatus, string> = {
-  pending_review:    'bg-amber-100 text-amber-800',
-  in_review:         'bg-blue-100 text-blue-800',
-  changes_requested: 'bg-red-100 text-red-800',
-  quick_fix:         'bg-purple-100 text-purple-800',
-  approved:          'bg-green-100 text-green-800',
+  pending_review:       'bg-slate-100 text-slate-700',
+  submitted_for_review: 'bg-amber-100 text-amber-800',
+  in_review:            'bg-blue-100 text-blue-800',
+  changes_requested:    'bg-red-100 text-red-800',
+  quick_fix:            'bg-purple-100 text-purple-800',
+  approved:             'bg-green-100 text-green-800',
 };
 
 // ─── Flag Card ────────────────────────────────────────────────────────────────
@@ -313,10 +315,13 @@ export function AutoReviewPage() {
     setLoadingFlags(false);
   }, [fetchProjectFlags]);
 
-  // Mark run as "in_review" when manager first opens it
+  // Mark run as "in_review" when a manager first opens a submitted run.
+  // pending_review is the engineer's private pre-review — opening it as the
+  // engineer (or even as an admin who's just looking) must not flip it to
+  // in_review; that would short-circuit the explicit "Send to Manager" gate.
   useEffect(() => {
     if (!latestRun) return;
-    if (latestRun.status === 'pending_review') {
+    if (isAdmin && latestRun.status === 'submitted_for_review') {
       updateRunStatus(latestRun.id, 'in_review', session?.user?.id);
     }
     loadFlags(latestRun.id);
@@ -509,9 +514,21 @@ export function AutoReviewPage() {
             </div>
           </div>
 
-          {/* Manager actions */}
+          {/* Actions — pre-review is engineer-side ("Send to Manager"),
+              submitted_for_review/in_review are manager-side (Approve /
+              Changes Requested). */}
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {(latestRun.status === 'in_review' || latestRun.status === 'pending_review') && (
+            {latestRun.status === 'pending_review' && (
+              <button
+                onClick={() => handleRunStatusChange('submitted_for_review')}
+                disabled={updatingRun}
+                className="flex items-center gap-1.5 text-sm px-3 py-2 bg-navy text-white rounded-lg hover:bg-navy/90 disabled:opacity-50 transition-colors"
+                title="Submit this run to management for review"
+              >
+                <Send size={14} /> Send to Manager
+              </button>
+            )}
+            {(latestRun.status === 'submitted_for_review' || latestRun.status === 'in_review') && isAdmin && (
               <>
                 <button
                   onClick={() => handleRunStatusChange('changes_requested')}
@@ -530,6 +547,11 @@ export function AutoReviewPage() {
                   {canApprove ? 'Approve' : canApproveWithWarning ? 'Approve (open flags remain)' : `Approve (${openHighCount} High open)`}
                 </button>
               </>
+            )}
+            {latestRun.status === 'submitted_for_review' && !isAdmin && (
+              <div className="flex items-center gap-1.5 text-amber-700 text-sm font-medium">
+                <Clock size={14} /> Awaiting manager
+              </div>
             )}
             {latestRun.status === 'approved' && (
               <div className="flex items-center gap-1.5 text-green-700 text-sm font-medium">

@@ -1,22 +1,41 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, ChevronRight } from 'lucide-react';
+import { Plus, Search, ChevronRight, UserPlus, Check, Loader2 } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { DToolsSyncDot } from '../components/DToolsSyncDot';
 import { PageHeader } from '../components/ui';
-import type { ProjectPhase } from '../types';
-
-const PHASE_PILLS = ['All', 'Pre-Sales', 'Post-Sales'] as const;
+import { PipelineBar, tilesForPhase, buildPipelineCounts } from '../components/PipelineBar';
+import type { ProjectPhase, ProjectStatus } from '../types';
 
 export function ProjectsList() {
   const navigate = useNavigate();
-  // In Supabase mode, RLS policies ensure members only see their own projects.
-  // In demo mode, all projects are shown regardless of role.
+  // Global registry: every authenticated user sees every project. RLS on the
+  // server enforces the same thing — this page deliberately does not scope
+  // to membership. The Dashboard is the user-scoped view.
   const projects = useStore((s) => s.projects);
+  const myProjectIds = useStore((s) => s.myProjectIds);
+  const addSelfToProject = useStore((s) => s.addSelfToProject);
+
   const [search, setSearch] = useState('');
-  const [phaseFilter, setPhaseFilter] = useState<string>('All');
+  const [phaseView, setPhaseView] = useState<ProjectPhase>('Pre-Sales');
+  const [statusFilter, setStatusFilter] = useState<'All' | ProjectStatus>('All');
   const [buFilter, setBuFilter] = useState<string>('All');
+
+  // Local UX state for the "Add me" affordance — keeps the row in a loading
+  // state until the optimistic write resolves so a fast double-click can't
+  // fire two inserts.
+  const [pendingAddIds, setPendingAddIds] = useState<Set<string>>(() => new Set());
+
+  const tiles = tilesForPhase(phaseView);
+
+  // Pipeline counts reflect EVERY project in the active phase — this is the
+  // org-wide registry view, so tiles answer "how many projects are in each
+  // status across the company."
+  const { counts: pipelineCounts, total: phaseProjectTotal } = useMemo(
+    () => buildPipelineCounts(projects, phaseView, tiles),
+    [projects, phaseView, tiles],
+  );
 
   const businessUnits = useMemo(() => {
     const set = new Set<string>();
@@ -28,19 +47,36 @@ export function ProjectsList() {
     const q = search.trim().toLowerCase();
     return projects
       .filter((p) => {
-        const matchSearch = !q
-          || p.name.toLowerCase().includes(q)
+        if (p.phase !== phaseView) return false;
+        if (statusFilter !== 'All' && p.status !== statusFilter) return false;
+        if (buFilter !== 'All' && p.businessUnit !== buFilter) return false;
+        if (!q) return true;
+        return (
+          p.name.toLowerCase().includes(q)
           || p.number.toLowerCase().includes(q)
           || p.client.toLowerCase().includes(q)
-          || (p.businessUnit?.toLowerCase().includes(q) ?? false);
-        const matchPhase = phaseFilter === 'All' || p.phase === phaseFilter;
-        const matchBU = buFilter === 'All' || p.businessUnit === buFilter;
-        return matchSearch && matchPhase && matchBU;
+          || (p.businessUnit?.toLowerCase().includes(q) ?? false)
+        );
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }, [projects, search, phaseFilter, buFilter]);
+  }, [projects, search, phaseView, statusFilter, buFilter]);
 
-  const filtersActive = search.trim() !== '' || phaseFilter !== 'All' || buFilter !== 'All';
+  const filtersActive = search.trim() !== '' || statusFilter !== 'All' || buFilter !== 'All';
+  const totalInPhase = projects.filter((p) => p.phase === phaseView).length;
+
+  const handleAddMe = async (projectId: string) => {
+    if (pendingAddIds.has(projectId) || myProjectIds.has(projectId)) return;
+    setPendingAddIds((s) => new Set(s).add(projectId));
+    try {
+      await addSelfToProject(projectId);
+    } finally {
+      setPendingAddIds((s) => {
+        const next = new Set(s);
+        next.delete(projectId);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="px-8 pt-7 pb-10 max-w-[1400px]">
@@ -50,7 +86,7 @@ export function ProjectsList() {
         subtitle={
           <>
             {filtered.length}
-            {filtersActive && <> of {projects.length}</>}
+            {filtersActive && <> of {totalInPhase}</>}
             {' '}project{filtered.length === 1 ? '' : 's'}
             {' · '}
             Live from Monday.com
@@ -63,8 +99,19 @@ export function ProjectsList() {
         }
       />
 
+      {/* Pipeline tiles + phase toggle — drives status filter for the list below */}
+      <PipelineBar
+        tiles={tiles}
+        counts={pipelineCounts}
+        total={phaseProjectTotal}
+        selected={statusFilter}
+        onSelect={setStatusFilter}
+        phaseView={phaseView}
+        onPhaseChange={(p) => { setPhaseView(p); setStatusFilter('All'); }}
+      />
+
       {/* Filter bar */}
-      <div className="flex items-center gap-3 mb-5 flex-wrap">
+      <div className="flex items-center gap-3 mt-5 mb-5 flex-wrap">
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-2 pointer-events-none" />
           <input
@@ -74,26 +121,6 @@ export function ProjectsList() {
             className="input"
             style={{ paddingLeft: '2.5rem' }}
           />
-        </div>
-
-        <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg">
-          {PHASE_PILLS.map((phase) => {
-            const active = phaseFilter === phase;
-            return (
-              <button
-                key={phase}
-                onClick={() => setPhaseFilter(phase)}
-                className={[
-                  'px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap',
-                  active
-                    ? 'bg-navy text-white'
-                    : 'text-fg-2 hover:text-navy hover:bg-surface',
-                ].join(' ')}
-              >
-                {phase}
-              </button>
-            );
-          })}
         </div>
 
         <select
@@ -107,16 +134,28 @@ export function ProjectsList() {
             <option key={bu} value={bu}>{bu}</option>
           ))}
         </select>
+
+        {statusFilter !== 'All' && (
+          <button
+            onClick={() => setStatusFilter('All')}
+            className="inline-flex items-center gap-1.5 bg-navy/[0.06] text-navy text-xs font-semibold px-2.5 py-1.5 rounded-md hover:bg-navy/10 transition-colors"
+          >
+            Status: {statusFilter}
+            <span aria-hidden>×</span>
+          </button>
+        )}
       </div>
 
-      {/* Table in card */}
-      <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
+      {/* Table in card — horizontal scroll if the columns can't all fit
+          (whitespace-nowrap cells + long project names push the table wider
+          than the card on dense filter slices like All/Follow Up). */}
+      <div className="bg-white border border-border rounded-xl shadow-sm overflow-x-auto">
         {filtered.length === 0 ? (
           <div className="px-6 py-16 text-center text-sm text-fg-2">
             No projects match these filters.
           </div>
         ) : (
-          <table className="w-full">
+          <table className="w-full min-w-[960px]">
             <thead className="bg-navy text-white text-left text-[11px]">
               <tr>
                 <th className="px-5 py-2.5 font-semibold uppercase tracking-[0.05em]">Project</th>
@@ -125,12 +164,15 @@ export function ProjectsList() {
                 <th className="px-5 py-2.5 font-semibold uppercase tracking-[0.05em]">Business Unit</th>
                 <th className="px-5 py-2.5 font-semibold uppercase tracking-[0.05em]">Status</th>
                 <th className="px-5 py-2.5 font-semibold uppercase tracking-[0.05em]">Updated</th>
+                <th className="px-2 py-2.5" aria-label="Membership" />
                 <th className="px-2 py-2.5" aria-label="Open" />
               </tr>
             </thead>
             <tbody>
               {filtered.map((project, i) => {
                 const accent = phaseAccent(project.phase);
+                const isMember = myProjectIds.has(project.id);
+                const isPending = pendingAddIds.has(project.id);
                 return (
                   <tr
                     key={project.id}
@@ -161,6 +203,28 @@ export function ProjectsList() {
                     <td className="px-5 py-3 text-[13px] text-fg-2 whitespace-nowrap">{project.businessUnit || '—'}</td>
                     <td className="px-5 py-3 whitespace-nowrap"><StatusBadge status={project.status} dot /></td>
                     <td className="px-5 py-3 text-[12px] text-fg-2 whitespace-nowrap">{project.updatedAt}</td>
+                    <td className="px-2 py-3 whitespace-nowrap">
+                      {isMember ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full"
+                          title="You're on this project"
+                        >
+                          <Check size={11} /> On
+                        </span>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleAddMe(project.id); }}
+                          disabled={isPending}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-navy bg-navy/[0.06] hover:bg-navy/10 disabled:opacity-60 disabled:cursor-not-allowed px-2 py-1 rounded-md transition-colors"
+                          title="Add yourself to this project"
+                        >
+                          {isPending
+                            ? <Loader2 size={11} className="animate-spin" />
+                            : <UserPlus size={11} />}
+                          Add me
+                        </button>
+                      )}
+                    </td>
                     <td className="px-2 py-3 text-right pr-4">
                       <ChevronRight size={14} className="text-fg-2 inline" />
                     </td>

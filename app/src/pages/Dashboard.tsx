@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  FolderOpen, Plus, Sparkles, ChevronRight,
+  Plus, ChevronRight, FolderPlus,
   MessageSquareWarning, ScanLine, FileText, ClipboardCheck,
 } from 'lucide-react';
 import { useStore } from '../store';
@@ -9,42 +9,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
 import { DToolsSyncDot } from '../components/DToolsSyncDot';
 import { Eyebrow, PageHeader } from '../components/ui';
+import { PipelineBar, tilesForPhase, buildPipelineCounts } from '../components/PipelineBar';
+import { AdminDashboardSection } from '../components/AdminDashboardSection';
 import type { Project, ProjectStatus, ProjectPhase } from '../types';
-
-interface PipelineTileSpec {
-  key: ProjectStatus;
-  color: string;
-  bg: string;
-}
-
-// Pre-sales bar: the buckets that matter for the sales pipeline. Off-pipeline
-// states (On Hold / Declined to Bid / Rebid) deliberately omitted so the bar
-// stays scannable — those projects are still visible in the table below.
-const PRE_SALES_TILES: PipelineTileSpec[] = [
-  { key: 'Not Started', color: '#9CA3AF', bg: '#F3F4F6' },
-  { key: 'In Progress', color: '#E07A1A', bg: 'rgba(246,141,46,0.12)' },
-  { key: 'Review',      color: '#1D4ED8', bg: '#DBEAFE' },
-  { key: 'Follow Up',   color: '#A16207', bg: '#FEF9C3' },
-  { key: 'Won',         color: '#15803D', bg: '#DCFCE7' },
-  { key: 'Lost',        color: '#B91C1C', bg: '#FEE2E2' },
-];
-
-// Post-sales bar: delivery pipeline. "Won" appears first because it's the
-// landing state from Monday's pre-sales → post-sales duplication automation
-// (≈ "just arrived, not yet started").
-const POST_SALES_TILES: PipelineTileSpec[] = [
-  { key: 'Won',         color: '#15803D', bg: '#DCFCE7' },
-  { key: 'Not Started', color: '#9CA3AF', bg: '#F3F4F6' },
-  { key: 'In Progress', color: '#E07A1A', bg: 'rgba(246,141,46,0.12)' },
-  { key: 'Install',     color: '#0072CE', bg: 'rgba(0,114,206,0.12)' },
-  { key: 'Close Out',   color: '#22326E', bg: 'rgba(34,50,110,0.12)' },
-  { key: 'Completed',   color: '#15803D', bg: '#DCFCE7' },
-];
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const projects = useStore((s) => s.projects);
+  const myProjectIds = useStore((s) => s.myProjectIds);
   const submittals = useStore((s) => s.submittals);
   const rfis = useStore((s) => s.rfis);
   const closeouts = useStore((s) => s.closeouts);
@@ -57,17 +30,14 @@ export function Dashboard() {
 
   // Reset status filter when phase flips so a Pre-Sales-only status doesn't
   // stick around after switching to Post-Sales (and vice versa).
-  const tiles = phaseView === 'Pre-Sales' ? PRE_SALES_TILES : POST_SALES_TILES;
+  const tiles = tilesForPhase(phaseView);
 
-  // Owner filter: if any project is assigned to the current user, scope to those.
-  // Otherwise show everything (most useful default until ownership is populated).
-  const myProjects = useMemo(() => {
-    if (!user) return projects;
-    const mine = projects.filter((p) => p.ownerId === user.id);
-    return mine.length > 0 ? mine : projects;
-  }, [projects, user]);
-
-  const ownershipPopulated = !!user && projects.some((p) => p.ownerId === user.id);
+  // Scope: every card on this page operates on projects the user is a member
+  // of. The global registry lives on /projects; Dashboard is "your day."
+  const myProjects = useMemo(
+    () => projects.filter((p) => myProjectIds.has(p.id)),
+    [projects, myProjectIds],
+  );
 
   // "My Projects" list reflects the active phase view + status filter.
   const filteredMine = useMemo(() => {
@@ -76,23 +46,12 @@ export function Dashboard() {
     return out;
   }, [myProjects, phaseView, statusFilter]);
 
-  // Pipeline counts come from ALL projects in the active phase — these tiles
-  // represent org-wide pipeline state for the selected board.
-  const pipelineCounts = useMemo(() => {
-    const counts = new Map<ProjectStatus, number>();
-    for (const t of tiles) counts.set(t.key, 0);
-    for (const p of projects) {
-      if (p.phase !== phaseView) continue;
-      if (counts.has(p.status)) {
-        counts.set(p.status, counts.get(p.status)! + 1);
-      }
-    }
-    return counts;
-  }, [projects, phaseView, tiles]);
-
-  const phaseProjectTotal = useMemo(
-    () => projects.filter((p) => p.phase === phaseView).length,
-    [projects, phaseView],
+  // Pipeline counts reflect *your* projects only — the tiles answer "of the
+  // projects I'm on, how many are in each status." Org-wide counts live on
+  // the Projects page.
+  const { counts: pipelineCounts, total: phaseProjectTotal } = useMemo(
+    () => buildPipelineCounts(myProjects, phaseView, tiles),
+    [myProjects, phaseView, tiles],
   );
 
   return (
@@ -102,188 +61,76 @@ export function Dashboard() {
         title="Dashboard"
         subtitle={
           <>
-            {myProjects.length} {ownershipPopulated ? 'projects assigned to you' : 'projects in workspace'}
+            {myProjects.length} project{myProjects.length === 1 ? '' : 's'} assigned to you
             {' · '}
             Live from Monday.com
           </>
         }
         actions={
-          <>
-            <button onClick={() => navigate('/projects')} className="btn-secondary">
-              <FolderOpen size={16} /> All Projects
-            </button>
-            <button onClick={() => navigate('/projects/new')} className="btn-orange">
-              <Plus size={16} /> New Project
-            </button>
-          </>
+          <button onClick={() => navigate('/projects/new')} className="btn-orange">
+            <Plus size={16} /> New Project
+          </button>
         }
       />
 
-      <PipelineBar
-        tiles={tiles}
-        counts={pipelineCounts}
-        total={phaseProjectTotal}
-        selected={statusFilter}
-        onSelect={setStatusFilter}
-        phaseView={phaseView}
-        onPhaseChange={(p) => { setPhaseView(p); setStatusFilter('All'); }}
-      />
-
-      <div className="grid grid-cols-[1fr_340px] gap-6 mt-7">
-        <MyProjectsCard
-          projects={filteredMine}
-          totalMine={myProjects.filter((p) => p.phase === phaseView).length}
-          filter={statusFilter}
-          ownershipPopulated={ownershipPopulated}
-          onClear={() => setStatusFilter('All')}
-          onOpen={(p) => navigate(`/projects/${p.id}`)}
-        />
-
-        <div className="flex flex-col gap-5">
-          <MyWorkCard
-            myProjectIds={new Set(myProjects.map((p) => p.id))}
-            allRfis={rfis}
-            allSubmittals={submittals}
-            allReviewRuns={reviewRuns}
-            allCloseouts={closeouts}
-          />
-          <ActivityCard projects={myProjects} onNavigate={(id) => navigate(`/projects/${id}`)} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface PipelineBarProps {
-  tiles: PipelineTileSpec[];
-  counts: Map<ProjectStatus, number>;
-  total: number;
-  selected: 'All' | ProjectStatus;
-  onSelect: (s: 'All' | ProjectStatus) => void;
-  phaseView: ProjectPhase;
-  onPhaseChange: (p: ProjectPhase) => void;
-}
-
-function PipelineBar({ tiles, counts, total, selected, onSelect, phaseView, onPhaseChange }: PipelineBarProps) {
-  return (
-    <div className="bg-white border border-border rounded-xl shadow-sm p-1">
-      <div className="flex items-center justify-between px-3 pt-2 pb-1.5">
-        <div className="text-[11px] font-bold tracking-[0.08em] uppercase text-fg-2">
-          {phaseView} pipeline
-        </div>
-        <div className="flex items-center gap-1 p-0.5 bg-surface/60 rounded-md">
-          {(['Pre-Sales', 'Post-Sales'] as const).map((p) => {
-            const active = phaseView === p;
-            return (
-              <button
-                key={p}
-                onClick={() => onPhaseChange(p)}
-                className={[
-                  'px-2.5 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap',
-                  active ? 'bg-white shadow-sm text-navy' : 'text-fg-2 hover:text-navy',
-                ].join(' ')}
-              >
-                {p}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <div
-        className="grid gap-1"
-        style={{ gridTemplateColumns: `minmax(140px,180px) repeat(${tiles.length}, 1fr)` }}
-      >
-        <PipelineTile
-          active={selected === 'All'}
-          onClick={() => onSelect('All')}
-          accent="var(--color-navy)"
-          accentBg="rgba(34,50,110,0.06)"
-          label="All"
-          value={total}
-          tagline={`${phaseView.toLowerCase()} projects`}
-          dotColor="var(--color-navy)"
-        />
-        {tiles.map((s) => {
-          const count = counts.get(s.key) ?? 0;
-          const pct = total ? Math.round((count / total) * 100) : 0;
-          const active = selected === s.key;
-          return (
-            <PipelineTile
-              key={s.key}
-              active={active}
-              onClick={() => onSelect(s.key)}
-              accent={s.color}
-              accentBg={s.bg}
-              label={s.key}
-              value={count}
-              tagline={`${pct}% of pipeline`}
-              dotColor={s.color}
-              showBar
-              barPct={pct}
-            />
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-2 px-3.5 pt-2 pb-1.5 mt-1 border-t border-border text-fg-2 text-[11px]">
-        <Sparkles size={12} className="text-orange" />
-        <span>
-          Live from <strong className="text-fg">Monday.com</strong> · click a status to filter your projects below
-        </span>
-      </div>
-    </div>
-  );
-}
-
-interface PipelineTileProps {
-  active: boolean;
-  onClick: () => void;
-  accent: string;
-  accentBg: string;
-  label: string;
-  value: number;
-  tagline: string;
-  dotColor: string;
-  showBar?: boolean;
-  barPct?: number;
-}
-
-function PipelineTile({ active, onClick, accent, accentBg, label, value, tagline, dotColor, showBar, barPct = 0 }: PipelineTileProps) {
-  return (
-    <button
-      onClick={onClick}
-      className="text-left rounded-[9px] px-3.5 pt-3.5 pb-3 transition-all"
-      style={{
-        background: active ? accentBg : 'transparent',
-        border: active ? `1px solid ${accent}` : '1px solid transparent',
-        boxShadow: active ? `inset 0 -2px 0 ${accent}` : undefined,
-      }}
-    >
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="w-2 h-2 rounded-full" style={{ background: dotColor }} />
-        <div
-          className="text-[11px] font-bold tracking-[0.08em] uppercase whitespace-nowrap"
-          style={{ color: accent }}
-        >
-          {label}
-        </div>
-      </div>
-      <div
-        className="text-[26px] font-bold leading-none font-mono"
-        style={{ color: active && label !== 'All' ? 'var(--color-fg)' : (label === 'All' ? 'var(--color-navy)' : 'var(--color-fg)') }}
-      >
-        {value}
-      </div>
-      {showBar ? (
-        <>
-          <div className="mt-2.5 h-[3px] rounded-sm overflow-hidden bg-black/[0.06]">
-            <div className="h-full transition-[width]" style={{ width: `${barPct}%`, background: accent }} />
-          </div>
-          <div className="text-[11px] text-fg-2 mt-1.5">{tagline}</div>
-        </>
+      {myProjects.length === 0 ? (
+        <EmptyMembershipsState onBrowse={() => navigate('/projects')} />
       ) : (
-        <div className="text-[11px] text-fg-2 mt-1">{tagline}</div>
+        <>
+          <PipelineBar
+            tiles={tiles}
+            counts={pipelineCounts}
+            total={phaseProjectTotal}
+            selected={statusFilter}
+            onSelect={setStatusFilter}
+            phaseView={phaseView}
+            onPhaseChange={(p) => { setPhaseView(p); setStatusFilter('All'); }}
+            footer={<>Showing <strong className="text-fg">your</strong> {phaseView.toLowerCase()} projects · click a status to filter</>}
+          />
+
+          <div className="grid grid-cols-[1fr_340px] gap-6 mt-7">
+            <MyProjectsCard
+              projects={filteredMine}
+              totalMine={myProjects.filter((p) => p.phase === phaseView).length}
+              filter={statusFilter}
+              onClear={() => setStatusFilter('All')}
+              onOpen={(p) => navigate(`/projects/${p.id}`)}
+            />
+
+            <div className="flex flex-col gap-5">
+              <MyWorkCard
+                myProjectIds={myProjectIds}
+                allRfis={rfis}
+                allSubmittals={submittals}
+                allReviewRuns={reviewRuns}
+                allCloseouts={closeouts}
+              />
+              <ActivityCard projects={myProjects} onNavigate={(id) => navigate(`/projects/${id}`)} />
+            </div>
+          </div>
+        </>
       )}
-    </button>
+
+      {isAdmin && <AdminDashboardSection />}
+    </div>
+  );
+}
+
+function EmptyMembershipsState({ onBrowse }: { onBrowse: () => void }) {
+  return (
+    <div className="bg-white border border-border rounded-xl shadow-sm px-8 py-14 text-center">
+      <div className="w-14 h-14 rounded-full bg-navy/[0.06] text-navy inline-flex items-center justify-center mb-4">
+        <FolderPlus size={26} />
+      </div>
+      <h2 className="text-lg font-semibold text-navy m-0">You're not on any projects yet</h2>
+      <p className="text-sm text-fg-2 mt-1.5 max-w-md mx-auto">
+        New work assigned in Monday will land here automatically once project sync is enabled.
+        In the meantime, browse the workspace and add yourself to anything you're already supporting.
+      </p>
+      <button onClick={onBrowse} className="btn-secondary mt-5">
+        Browse all projects
+      </button>
+    </div>
   );
 }
 
@@ -291,19 +138,18 @@ interface MyProjectsCardProps {
   projects: Project[];
   totalMine: number;
   filter: 'All' | ProjectStatus;
-  ownershipPopulated: boolean;
   onClear: () => void;
   onOpen: (p: Project) => void;
 }
 
-function MyProjectsCard({ projects, totalMine, filter, ownershipPopulated, onClear, onOpen }: MyProjectsCardProps) {
+function MyProjectsCard({ projects, totalMine, filter, onClear, onOpen }: MyProjectsCardProps) {
   return (
     <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
       <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
         <div>
-          <Eyebrow>{ownershipPopulated ? 'Assigned to you' : 'Workspace'}</Eyebrow>
+          <Eyebrow>Assigned to you</Eyebrow>
           <h2 className="text-base font-semibold text-navy m-0 mt-0.5">
-            {ownershipPopulated ? 'My Projects' : 'All Projects'}
+            My Projects
             <span className="ml-2.5 text-[13px] font-medium text-fg-2">
               {projects.length}{filter !== 'All' && ` of ${totalMine}`}
             </span>
@@ -389,7 +235,10 @@ function MyWorkCard({ myProjectIds, allRfis, allSubmittals, allReviewRuns, allCl
   const inMine = (id: string) => myProjectIds.has(id);
   const rfis = allRfis.filter((r) => inMine(r.projectId) && r.status === 'Open').length;
   const subs = allSubmittals.filter((s) => inMine(s.projectId) && (s.status === 'Submitted' || s.status === 'Revise & Resubmit')).length;
-  const reviews = allReviewRuns.filter((r) => inMine(r.projectId) && (r.status === 'pending_review' || r.status === 'in_review' || r.status === 'changes_requested')).length;
+  // Engineer-side "waiting on you" reviews: pre-review they haven't escalated
+  // yet, or runs the manager sent back. submitted_for_review / in_review are
+  // on the manager's plate and surface in the admin Needs Review card instead.
+  const reviews = allReviewRuns.filter((r) => inMine(r.projectId) && (r.status === 'pending_review' || r.status === 'changes_requested')).length;
   const punch = allCloseouts
     .filter((c) => inMine(c.projectId))
     .flatMap((c) => c.punchItems)
