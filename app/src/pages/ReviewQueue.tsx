@@ -6,22 +6,26 @@ import type { ReviewRun, ReviewRunStatus } from '../types';
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const RUN_STATUS_LABEL: Record<ReviewRunStatus, string> = {
-  pending_review:    'Pending Review',
-  in_review:         'In Review',
-  changes_requested: 'Changes Requested',
-  quick_fix:         'Quick Fix',
-  approved:          'Approved',
+  pending_review:       'Pre-Review',
+  submitted_for_review: 'Submitted for Review',
+  in_review:            'In Review',
+  changes_requested:    'Changes Requested',
+  quick_fix:            'Quick Fix',
+  approved:             'Approved',
 };
 
 const RUN_STATUS_STYLE: Record<ReviewRunStatus, string> = {
-  pending_review:    'bg-amber-100 text-amber-800',
-  in_review:         'bg-blue-100 text-blue-800',
-  changes_requested: 'bg-red-100 text-red-800',
-  quick_fix:         'bg-purple-100 text-purple-800',
-  approved:          'bg-green-100 text-green-800',
+  pending_review:       'bg-slate-100 text-slate-700',
+  submitted_for_review: 'bg-amber-100 text-amber-800',
+  in_review:            'bg-blue-100 text-blue-800',
+  changes_requested:    'bg-red-100 text-red-800',
+  quick_fix:            'bg-purple-100 text-purple-800',
+  approved:             'bg-green-100 text-green-800',
 };
 
-const ACTIVE_STATUSES: ReviewRunStatus[] = ['pending_review', 'in_review', 'changes_requested'];
+// pending_review is the engineer's private pre-review and never appears in
+// the manager queue. The queue starts with submitted_for_review.
+const ACTIVE_STATUSES: ReviewRunStatus[] = ['submitted_for_review', 'in_review', 'changes_requested'];
 
 // ─── Run Card ─────────────────────────────────────────────────────────────────
 
@@ -31,8 +35,8 @@ function RunCard({ run, projectName, projectNumber, onClick }: {
   projectNumber: string;
   onClick: () => void;
 }) {
-  const isPending  = run.status === 'pending_review';
-  const isChanges  = run.status === 'changes_requested';
+  const isSubmitted = run.status === 'submitted_for_review';
+  const isChanges   = run.status === 'changes_requested';
 
   return (
     <button
@@ -61,8 +65,8 @@ function RunCard({ run, projectName, projectNumber, onClick }: {
       </div>
 
       <div className="flex items-center gap-1.5 mt-3 text-xs text-text-secondary">
-        {isPending ? (
-          <><Clock size={12} /> Waiting for review</>
+        {isSubmitted ? (
+          <><Clock size={12} /> Waiting for manager review</>
         ) : isChanges ? (
           <><RefreshCw size={12} /> Awaiting engineer resubmission</>
         ) : (
@@ -97,8 +101,15 @@ export function ReviewQueuePage() {
   const activeRuns = [...latestRunByProject.values()].filter(r =>
     ACTIVE_STATUSES.includes(r.status),
   ).sort((a, b) => {
-    // pending_review first, then in_review, then changes_requested
-    const order = { pending_review: 0, in_review: 1, changes_requested: 2, quick_fix: 3, approved: 4 };
+    // submitted_for_review first (oldest waiting), then in_review, then changes_requested
+    const order = {
+      pending_review: 99,
+      submitted_for_review: 0,
+      in_review: 1,
+      changes_requested: 2,
+      quick_fix: 3,
+      approved: 4,
+    } satisfies Record<ReviewRunStatus, number>;
     const diff = order[a.status] - order[b.status];
     if (diff !== 0) return diff;
     return new Date(b.triggeredAt).getTime() - new Date(a.triggeredAt).getTime();
@@ -112,7 +123,7 @@ export function ReviewQueuePage() {
 
   const getProject = (projectId: string) => projects.find(p => p.id === projectId);
 
-  const pendingCount     = activeRuns.filter(r => r.status === 'pending_review').length;
+  const submittedCount   = activeRuns.filter(r => r.status === 'submitted_for_review').length;
   const inReviewCount    = activeRuns.filter(r => r.status === 'in_review').length;
   const changesCount     = activeRuns.filter(r => r.status === 'changes_requested').length;
 
@@ -127,7 +138,7 @@ export function ReviewQueuePage() {
 
       {/* Summary stats */}
       <div className="grid grid-cols-3 gap-4 mb-8">
-        <StatCard icon={Clock} label="Pending Review" count={pendingCount} color="text-amber-600" bg="bg-amber-50 border-amber-200" />
+        <StatCard icon={Clock} label="Submitted for Review" count={submittedCount} color="text-amber-600" bg="bg-amber-50 border-amber-200" />
         <StatCard icon={AlertCircle} label="In Review" count={inReviewCount} color="text-blue-600" bg="bg-blue-50 border-blue-200" />
         <StatCard icon={RefreshCw} label="Changes Requested" count={changesCount} color="text-red-600" bg="bg-red-50 border-red-200" />
       </div>
@@ -138,7 +149,7 @@ export function ReviewQueuePage() {
           <Inbox size={36} className="mx-auto mb-4 text-text-secondary" />
           <p className="font-medium text-text-primary">Queue is clear</p>
           <p className="text-sm text-text-secondary mt-1">
-            No proposals are pending review. New reviews appear here when engineers set Monday status to "Review".
+            No proposals are awaiting manager review. New reviews appear here when an engineer hits <strong>Send to Manager</strong> on a pre-review run.
           </p>
         </div>
       ) : (

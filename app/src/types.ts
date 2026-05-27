@@ -33,7 +33,13 @@ export type ProjectPhase = 'Pre-Sales' | 'Post-Sales';
 
 // ===================== AUTO REVIEWER =====================
 
-export type ReviewRunStatus = 'pending_review' | 'in_review' | 'changes_requested' | 'quick_fix' | 'approved';
+export type ReviewRunStatus =
+  | 'pending_review'        // engineer's private pre-review — not in manager queue
+  | 'submitted_for_review'  // engineer escalated to manager — enters manager queue
+  | 'in_review'             // manager actively reviewing
+  | 'changes_requested'     // sent back to engineer for fixes
+  | 'quick_fix'             // manager applied small fix themselves
+  | 'approved';
 export type ReviewFlagStatus = 'open' | 'resolved' | 'waived' | 'commented';
 export type ReviewFlagSeverity = 'high' | 'moderate' | 'low';
 export type ReviewFlagCategory = 'margin' | 'pricing' | 'labor' | 'data' | 'catalog' | 'project';
@@ -212,8 +218,14 @@ export interface Project {
   phase: ProjectPhase;
   /** Contracted / quoted value, e.g. "$482K" or "$1.2M". String to allow human formatting. */
   value: string;
-  /** Auth user id of the engineer this project is assigned to. */
+  /** Auth user id of the engineer this project is assigned to. On a
+   *  pre-sales row that's the pre-sales engineer; on a post-sales row it's
+   *  the post-sales engineer. */
   ownerId?: string;
+  /** On post-sales rows: the original pre-sales engineer carried forward.
+   *  Always null on pre-sales rows. Populated by the monday post-sales
+   *  pre-sales-engineer person column once that sync lands. */
+  legacyEngineerId?: string;
   /** Persistent ID written to both Monday boards' Project ID column. Format: INST-YYYY-NNNN. */
   projectCode?: string;
   /** Monday item id on the AV Pre-Sales Summary board (3477536693). */

@@ -58,6 +58,7 @@ function rowToProject(r: any): Project {
     phase: r.phase ?? 'Pre-Sales',
     value: r.value ?? '',
     ownerId: r.owner_id ?? undefined,
+    legacyEngineerId: r.legacy_engineer_id ?? undefined,
     projectCode: r.project_code ?? undefined,
     mondayPresalesItemId: r.monday_presales_item_id ?? undefined,
     mondayPostsalesItemId: r.monday_postsales_item_id ?? undefined,
@@ -80,6 +81,7 @@ function projectToRow(p: Partial<Project> & { createdBy?: string }): Record<stri
   if (p.phase !== undefined) row.phase = p.phase;
   if (p.value !== undefined) row.value = p.value;
   if (p.ownerId !== undefined) row.owner_id = p.ownerId;
+  if (p.legacyEngineerId !== undefined) row.legacy_engineer_id = p.legacyEngineerId;
   if (p.projectCode !== undefined) row.project_code = p.projectCode;
   if (p.mondayPresalesItemId !== undefined) row.monday_presales_item_id = p.mondayPresalesItemId;
   if (p.mondayPostsalesItemId !== undefined) row.monday_postsales_item_id = p.mondayPostsalesItemId;
@@ -837,6 +839,12 @@ interface AppState {
   projectComments: ProjectComment[];
   commentsLoadedFor: Set<string>;
 
+  // Current user's project_members rows — set of project ids the logged-in
+  // user is on. Drives Dashboard "My Projects" + scoped pipeline counts.
+  // In demo mode this is filled with every seed project id so the feature
+  // demos cleanly.
+  myProjectIds: Set<string>;
+
   // Loading state
   isLoading: boolean;
   isInitialized: boolean;
@@ -848,6 +856,10 @@ interface AppState {
   addProject: (p: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => string;
   updateProject: (id: string, p: Partial<Project>) => void;
   deleteProject: (id: string) => void;
+  /** Insert a project_members row for the current user, then update
+   *  myProjectIds. Idempotent: no-op if already a member. Used by the
+   *  "Add me" action on the global Projects page. */
+  addSelfToProject: (projectId: string) => Promise<void>;
 
   // DTools sync
   syncDToolsBoM: (projectId: string) => Promise<void>;
@@ -1006,6 +1018,10 @@ export const useStore = create<AppState>((set, get) => ({
   projectComments: [],
   commentsLoadedFor: new Set<string>(),
 
+  // Demo mode: pretend the demo user is on every seed project. Supabase mode
+  // starts empty; fetchAllData populates it from project_members.
+  myProjectIds: DB ? new Set<string>() : new Set(seedProjects.map((p) => p.id)),
+
   isLoading: DB,      // start loading if Supabase is configured
   isInitialized: !DB, // already initialized in demo mode
 
@@ -1021,6 +1037,12 @@ export const useStore = create<AppState>((set, get) => ({
     // Prevent double-fetching
     if (get().isInitialized) return;
     set({ isLoading: true });
+
+    // Current user is needed before we can pull their project_members rows.
+    // Failure here is non-fatal — we proceed with an empty myProjectIds set
+    // so the rest of the app still hydrates.
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const currentUserId = authUser?.id ?? null;
 
     try {
       // Fetch all tables in parallel (with 10s timeout to prevent infinite spinner)
@@ -1056,6 +1078,11 @@ export const useStore = create<AppState>((set, get) => ({
         supabase.from('purchasing_items').select('*'),
         supabase.from('purchasing_freight').select('*'),
         supabase.from('purchasing_manufacturer_defaults').select('*'),
+        // Current user's project memberships — drives the Dashboard scope.
+        // Filtered server-side so we only pay for the rows we need.
+        currentUserId
+          ? supabase.from('project_members').select('project_id').eq('user_id', currentUserId)
+          : Promise.resolve({ data: [] as Array<{ project_id: string }>, error: null }),
       ]);
 
       const timeout = new Promise<never>((_, reject) =>
@@ -1087,10 +1114,11 @@ export const useStore = create<AppState>((set, get) => ({
         purchasingItemsRes,
         purchasingFreightRes,
         purchasingMfrDefaultsRes,
+        myMembershipsRes,
       ] = await Promise.race([fetchWithTimeout, timeout]);
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes, milestonesRes, changeOrdersRes, warehousesRes, purchasingModulesRes, purchasingModSubsRes, purchasingItemsRes, purchasingFreightRes, purchasingMfrDefaultsRes]) {
+      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes, milestonesRes, changeOrdersRes, warehousesRes, purchasingModulesRes, purchasingModSubsRes, purchasingItemsRes, purchasingFreightRes, purchasingMfrDefaultsRes, myMembershipsRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
@@ -1195,10 +1223,15 @@ export const useStore = create<AppState>((set, get) => ({
         quickStartRooms: roomsByCloseout.get(r.id) ?? [],
       }));
 
+      const myProjectIds = new Set<string>(
+        (myMembershipsRes.data ?? []).map((r: { project_id: string }) => r.project_id),
+      );
+
       set({
         projects, projectBoM, submittals, rfis, closeouts, manuals, reviewRuns,
         bidLevelingSessions, bidLevelingTemplates, milestones, changeOrders,
         warehouses, purchasingModules, purchasingItems, purchasingFreight, purchasingMfrDefaults,
+        myProjectIds,
         isLoading: false, isInitialized: true,
       });
     } catch (err) {
@@ -1214,7 +1247,13 @@ export const useStore = create<AppState>((set, get) => ({
     const id = genId();
     const today = now();
     const project: Project = { ...p, id, createdAt: today, updatedAt: today };
-    set((s) => ({ projects: [...s.projects, project] }));
+    // Creator is auto-added as a member (both in demo mode and via the DB
+    // insert below), so the new project shows up in their My Projects view
+    // without waiting for a refetch.
+    set((s) => ({
+      projects: [...s.projects, project],
+      myProjectIds: new Set(s.myProjectIds).add(id),
+    }));
 
     dbExec(async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -1231,6 +1270,36 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     return id;
+  },
+
+  addSelfToProject: async (projectId) => {
+    // Optimistic local update — the Set is immutable for React equality,
+    // so we clone before adding.
+    set((s) => {
+      if (s.myProjectIds.has(projectId)) return s;
+      const next = new Set(s.myProjectIds);
+      next.add(projectId);
+      return { myProjectIds: next };
+    });
+
+    if (!isSupabaseConfigured()) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id;
+    if (!userId) return;
+
+    const { error } = await supabase
+      .from('project_members')
+      .upsert({ project_id: projectId, user_id: userId }, { onConflict: 'project_id,user_id' });
+    if (error) {
+      console.error('[Supabase] addSelfToProject failed:', error);
+      // Roll back the optimistic update so the UI reflects reality.
+      set((s) => {
+        const next = new Set(s.myProjectIds);
+        next.delete(projectId);
+        return { myProjectIds: next };
+      });
+    }
   },
 
   updateProject: (id, p) => {
