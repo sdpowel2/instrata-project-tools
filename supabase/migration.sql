@@ -312,6 +312,12 @@ create policy "Members can view project membership"
 create policy "Project access users can manage members"
   on public.project_members for all using (public.is_project_member(project_id));
 
+-- Self-add: any authenticated user can insert their own membership row.
+-- Pairs with the open project visibility model — every user sees every
+-- project, and every user can opt into one without admin intervention.
+create policy "Users can add themselves to projects"
+  on public.project_members for insert with check (user_id = auth.uid());
+
 -- ---- project_bom_items ----
 create policy "Members can view bom items"
   on public.project_bom_items for select using (public.is_project_member(project_id));
