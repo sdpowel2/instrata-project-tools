@@ -44,12 +44,23 @@ create table public.project_bom_items (
   model          text not null default '',
   description    text not null default '',
   category       text not null default 'Other',
-  qty            int  not null default 0,
+  qty            numeric not null default 0,
   notes          text not null default '',
   cut_sheet_url  text,
   cut_sheet_name text,
   sort_order     int  not null default 0,
-  locations      jsonb not null default '[]'::jsonb
+  locations      jsonb not null default '[]'::jsonb,
+  item_type         text    not null default 'Product',
+  unit_cost         numeric not null default 0,
+  unit_price        numeric not null default 0,
+  labor_hours       numeric not null default 0,
+  labor_unit_cost   numeric not null default 0,
+  labor_unit_price  numeric not null default 0,
+  fixed_labor_cost  numeric not null default 0,
+  fixed_labor_price numeric not null default 0,
+  margin_pct        numeric not null default 0,
+  owner_furnished   boolean not null default false,
+  optional          boolean not null default false
 );
 
 -- 5. submittals
@@ -73,7 +84,7 @@ create table public.submittal_items (
   model          text not null default '',
   description    text not null default '',
   category       text not null default 'Other',
-  qty            int  not null default 0,
+  qty            numeric not null default 0,
   notes          text not null default '',
   cut_sheet_url  text,
   cut_sheet_name text,

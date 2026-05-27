@@ -12,7 +12,12 @@
       "Bash(git push:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(Common Area Sound: 0127 - Lobby\" renders as 3 collapsible levels\\):*)",
+      "Bash(pandoc \"Product Spec/BidLevelingGenerator_Phase1_Spec.docx\" -o /tmp/spec.md)",
+      "WebSearch",
+      "Bash(npx vite:*)",
+      "Bash(npm run:*)"
     ]
   }
 }
