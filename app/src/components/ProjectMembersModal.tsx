@@ -29,6 +29,8 @@ export function ProjectMembersModal({ open, onClose, projectId, projectName }: P
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [availableUsers, setAvailableUsers] = useState<AvailableUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [userFetchFailed, setUserFetchFailed] = useState(false);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -56,15 +58,19 @@ export function ProjectMembersModal({ open, onClose, projectId, projectName }: P
   }, [projectId]);
 
   const fetchAvailableUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    setUserFetchFailed(false);
     const { data, error } = await supabase
       .from('profiles')
       .select('id, email, full_name');
 
     if (error) {
       console.error('[ProjectMembers] Failed to fetch profiles:', error);
-      return;
+      setUserFetchFailed(true);
+    } else {
+      setAvailableUsers(data ?? []);
     }
-    setAvailableUsers(data ?? []);
+    setLoadingUsers(false);
   }, []);
 
   useEffect(() => {
@@ -134,19 +140,30 @@ export function ProjectMembersModal({ open, onClose, projectId, projectName }: P
           <select
             value={selectedUserId}
             onChange={(e) => setSelectedUserId(e.target.value)}
-            className="flex-1 text-sm border border-border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-navy/20 focus:border-navy"
+            disabled={loadingUsers || userFetchFailed || nonMembers.length === 0}
+            className="flex-1 min-w-0 text-sm border border-border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-navy/20 focus:border-navy disabled:bg-surface disabled:text-text-secondary disabled:cursor-not-allowed"
           >
-            <option value="">Select a user to add...</option>
-            {nonMembers.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.full_name || u.email} ({u.email})
-              </option>
-            ))}
+            {loadingUsers ? (
+              <option value="">Loading team members...</option>
+            ) : userFetchFailed ? (
+              <option value="">Failed to load users — try reopening</option>
+            ) : nonMembers.length === 0 ? (
+              <option value="">All users are already on this project</option>
+            ) : (
+              <>
+                <option value="">Select a user to add...</option>
+                {nonMembers.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name || u.email} ({u.email})
+                  </option>
+                ))}
+              </>
+            )}
           </select>
           <button
             onClick={handleAdd}
-            disabled={!selectedUserId || adding}
-            className="flex items-center gap-1.5 px-4 py-2 bg-navy text-white text-sm font-medium rounded-lg hover:bg-navy-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!selectedUserId || adding || loadingUsers}
+            className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 bg-navy text-white text-sm font-medium rounded-lg hover:bg-navy-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {adding ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
             Add

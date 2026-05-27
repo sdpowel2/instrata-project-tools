@@ -1,0 +1,185 @@
+/* ============================================================
+   Instrata Design System — Colors, Type & Semantic Tokens
+   Extracted from app/src/index.css (Tailwind v4 @theme block)
+   + Instrata brand logomark (Navy #22326E / Orange #F68D2E)
+   ============================================================ */
+
+/* Brand webfont — Gantari (variable, replaces Inter per brand upload) */
+@font-face {
+  font-family: 'Gantari';
+  src: url('fonts/Gantari-VariableFont_wght.ttf') format('truetype-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+/* JetBrains Mono remains via Google Fonts for mono usage */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ---------- Brand primaries ---------- */
+  --navy:         #22326E;   /* Primary brand. Sidebar, headings, primary btn */
+  --navy-light:   #2D4291;   /* Hover state for navy surfaces */
+  --navy-dark:    #1A2656;   /* Pressed / deep accents */
+
+  --orange:       #F68D2E;   /* Secondary brand. Active indicators, CTAs on navy */
+  --orange-light: #F8A45A;   /* Hover on orange */
+  --orange-dark:  #E07A1A;   /* Pressed on orange */
+
+  --blue:         #0072CE;   /* Info / links accent (secondary to navy) */
+  --blue-light:   #338FDB;
+  --yellow:       #FFCD00;   /* Warning / at-risk */
+
+  /* ---------- Neutrals / surfaces ---------- */
+  --surface:      #F5F6F8;   /* App bg behind cards */
+  --surface-2:    #FFFFFF;   /* Card / elevated surface */
+  --border:       #E2E4E9;   /* Hairline between rows / card edges */
+  --border-soft:  #EEF0F3;
+
+  /* ---------- Text ---------- */
+  --fg:           #1A1A2E;   /* Primary text — near-black navy-tint */
+  --fg-2:         #5A5A7A;   /* Secondary / metadata text */
+  --fg-3:         #8B8BA6;   /* Placeholder / disabled */
+  --fg-on-navy:   #FFFFFF;
+  --fg-on-orange: #FFFFFF;
+
+  /* ---------- Semantic status (from StatusBadge.tsx) ---------- */
+  --status-success-bg:   #DCFCE7;  /* green-100 */
+  --status-success-fg:   #15803D;  /* green-700 */
+  --status-info-bg:      #DBEAFE;  /* blue-100 */
+  --status-info-fg:      #1D4ED8;  /* blue-700 */
+  --status-warn-bg:      #FEF9C3;  /* yellow-100 */
+  --status-warn-fg:      #A16207;  /* yellow-700 */
+  --status-danger-bg:    #FEE2E2;  /* red-100 */
+  --status-danger-fg:    #B91C1C;  /* red-700 */
+  --status-neutral-bg:   #F3F4F6;  /* gray-100 */
+  --status-neutral-fg:   #4B5563;  /* gray-600 */
+  --status-accent-bg:    rgba(246, 141, 46, 0.10);  /* orange/10 */
+  --status-accent-fg:    #E07A1A;  /* orange-dark */
+
+  /* ---------- Typography ---------- */
+  --font-sans: 'Gantari', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Type scale (px; Tailwind-aligned) */
+  --fs-xs:   12px;   /* labels, meta, table headers (uppercase) */
+  --fs-sm:   14px;   /* body default — forms, rows, nav */
+  --fs-base: 16px;
+  --fs-lg:   18px;   /* section headings inside cards */
+  --fs-xl:   20px;   /* modal titles */
+  --fs-2xl:  24px;   /* page H1 */
+  --fs-3xl:  30px;   /* stat numbers */
+
+  /* Line heights */
+  --lh-tight: 1.2;
+  --lh-snug:  1.35;
+  --lh-base:  1.5;
+
+  /* Weights actually used */
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* ---------- Spacing scale (Tailwind 4-unit grid) ---------- */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+
+  /* ---------- Radii ---------- */
+  --radius-sm: 6px;   /* rounded-md on pills/buttons */
+  --radius:    8px;   /* rounded-lg — buttons, inputs, nav items */
+  --radius-lg: 12px;  /* rounded-xl — cards, modals */
+  --radius-pill: 9999px;
+
+  /* ---------- Elevation ---------- */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow:    0 1px 3px 0 rgba(0, 0, 0, 0.07), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.10), 0 4px 6px -4px rgba(0, 0, 0, 0.08);
+  --shadow-2xl:0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+  /* Focus ring (brand-specific: orange halo on navy press states) */
+  --focus-ring-navy:   0 0 0 3px rgba(34, 50, 110, 0.10);
+  --focus-ring-orange: 0 0 0 3px rgba(246, 141, 46, 0.30);
+}
+
+/* ============================================================
+   Semantic element styles — drop-in defaults
+   ============================================================ */
+
+html, body {
+  font-family: var(--font-sans);
+  color: var(--fg);
+  background: var(--surface);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, .h1 {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  color: var(--navy);
+  letter-spacing: -0.01em;
+}
+h2, .h2 {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+  color: var(--navy);
+}
+h3, .h3 {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+  color: var(--fg);
+}
+
+p {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  color: var(--fg);
+}
+
+.meta {
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+}
+
+.eyebrow {
+  /* All-caps orange accent used above section heads and in sidebar */
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--orange);
+}
+
+code, .mono, .project-number {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+}
+
+/* Table column header — used on dark navy table heads */
+.th-caps {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+a {
+  color: var(--blue);
+  text-decoration: none;
+  font-weight: var(--fw-medium);
+}
+a:hover { text-decoration: underline; }
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}

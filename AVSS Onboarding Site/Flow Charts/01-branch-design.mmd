@@ -1,0 +1,37 @@
+%% Instrata Pre-Sales Flow — Branch 1: Design
+%% Labor-only design package. Standalone pre-sales cycle.
+%% Downstream rollover into Design-Build or Bid is a separate project record.
+
+flowchart TD
+    P1[Phase 1: Intake & Qualification<br/>Type set to: Design]
+
+    P1 --> P2[Phase 2: Discovery]
+    P2 --> M2_1[Discovery Call]
+    M2_1 --> M2_2[Scope Draft Assembled]
+    M2_2 --> D1[/D1: Scope Draft/]
+
+    D1 --> P3[Phase 3: Pricing & Proposal]
+    P3 --> M3_1[Proposal Document Assembled]
+    M3_1 --> M3_2[Engineering Review - Internal AVSS]
+    M3_2 --> D2[/D2: Final Proposal/]
+
+    D2 --> P4[Phase 4: Submission & Negotiation]
+    P4 --> M4_1[Delivered to Client]
+    M4_1 --> M4_2[Client Scope Review]
+    M4_2 --> M4_3[Revisions]
+    M4_3 --> M4_4[Proposal Accepted - Confirmed to Win]
+
+    M4_4 --> P5[Phase 5: Award & Handoff]
+    P5 --> M5_1[Contract/PO Received]
+    M5_1 --> M5_2[Transition to Design-Build or Bid Flow]
+    M5_2 --> End([End of Design Flow])
+
+    classDef phase fill:#1e3a5f,stroke:#0f1e30,color:#fff
+    classDef milestone fill:#e8eef5,stroke:#1e3a5f,color:#1e3a5f
+    classDef deliverable fill:#fff4e6,stroke:#d97706,color:#7c2d12
+    classDef terminal fill:#dcfce7,stroke:#16a34a,color:#14532d
+
+    class P1,P2,P3,P4,P5 phase
+    class M2_1,M2_2,M3_1,M3_2,M4_1,M4_2,M4_3,M4_4,M5_1,M5_2 milestone
+    class D1,D2 deliverable
+    class End terminal

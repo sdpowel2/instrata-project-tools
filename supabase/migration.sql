@@ -187,6 +187,21 @@ create table public.owner_manuals (
 
 -- ======================== FUNCTIONS (after tables exist) ========================
 
+-- Check: is current user an org-level admin?
+-- Must be SECURITY DEFINER so the subquery on profiles bypasses RLS
+-- (inline EXISTS inside a profiles policy causes infinite recursion otherwise).
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and role = 'admin'
+  );
+$$;
+
 -- Reusable check: is current user an admin, the project creator, or a member?
 create or replace function public.is_project_member(_project_id uuid)
 returns boolean
@@ -267,21 +282,17 @@ create policy "Users can view their own profile"
   on public.profiles for select using (id = auth.uid());
 
 create policy "Admins can view all profiles"
-  on public.profiles for select using (
-    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
-  );
+  on public.profiles for select using (public.is_admin());
 
 create policy "Users can update their own profile"
   on public.profiles for update using (id = auth.uid());
 
 create policy "Admins full access to profiles"
-  on public.profiles for all using (
-    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
-  );
+  on public.profiles for all using (public.is_admin());
 
 -- ---- projects ----
-create policy "Members can view their projects"
-  on public.projects for select using (public.is_project_member(id));
+create policy "Authenticated users can view all projects"
+  on public.projects for select using (auth.uid() is not null);
 
 create policy "Authenticated users can create projects"
   on public.projects for insert with check (auth.uid() is not null);

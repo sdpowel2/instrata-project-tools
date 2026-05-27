@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.anthropic.com)",
+      "Skill(anthropic-skills:docx)",
+      "Skill(anthropic-skills:docx:*)",
+      "Read(//c/Users/Seth.Powell/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/dd2d7cb7-128f-4e42-ad9b-853f71234e8a/3af54654-4bf3-4f06-97e3-091916b45a43/skills/docx/**)",
+      "Bash(extract-text \"C:\\\\Users\\\\Seth.Powell\\\\OneDrive - Kane Holdings\\\\Seth.Powell\\\\Desktop\\\\26.04.07AVSS Purchasing Process.docx-Updated 4-7-26.docx\")",
+      "Bash(pandoc \"C:\\\\Users\\\\Seth.Powell\\\\OneDrive - Kane Holdings\\\\Seth.Powell\\\\Desktop\\\\26.04.07AVSS Purchasing Process.docx-Updated 4-7-26.docx\" -t markdown)",
+      "PowerShell(pandoc \"C:\\\\Users\\\\Seth.Powell\\\\OneDrive - Kane Holdings\\\\Seth.Powell\\\\Desktop\\\\26.04.07AVSS Purchasing Process.docx-Updated 4-7-26.docx\" -t plain)"
+    ]
+  }
+}

@@ -1,0 +1,2825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>AVSS Process — Instrata</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="assets/favicon.svg" />
+<link rel="stylesheet" href="assets/colors_and_type.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--surface); color: var(--fg); }
+
+  a { cursor: pointer; }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--navy);
+    color: #fff;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .topbar-inner {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 14px 32px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .brand img { height: 22px; display: block; }
+  .brand-divider {
+    width: 1px; height: 22px;
+    background: rgba(255,255,255,0.18);
+  }
+  .brand-label {
+    font-size: 13px; color: rgba(255,255,255,0.75);
+    letter-spacing: 0.02em;
+  }
+  .topbar .crumbs {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.6);
+  }
+  .topbar .crumbs .sep { color: rgba(255,255,255,0.3); }
+  .topbar .crumbs .here { color: #fff; font-weight: var(--fw-medium); }
+  .topbar .crumbs a { color: rgba(255,255,255,0.7); }
+  .topbar .crumbs a:hover { color: var(--orange); text-decoration: none; }
+
+  /* ---------- Page wrap ---------- */
+  .wrap {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 32px;
+  }
+
+  /* ---------- Hero header for home ---------- */
+  .home-hero,
+  .landing-hero,
+  .flow-hero {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 32px;
+    align-items: end;
+    padding-bottom: 24px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .landing-hero { grid-template-columns: 1fr; max-width: 820px; }
+  .home-hero h1,
+  .landing-hero h1,
+  .flow-hero h1 {
+    font-size: 32px;
+    margin: 8px 0 8px 0;
+    letter-spacing: -0.015em;
+    color: var(--navy);
+  }
+  .landing-hero h1 { font-size: 40px; }
+  .home-hero p.lead,
+  .landing-hero p.lead,
+  .flow-hero p.lead {
+    color: var(--fg-2);
+    font-size: 15px;
+    line-height: 1.55;
+    max-width: 720px;
+    margin: 0;
+  }
+  .landing-hero p.lead { font-size: 16px; }
+
+  /* ---------- Landing: Pre / Post choice ---------- */
+  .choose {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+  @media (max-width: 720px) { .choose { grid-template-columns: 1fr; } }
+
+  .choose-card {
+    position: relative;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    box-shadow: var(--shadow-sm);
+    text-decoration: none;
+    color: var(--fg);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 280px;
+    transition: border-color 150ms, box-shadow 150ms, transform 150ms;
+  }
+  .choose-card:hover {
+    border-color: var(--navy);
+    box-shadow: 0 14px 40px -22px rgba(34,50,110,0.45), var(--shadow-sm);
+    text-decoration: none;
+  }
+  .choose-card.pre        { border-top: 3px solid var(--orange); }
+  .choose-card.post       { border-top: 3px solid var(--navy); }
+  .choose-card.purchasing { border-top: 3px solid #7B2D8B; }
+  .choose-card.org        { border-top: 3px solid var(--blue); }
+
+  .choose-card .cc-deco {
+    position: absolute;
+    right: -40px; top: -40px;
+    width: 200px; height: 200px;
+    background: url('assets/logo-logomark.png') center/contain no-repeat;
+    opacity: 0.05;
+    pointer-events: none;
+  }
+  .cc-eyebrow {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .cc-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .cc-badge.sales { background: rgba(246,141,46,0.12); color: var(--orange-dark); }
+  .cc-badge.avss  { background: rgba(34,50,110,0.10); color: var(--navy); }
+  .cc-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .choose-card h2 {
+    margin: 4px 0 0 0;
+    font-size: 30px;
+    letter-spacing: -0.015em;
+    color: var(--navy);
+  }
+  .choose-card p {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--fg-2);
+    max-width: 46ch;
+  }
+  .cc-foot {
+    margin-top: auto;
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .cc-go {
+    font-size: 13px; font-weight: 600;
+    color: var(--navy);
+  }
+  .cc-arrow {
+    font-size: 18px;
+    color: var(--orange);
+    transition: transform 150ms;
+  }
+  .choose-card:hover .cc-arrow { transform: translateX(4px); }
+
+  .legend-row {
+    display: flex; justify-content: flex-start;
+  }
+  .key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 12px 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .key-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--fg-2);
+    padding-right: 4px;
+  }
+  .key-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); }
+  .key-dot {
+    width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+  }
+  .key-dot.sales      { background: var(--orange); }
+  .key-dot.avss       { background: var(--navy); }
+  .key-dot.ops        { background: var(--blue); }
+  .key-dot.purchasing { background: #7B2D8B; }
+
+  /* ---------- Flow chart ---------- */
+  .phases {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 28px;
+    align-items: stretch;
+  }
+
+  .phase {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 22px;
+    box-shadow: var(--shadow-sm);
+    position: relative;
+  }
+  .phase-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .phase-head .eyebrow { font-size: 10px; }
+  .phase-head h2 { margin: 0; font-size: 22px; letter-spacing: -0.01em; color: var(--navy); }
+  .phase-head .count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+
+  /* Pre-sales: single column. Post-sales: 2 column inside the card. */
+  .col      { display: flex; flex-direction: column; gap: 0; }
+  .grid-2   { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+  @media (max-width: 720px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Step nodes ---------- */
+  .node {
+    position: relative;
+    padding: 12px 14px 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: #fff;
+    text-decoration: none;
+    color: var(--fg);
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+    transition: border-color 150ms, background 150ms, box-shadow 150ms;
+  }
+  .node + .arrow { /* spacer */ }
+
+  /* Connector arrow between stacked nodes */
+  .arrow {
+    width: 1px;
+    margin: 0 auto;
+    height: 22px;
+    background: var(--border);
+    position: relative;
+  }
+  .arrow::after {
+    content: "";
+    position: absolute;
+    bottom: -2px; left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--border);
+  }
+
+  /* Branch under Engineering Qualification */
+  .branch {
+    margin: 6px 0 6px 0;
+    padding: 10px 12px 10px 30px;
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    border-left: 2px dashed #d1d4db;
+    margin-left: 28px;
+  }
+  .branch-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--fg-2);
+    font-weight: 600;
+  }
+  .nobid {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--fg-2);
+    align-self: flex-start;
+    width: fit-content;
+  }
+  .nobid::before {
+    content: "";
+    width: 8px; height: 8px; border-radius: 999px;
+    background: var(--fg-3);
+  }
+
+  .node:hover {
+    border-color: var(--navy);
+    box-shadow: 0 4px 14px -8px rgba(34,50,110,0.45), var(--shadow-sm);
+    background: #fdfdfd;
+  }
+  .node-num {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    min-width: 32px;
+    letter-spacing: 0.04em;
+  }
+  .node-body { min-width: 0; }
+  .node-title {
+    font-size: 14px;
+    font-weight: var(--fw-semibold);
+    color: var(--navy);
+    line-height: 1.25;
+  }
+  .node-owner {
+    margin-top: 3px;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .owner-dot {
+    width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+  }
+  .owner-dot.sales      { background: var(--orange); }
+  .owner-dot.avss       { background: var(--navy); }
+  .owner-dot.ops        { background: var(--blue); }
+  .owner-dot.purchasing { background: #7B2D8B; }
+  .node-chevron {
+    color: var(--fg-3);
+    font-size: 16px;
+    transition: color 150ms, transform 150ms;
+  }
+  .node:hover .node-chevron { color: var(--orange); transform: translateX(2px); }
+
+  /* Phase header tint for post-sales gets a navy left rail */
+  .phase.post .phase-head h2 { color: var(--navy); }
+  .phase.pre  { border-top: 3px solid var(--orange); }
+  .phase.post { border-top: 3px solid var(--navy); }
+
+  /* Bridge between pre-sales and post-sales */
+  .bridge {
+    margin: 16px 0 4px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: rgba(34,50,110,0.05);
+    border: 1px dashed rgba(34,50,110,0.25);
+    display: flex; gap: 10px; align-items: center;
+    font-size: 12px;
+    color: var(--navy);
+  }
+  .bridge::before {
+    content: "BID";
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: var(--orange);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 999px;
+    letter-spacing: 0.08em;
+  }
+
+  /* Subgroup label inside post-sales (small uppercase) */
+  .subgroup {
+    grid-column: 1 / -1;
+    margin: 14px 0 6px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--orange);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .subgroup::after {
+    content: "";
+    flex: 1; height: 1px; background: var(--border);
+  }
+
+  /* ---------- Detail page ---------- */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 32px;
+    align-items: start;
+  }
+  @media (max-width: 1000px) {
+    .detail-grid { grid-template-columns: 1fr; }
+  }
+  .video-card {
+    position: sticky;
+    top: 76px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .video-frame {
+    aspect-ratio: 16 / 9;
+    background: #0f1530;
+    color: #fff;
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .video-frame::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(800px 300px at 50% 0%, rgba(34,50,110,0.55), transparent 60%),
+      linear-gradient(180deg, #1a2656 0%, #0a1130 100%);
+  }
+  .play-btn {
+    position: relative;
+    width: 64px; height: 64px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.30);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    backdrop-filter: blur(2px);
+    transition: background 150ms, transform 150ms;
+  }
+  .play-btn:hover { background: rgba(246,141,46,0.85); border-color: var(--orange); }
+  .play-btn::after {
+    content: "";
+    border-style: solid;
+    border-width: 10px 0 10px 16px;
+    border-color: transparent transparent transparent #fff;
+    margin-left: 4px;
+  }
+  .video-meta {
+    position: absolute;
+    inset: auto 14px 14px 14px;
+    display: flex; gap: 8px; align-items: center; justify-content: space-between;
+    color: rgba(255,255,255,0.85);
+    font-size: 11px;
+  }
+  .video-meta .pill {
+    background: rgba(255,255,255,0.14);
+    border: 1px solid rgba(255,255,255,0.18);
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+  .video-empty {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .video-empty .label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--orange);
+    margin-bottom: 4px;
+  }
+  .video-empty .body {
+    font-size: 12px; color: var(--fg-2); line-height: 1.5;
+  }
+  .video-controls {
+    padding: 10px 14px;
+    display: flex; gap: 10px; align-items: center;
+    color: var(--fg-2);
+    font-size: 12px;
+  }
+  .vc-bar {
+    flex: 1; height: 4px;
+    background: var(--border);
+    border-radius: 999px;
+    position: relative;
+  }
+  .vc-bar::after {
+    content: "";
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 18%;
+    background: var(--orange);
+    border-radius: 999px;
+  }
+
+  /* Step header */
+  .step-head {
+    display: flex; flex-direction: column; gap: 6px;
+    padding-bottom: 18px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .step-head .top {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--fg-2);
+    font-size: 12px;
+  }
+  .step-head .top .num {
+    font-family: var(--font-mono);
+    color: var(--orange);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .step-head .top .sec-tag {
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: var(--fg-2); font-weight: 600;
+  }
+  .step-head h1 {
+    font-size: 30px;
+    margin: 4px 0 8px 0;
+    letter-spacing: -0.015em;
+    color: var(--navy);
+  }
+  .badges {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border);
+    background: #fff;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--fg);
+  }
+  .badge.owner-sales      { background: rgba(246,141,46,0.10); border-color: rgba(246,141,46,0.35); color: var(--orange-dark); }
+  .badge.owner-avss       { background: rgba(34,50,110,0.08); border-color: rgba(34,50,110,0.25); color: var(--navy); }
+  .badge.owner-ops        { background: rgba(0,114,206,0.08); border-color: rgba(0,114,206,0.25); color: var(--blue); }
+  .badge.owner-purchasing { background: rgba(123,45,139,0.08); border-color: rgba(123,45,139,0.25); color: #7B2D8B; }
+
+  .action {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    margin-bottom: 24px;
+    display: flex; gap: 14px; align-items: flex-start;
+    box-shadow: var(--shadow-sm);
+  }
+  .action .icon {
+    flex: 0 0 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: rgba(246,141,46,0.10);
+    color: var(--orange-dark);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700;
+  }
+  .action .label {
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--orange-dark); font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .action .text { font-size: 14px; line-height: 1.5; color: var(--fg); }
+
+  .section-block { margin-bottom: 24px; }
+  .section-block h2 {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.15em;
+    color: var(--fg-2); text-transform: uppercase; margin: 0 0 10px;
+  }
+
+  .summary {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    line-height: 1.6;
+    font-size: 15px;
+    color: var(--fg);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .detail-list {
+    display: flex; flex-direction: column;
+    gap: 0;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+  }
+  .detail-item { padding: 16px 20px; border-top: 1px solid var(--border); }
+  .detail-item:first-child { border-top: 0; }
+  .detail-item .dlabel {
+    font-size: 12px; font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 4px;
+  }
+  .detail-item .dbody {
+    font-size: 14px; line-height: 1.6; color: var(--fg);
+  }
+
+  .notes-list {
+    border: 1px solid rgba(246,141,46,0.30);
+    background: rgba(246,141,46,0.05);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .notes-list .note {
+    padding: 14px 18px;
+    border-top: 1px solid rgba(246,141,46,0.20);
+    font-size: 13.5px; line-height: 1.6; color: var(--fg);
+  }
+  .notes-list .note:first-child { border-top: 0; }
+
+  /* Footer step nav (prev/next) */
+  .stepnav {
+    margin-top: 32px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 600px) { .stepnav { grid-template-columns: 1fr; } }
+  .stepnav a {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px 18px;
+    text-decoration: none;
+    color: var(--fg);
+    display: flex; flex-direction: column; gap: 4px;
+    transition: border-color 150ms, box-shadow 150ms, background 150ms;
+  }
+  .stepnav a:hover {
+    border-color: var(--navy);
+    box-shadow: var(--shadow-sm);
+    text-decoration: none;
+  }
+  .stepnav .label {
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--fg-2); font-weight: 700;
+  }
+  .stepnav .ttl { font-size: 14px; font-weight: 600; color: var(--navy); }
+  .stepnav .next { text-align: right; }
+
+  /* Back button */
+  .back-row {
+    margin-bottom: 18px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .back-link {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--navy); font-weight: 500;
+    text-decoration: none;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    transition: background 150ms;
+  }
+  .back-link:hover { background: rgba(34,50,110,0.06); text-decoration: none; }
+  .back-link::before {
+    content: "←";
+    color: var(--orange);
+    font-weight: 600;
+  }
+
+  /* Lateral background dot */
+  .phase { overflow: hidden; }
+  .deco-mark {
+    position: absolute;
+    right: -40px; top: -40px;
+    width: 200px; height: 200px;
+    background: url('assets/logo-logomark.png') center/contain no-repeat;
+    opacity: 0.05;
+    pointer-events: none;
+  }
+
+  /* ---------- Flow split (chart + slide-out detail) ---------- */
+  .flow-split {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+    align-items: start;
+    transition: grid-template-columns 250ms ease;
+  }
+  .flow-split.has-detail {
+    grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+  }
+  .flow-chart-col { min-width: 0; }
+  .flow-split.has-detail .phase { padding: 18px 16px; }
+  .flow-split.has-detail .phase-head h2 { font-size: 18px; }
+  .flow-split.has-detail .phase-head .count { font-size: 10px; }
+  .flow-split.has-detail .node {
+    grid-template-columns: auto 1fr;
+    padding: 10px 12px;
+    gap: 10px;
+  }
+  .flow-split.has-detail .node-chevron { display: none; }
+  .flow-split.has-detail .node-title { font-size: 13px; }
+  .flow-split.has-detail .node-owner { display: none; }
+  .flow-split.has-detail .bridge { font-size: 11px; padding: 8px 10px; }
+  .flow-split.has-detail .subgroup { font-size: 9px; }
+
+  .node.active {
+    border-color: var(--orange);
+    background: rgba(246,141,46,0.06);
+    box-shadow: 0 0 0 1px var(--orange) inset, 0 4px 14px -8px rgba(246,141,46,0.5);
+  }
+  .node.active .node-title { color: var(--navy); }
+
+  .detail-panel {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 24px 60px -30px rgba(34,50,110,0.45), var(--shadow-sm);
+    overflow: hidden;
+    position: sticky;
+    top: 76px;
+    max-height: calc(100vh - 96px);
+    display: flex;
+    flex-direction: column;
+    animation: slideInRight 250ms ease;
+  }
+  @keyframes slideInRight {
+    from { transform: translateX(20px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .panel-close {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 500;
+    color: var(--navy);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 12px 6px 10px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 150ms, border-color 150ms;
+  }
+  .panel-close:hover { background: var(--surface); border-color: var(--navy); text-decoration: none; }
+  .panel-close::before { content: "←"; color: var(--orange); font-weight: 600; }
+  .panel-trail {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--fg-2);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-trail .num {
+    font-family: var(--font-mono);
+    color: var(--orange);
+    font-weight: 600;
+  }
+  .panel-body {
+    padding: 24px 28px 28px;
+    overflow-y: auto;
+    flex: 1 1 auto;
+  }
+  .panel-body .step-head { margin-bottom: 20px; padding-bottom: 14px; }
+  .panel-body .step-head h1 { font-size: 26px; }
+  .panel-body .panel-video {
+    position: static;
+    margin: 0 auto 22px;
+    width: 100%;
+    max-width: 440px;
+  }
+  .panel-body .panel-video .video-frame { aspect-ratio: 16 / 9; }
+  .panel-body .panel-video .play-btn { width: 52px; height: 52px; }
+
+  /* When detail open, compress the hero above */
+  #flow.has-detail-open .flow-hero {
+    padding-bottom: 14px;
+    margin-bottom: 16px;
+  }
+  #flow.has-detail-open .flow-hero h1 { font-size: 22px; margin: 4px 0; }
+  #flow.has-detail-open .flow-hero p.lead { display: none; }
+  #flow.has-detail-open .flow-hero .key { display: none; }
+
+  /* Hide the home view by default if we're on detail */
+  .hidden { display: none; }
+
+  /* ---------- Mode toggle (User / Manager) ---------- */
+  .mode-toggle {
+    margin-left: 12px;
+    display: inline-flex;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.20);
+    border-radius: 999px;
+    padding: 3px;
+    flex-shrink: 0;
+  }
+  .mode-toggle button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: rgba(255,255,255,0.7);
+    padding: 5px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: background 150ms, color 150ms;
+  }
+  .mode-toggle button:hover { color: #fff; }
+  .mode-toggle button.active {
+    background: var(--orange);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+
+  /* ---------- Editable section UI (manager mode) ---------- */
+  .action.editable .action-content {
+    flex: 1;
+    min-width: 0;
+  }
+  .section-block-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .section-block-head h2 { margin: 0; }
+  .edit-btn {
+    appearance: none;
+    background: #fff;
+    border: 1px solid var(--border);
+    color: var(--navy);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 150ms, border-color 150ms;
+  }
+  .edit-btn:hover {
+    background: rgba(34,50,110,0.06);
+    border-color: var(--navy);
+  }
+  .section-edit-btn { margin-left: auto; }
+  .action.editable > .edit-btn {
+    align-self: flex-start;
+    flex-shrink: 0;
+  }
+  .editing {
+    background: rgba(246,141,46,0.04);
+    border-color: rgba(246,141,46,0.4) !important;
+    outline: 1px dashed rgba(246,141,46,0.5);
+    outline-offset: -1px;
+  }
+  .editing h2 {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.15em;
+    color: var(--fg-2); text-transform: uppercase; margin: 0 0 10px;
+  }
+  .edit-input {
+    width: 100%;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--fg);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .edit-input:focus {
+    outline: 0;
+    border-color: var(--orange);
+    box-shadow: var(--focus-ring-orange);
+  }
+  .edit-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .btn-save, .btn-cancel, .btn-add-row {
+    appearance: none;
+    border: 1px solid var(--border);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 150ms, border-color 150ms, color 150ms;
+  }
+  .btn-save {
+    background: var(--orange);
+    color: #fff;
+    border-color: var(--orange);
+  }
+  .btn-save:hover {
+    background: var(--orange-dark);
+    border-color: var(--orange-dark);
+  }
+  .btn-cancel {
+    background: #fff;
+    color: var(--fg-2);
+  }
+  .btn-cancel:hover {
+    background: var(--surface);
+    color: var(--navy);
+    border-color: var(--navy);
+  }
+  .btn-add-row {
+    background: #fff;
+    color: var(--navy);
+    margin-top: 10px;
+  }
+  .btn-add-row:hover {
+    background: rgba(34,50,110,0.06);
+    border-color: var(--navy);
+  }
+  .edit-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .edit-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "label remove"
+      "body  remove";
+    gap: 6px 8px;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .edit-row.note-row {
+    grid-template-areas: "body remove";
+  }
+  .edit-row .edit-label { grid-area: label; font-size: 13px; padding: 6px 8px; }
+  .edit-row .edit-body  { grid-area: body; }
+  .btn-remove {
+    grid-area: remove;
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-2);
+    font-size: 16px;
+    font-weight: 600;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    cursor: pointer;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 150ms, color 150ms, border-color 150ms;
+  }
+  .btn-remove:hover {
+    background: rgba(185,28,28,0.08);
+    color: #b91c1c;
+    border-color: rgba(185,28,28,0.4);
+  }
+  .empty-state {
+    background: #fff;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    font-size: 13px;
+    color: var(--fg-3);
+    text-align: center;
+    font-style: italic;
+  }
+  /* Hide all edit affordances in user mode */
+  body[data-mode="user"] .edit-btn,
+  body[data-mode="user"] .section-edit-btn { display: none; }
+
+  /* ---------- Deliverable nodes (pre-sales) ---------- */
+  /* Milestones use the standard .node treatment. Deliverables get an orange
+     left rail + a small "DELIVERABLE" pill in the meta row. */
+  .node.deliverable {
+    border-left: 3px solid var(--orange);
+    padding-left: 13px;
+  }
+  .node-kind-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--orange-dark);
+    background: rgba(246,141,46,0.10);
+    border: 1px solid rgba(246,141,46,0.30);
+    padding: 2px 7px;
+    border-radius: 999px;
+    margin-right: 8px;
+  }
+  /* In compressed (split) view, hide the pill — the orange rail still carries the cue. */
+  .flow-split.has-detail .node-kind-pill { display: none; }
+
+  /* ---------- Phase subgroup with explicit number (pre-sales branch flows) ---------- */
+  /* The existing .subgroup style works as-is; we just compose the label as
+     "Phase N · <title>" at render time. No new selectors needed. */
+
+  /* ---------- Branch cards (pre-sales overview) ---------- */
+  .branch-cards-section {
+    margin-top: 28px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .branch-cards-head {
+    margin-bottom: 14px;
+  }
+  .branch-cards-head h2 {
+    font-size: 16px;
+    margin: 0 0 4px;
+    color: var(--navy);
+  }
+  .branch-cards-head p {
+    margin: 0;
+    color: var(--fg-2);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .branch-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  @media (max-width: 1024px) { .branch-cards { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px)  { .branch-cards { grid-template-columns: 1fr; } }
+  .branch-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--orange);
+    border-radius: var(--radius-lg);
+    padding: 18px;
+    text-decoration: none;
+    color: var(--fg);
+    box-shadow: var(--shadow-sm);
+    transition: border-color 150ms, box-shadow 150ms, transform 150ms;
+  }
+  .branch-card:hover {
+    border-color: var(--navy);
+    border-top-color: var(--orange);
+    box-shadow: 0 10px 28px -16px rgba(34,50,110,0.45), var(--shadow-sm);
+    text-decoration: none;
+  }
+  .branch-card h3 {
+    margin: 0;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+    color: var(--navy);
+  }
+  .branch-card p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg-2);
+    flex: 1;
+  }
+  .branch-card .bc-foot {
+    margin-top: auto;
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-soft);
+    font-size: 12px;
+  }
+  .branch-card .bc-foot .count {
+    font-family: var(--font-mono);
+    color: var(--fg-2);
+  }
+  .branch-card .bc-foot .go {
+    color: var(--navy);
+    font-weight: 600;
+  }
+  .branch-card .bc-foot .arrow {
+    color: var(--orange);
+    font-size: 14px;
+    margin-left: 4px;
+    transition: transform 150ms;
+    background: transparent;
+    width: auto;
+    height: auto;
+    position: static;
+  }
+  .branch-card:hover .bc-foot .arrow { transform: translateX(3px); }
+  /* Hide branch cards when a step detail panel is open over the overview. */
+  .flow-split.has-detail .branch-cards-section { display: none; }
+
+  /* ---------- Terminal bridge variants (Design / Budget end of branch) ---------- */
+  /* The existing .bridge with orange "BID" pill stays the post-sales-bound default. */
+  .bridge.terminal-rollover {
+    background: rgba(0,114,206,0.05);
+    border-color: rgba(0,114,206,0.30);
+    color: var(--blue);
+  }
+  .bridge.terminal-rollover::before {
+    content: "END";
+    background: var(--blue);
+  }
+
+  /* ───────────────────────── Header nav link ───────────────────────── */
+  .topnav-link {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.72);
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    white-space: nowrap;
+    transition: color 150ms, background 150ms;
+  }
+  .topnav-link:hover { color: #fff; background: rgba(255,255,255,0.10); text-decoration: none; }
+  .topnav-link.is-active { color: #fff; background: rgba(255,255,255,0.14); }
+
+  /* ───────────────────────── Org chart view ────────────────────────── */
+  .org-hero {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 32px;
+    margin-bottom: 28px;
+  }
+  .org-hero h1 { margin: 6px 0 10px; font-size: 34px; letter-spacing: -0.02em; color: var(--navy); }
+  .org-hero .lead { margin: 0; font-size: 15px; line-height: 1.6; color: var(--fg-2); max-width: 64ch; }
+  .org-hero .eyebrow { color: var(--orange); font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+
+  .org-toolbar { display: none; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+  body[data-mode="manager"] .org-toolbar { display: flex; }
+  .org-mgr-hint { font-size: 11px; font-family: var(--font-mono); color: var(--fg-3); }
+  .org-reset-btn {
+    font-size: 12px; font-weight: 600; color: var(--fg-2);
+    background: #fff; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 7px 14px; cursor: pointer;
+    transition: border-color 150ms, color 150ms;
+  }
+  .org-reset-btn:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* Manager-only controls — hidden entirely in User mode */
+  .org-mgr { display: none; }
+  body[data-mode="manager"] .org-mgr { display: inline-flex; }
+  body[data-mode="manager"] .org-mgr.block { display: flex; }
+
+  /* Leadership header */
+  .org-leadership {
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 26px 20px 30px;
+    background: linear-gradient(180deg, rgba(34,50,110,0.045), rgba(34,50,110,0));
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin-bottom: 30px;
+  }
+  .org-lead-row { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; }
+  .org-lead-card {
+    background: #fff; border: 1px solid var(--border); border-top: 3px solid var(--navy);
+    border-radius: var(--radius); padding: 14px 22px; min-width: 220px; text-align: center;
+    box-shadow: var(--shadow-sm);
+  }
+  .org-lead-card.is-top { border-top-color: var(--orange); }
+  .org-lead-card .n { font-size: 16px; font-weight: 700; color: var(--navy); }
+  .org-lead-card .t { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+  .org-lead-card .l { font-size: 11px; font-family: var(--font-mono); color: var(--fg-3); margin-top: 3px; }
+  .org-lead-divider {
+    width: 1px; height: 18px; background: var(--border);
+  }
+
+  /* Division column band */
+  .org-col { margin-bottom: 34px; }
+  .org-col-head {
+    display: flex; align-items: baseline; gap: 12px;
+    padding-bottom: 10px; margin-bottom: 18px;
+    border-bottom: 2px solid var(--navy);
+  }
+  .org-col-title { font-size: 20px; font-weight: 700; color: var(--navy); letter-spacing: -0.01em; }
+  .org-col-lead { font-size: 12px; font-family: var(--font-mono); color: var(--fg-2); }
+  .org-col-lead b { color: var(--fg); font-weight: 600; }
+
+  .org-buckets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 18px;
+    align-items: start;
+  }
+
+  /* Bucket card */
+  .org-bucket {
+    --ac: var(--navy);
+    background: #fff; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  .org-bucket.ac-eng { --ac: var(--orange); }
+  .org-bucket.ac-se  { --ac: #C0392B; }
+  .org-bucket.ac-ne  { --ac: #1E8449; }
+  .org-bucket.ac-ma  { --ac: #5A5A7A; }
+  .org-bucket.ac-sw  { --ac: var(--blue); }
+  .org-bucket-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 12px 16px; border-left: 4px solid var(--ac);
+    background: color-mix(in srgb, var(--ac) 6%, #fff);
+    border-bottom: 1px solid var(--border);
+  }
+  .org-bucket-title { font-size: 15px; font-weight: 700; color: var(--navy); }
+  .org-bucket-title .ct { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); font-weight: 500; margin-left: 6px; }
+  .org-bucket-body { padding: 6px 14px 14px; }
+
+  .org-section { margin-top: 10px; }
+  .org-section:first-child { margin-top: 4px; }
+  .org-section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin: 8px 0 6px;
+  }
+  .org-section-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-2);
+  }
+  .org-people { display: flex; flex-direction: column; gap: 6px; }
+
+  .org-person {
+    position: relative;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    background: var(--surface-2);
+  }
+  .org-person:hover { border-color: var(--border); }
+  .org-person.is-tbd { border-style: dashed; background: rgba(246,141,46,0.05); }
+  .op-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+  .org-person.is-tbd .op-name { color: var(--orange-dark); }
+  .op-title { font-size: 12px; color: var(--fg-2); margin-top: 1px; }
+  .op-loc { font-size: 11px; font-family: var(--font-mono); color: var(--fg-3); margin-top: 2px; }
+
+  .op-tools { display: none; gap: 4px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  body[data-mode="manager"] .org-person .op-tools { display: flex; }
+  .op-btn {
+    font-size: 11px; font-weight: 600; color: var(--fg-2);
+    background: #fff; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 3px 8px; cursor: pointer; line-height: 1.4;
+  }
+  .op-btn:hover { border-color: var(--navy); color: var(--navy); }
+  .op-btn.danger:hover { border-color: #C0392B; color: #C0392B; }
+  .op-btn.icon { padding: 3px 7px; font-family: var(--font-mono); }
+  .op-move {
+    font-size: 11px; color: var(--fg-2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 3px 6px; background: #fff; max-width: 150px;
+  }
+
+  /* Add / structural buttons */
+  .org-add {
+    display: none; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; color: var(--blue);
+    background: rgba(0,114,206,0.06); border: 1px dashed rgba(0,114,206,0.35);
+    border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer; margin-top: 8px;
+    width: 100%;
+  }
+  body[data-mode="manager"] .org-add { display: flex; }
+  .org-add:hover { background: rgba(0,114,206,0.12); }
+  .org-add.bucket { margin-top: 0; }
+  .org-bucket-tools, .org-section-tools { display: none; gap: 4px; }
+  body[data-mode="manager"] .org-bucket-tools,
+  body[data-mode="manager"] .org-section-tools { display: flex; }
+
+  .org-empty {
+    font-size: 12px; color: var(--fg-3); font-style: italic;
+    padding: 6px 2px;
+  }
+
+  /* Inline edit form (person add/edit, rename) */
+  .org-edit-form {
+    border: 1px solid var(--blue); border-radius: var(--radius-sm);
+    padding: 10px; background: rgba(0,114,206,0.04);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .org-inp {
+    font-family: inherit; font-size: 13px; color: var(--fg);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 9px; width: 100%; background: #fff;
+  }
+  .org-inp:focus { outline: none; border-color: var(--blue); }
+  .org-inp-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--fg-2); }
+  .org-form-actions { display: flex; gap: 8px; }
+  .org-form-actions .op-btn.primary {
+    background: var(--navy); color: #fff; border-color: var(--navy);
+  }
+  .org-form-actions .op-btn.primary:hover { background: var(--navy-light); color: #fff; }
+
+  .org-add-bucket-wrap { margin-top: 14px; }
+  @media (max-width: 760px) {
+    .org-hero { flex-direction: column; gap: 16px; }
+    .org-toolbar { align-items: flex-start; }
+    .org-buckets { grid-template-columns: 1fr; }
+  }
+
+  /* Embedded inside Instrata Project Tools — hide the standalone topbar */
+  body.embedded .topbar { display: none; }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" id="brand">
+        <img src="assets/logo-wordmark-white.png" alt="Instrata" />
+        <span class="brand-divider"></span>
+        <span class="brand-label">AVSS Process Document · Q2 2026</span>
+      </a>
+      <nav class="crumbs" id="crumbs"></nav>
+      <a class="topnav-link" id="org-nav" href="#/org">Org Chart</a>
+      <div class="mode-toggle" role="group" aria-label="View mode" id="mode-toggle">
+        <button type="button" data-mode="user">User</button>
+        <button type="button" data-mode="manager">Manager</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- LANDING VIEW (Pre-Sales / Post-Sales selection) -->
+    <section id="landing">
+      <div class="landing-hero">
+        <div class="eyebrow">AVSS Process Document</div>
+        <h1>Choose a process flow.</h1>
+        <p class="lead">The AV process spans three workflows. Pre-sales covers everything from a fresh lead through a signed contract. Post-sales picks up the awarded project and carries it through closeout. Purchasing runs alongside post-sales, from BoM intake through order management. Or open the Shared Services org chart to see who sits where.</p>
+      </div>
+
+      <div class="choose">
+        <a class="choose-card pre" href="#/pre">
+          <div class="cc-deco"></div>
+          <div class="cc-eyebrow">
+            <span class="cc-count" id="cc-pre-count"></span>
+          </div>
+          <h2>Pre-Sales</h2>
+          <p>From lead generation through contract of a project, the pre-sales process guides you through phases, milestones and deliverables for all projects.</p>
+          <div class="cc-foot">
+            <span class="cc-go">Open Pre-Sales Flow</span>
+            <span class="cc-arrow">→</span>
+          </div>
+        </a>
+        <a class="choose-card post" href="#/post">
+          <div class="cc-deco"></div>
+          <div class="cc-eyebrow">
+            <span class="cc-count" id="cc-post-count"></span>
+          </div>
+          <h2>Post-Sales</h2>
+          <p>From opening the job through close-out and invoicing, the post-sales process covers all phases, milestones and deliverables for the project through completion.</p>
+          <div class="cc-foot">
+            <span class="cc-go">Open Post-Sales Flow</span>
+            <span class="cc-arrow">→</span>
+          </div>
+        </a>
+        <a class="choose-card purchasing" href="#/purchasing">
+          <div class="cc-deco"></div>
+          <div class="cc-eyebrow">
+            <span class="cc-count" id="cc-purchasing-count"></span>
+          </div>
+          <h2>Purchasing</h2>
+          <p>From Preliminary BoM at kickoff through vendor pricing, Final BoM scrub, order placement, and PO tracking — the full purchasing lifecycle for every awarded project.</p>
+          <div class="cc-foot">
+            <span class="cc-go">Open Purchasing Flow</span>
+            <span class="cc-arrow">→</span>
+          </div>
+        </a>
+        <a class="choose-card org" href="#/org">
+          <div class="cc-deco"></div>
+          <div class="cc-eyebrow">
+            <span class="cc-count" id="cc-org-count"></span>
+          </div>
+          <h2>Org Chart</h2>
+          <p>The Shared Services org chart — leadership, the engineering &amp; design buckets, and every regional field, project-management and service team.</p>
+          <div class="cc-foot">
+            <span class="cc-go">Open Org Chart</span>
+            <span class="cc-arrow">→</span>
+          </div>
+        </a>
+      </div>
+
+    </section>
+
+    <!-- FLOW VIEW (Pre-Sales OR Post-Sales chart) -->
+    <section id="flow" class="hidden">
+      <div class="flow-hero" id="flow-hero">
+        <div>
+          <div class="eyebrow" id="flow-eyebrow">Phase</div>
+          <h1 id="flow-title">Flow</h1>
+          <p class="lead" id="flow-lead"></p>
+        </div>
+        <div class="key">
+          <span class="key-title">Owners</span>
+          <span class="key-item"><span class="key-dot sales"></span>Sales Rep</span>
+          <span class="key-item"><span class="key-dot avss"></span>Shared Services</span>
+          <span class="key-item"><span class="key-dot ops"></span>Operations / Field</span>
+          <span class="key-item"><span class="key-dot purchasing"></span>Purchasing</span>
+        </div>
+      </div>
+      <div class="flow-split" id="flow-split">
+        <div class="flow-chart-col" id="flow-body"></div>
+        <aside class="detail-panel hidden" id="detail-panel"></aside>
+      </div>
+    </section>
+
+    <!-- DETAIL VIEW -->
+    <section id="detail" class="hidden"></section>
+
+    <!-- ORG CHART VIEW -->
+    <section id="org" class="hidden">
+      <div class="org-hero">
+        <div>
+          <div class="eyebrow">Shared Services</div>
+          <h1>AV Org Chart</h1>
+          <p class="lead">Who sits where across AV Shared Services — leadership, the engineering &amp; design buckets, and every regional field, project-management and service team. Switch to Manager mode to add, edit, move or reorganize people.</p>
+        </div>
+        <div class="org-toolbar" id="org-toolbar">
+          <span class="org-mgr-hint">Manager mode — edits save to this browser.</span>
+          <button type="button" class="org-reset-btn" id="org-reset">Reset to default</button>
+        </div>
+      </div>
+      <div class="org-body" id="org-body"></div>
+    </section>
+  </main>
+
+  <script src="orgchart.js"></script>
+  <script src="steps.js"></script>
+  <script>
+    // When loaded inside the Instrata Project Tools iframe, suppress the
+    // standalone topbar so the host app's chrome takes over.
+    if (new URLSearchParams(location.search).get('embedded') === '1') {
+      document.body.classList.add('embedded');
+    }
+
+    const STEPS = window.AVSS_STEPS;
+    const byId = (id) => STEPS.find(s => s.id === id);
+
+    // ---------- Mode + per-step overrides (localStorage-backed) ----------
+    // When this artifact is migrated into the Instrata project tools app, swap
+    // these two storage helpers for the app's backend / role gate.
+    const MODE_KEY = 'avss-mode';
+    const OVERRIDES_KEY = 'avss-step-overrides';
+
+    function getMode() {
+      return localStorage.getItem(MODE_KEY) === 'manager' ? 'manager' : 'user';
+    }
+    function getOverrides() {
+      try { return JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}'); }
+      catch { return {}; }
+    }
+    function saveOverride(id, patch) {
+      const all = getOverrides();
+      all[id] = Object.assign({}, all[id] || {}, patch);
+      localStorage.setItem(OVERRIDES_KEY, JSON.stringify(all));
+    }
+    function effectiveStep(s) {
+      if (!s) return s;
+      const override = getOverrides()[s.id];
+      return override ? Object.assign({}, s, override) : s;
+    }
+    function escHtml(v) {
+      return (v == null ? '' : String(v))
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // ---------- Editable section renderers ----------
+    // Each renderer returns the section markup for either display or editing
+    // mode. They are wrapped in a `[data-section]` element so the panel's
+    // delegated click handler can swap between modes in place.
+    function renderActionItemSection(s, editing) {
+      const mode = getMode();
+      if (mode === 'manager' && editing) {
+        return `
+          <div class="action editable editing" data-section="actionItem">
+            <div class="icon">!</div>
+            <div class="action-content">
+              <div class="label">Action item</div>
+              <textarea class="edit-input" data-field="actionItem" rows="2">${escHtml(s.actionItem || '')}</textarea>
+              <div class="edit-actions">
+                <button class="btn-cancel" type="button">Cancel</button>
+                <button class="btn-save" type="button">Save</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      const editBtn = mode === 'manager'
+        ? '<button class="edit-btn" type="button">Edit</button>'
+        : '';
+      return `
+        <div class="action editable" data-section="actionItem">
+          <div class="icon">!</div>
+          <div class="action-content">
+            <div class="label">Action item</div>
+            <div class="text">${escHtml(s.actionItem)}</div>
+          </div>
+          ${editBtn}
+        </div>
+      `;
+    }
+    function renderSummarySection(s, editing) {
+      const mode = getMode();
+      if (mode === 'manager' && editing) {
+        return `
+          <div class="section-block editable editing" data-section="summary">
+            <h2>Summary</h2>
+            <textarea class="edit-input" data-field="summary" rows="6">${escHtml(s.summary || '')}</textarea>
+            <div class="edit-actions">
+              <button class="btn-cancel" type="button">Cancel</button>
+              <button class="btn-save" type="button">Save</button>
+            </div>
+          </div>
+        `;
+      }
+      const editBtn = mode === 'manager'
+        ? '<button class="edit-btn section-edit-btn" type="button">Edit</button>'
+        : '';
+      return `
+        <div class="section-block editable" data-section="summary">
+          <div class="section-block-head"><h2>Summary</h2>${editBtn}</div>
+          <div class="summary">${escHtml(s.summary)}</div>
+        </div>
+      `;
+    }
+    function detailRowHtml(i, label, body) {
+      return `
+        <div class="edit-row" data-row="${i}">
+          <input class="edit-input edit-label" data-field="label" placeholder="Label (optional)" value="${escHtml(label || '')}" />
+          <textarea class="edit-input edit-body" data-field="body" rows="3" placeholder="Detail body">${escHtml(body || '')}</textarea>
+          <button class="btn-remove" type="button" title="Remove detail">×</button>
+        </div>
+      `;
+    }
+    function noteRowHtml(i, text) {
+      return `
+        <div class="edit-row note-row" data-row="${i}">
+          <textarea class="edit-input edit-body" data-field="note" rows="3" placeholder="Note">${escHtml(text || '')}</textarea>
+          <button class="btn-remove" type="button" title="Remove note">×</button>
+        </div>
+      `;
+    }
+    function renderDetailsSection(s, editing) {
+      const mode = getMode();
+      const items = s.details || [];
+      if (mode === 'manager' && editing) {
+        const rows = items.map((d, i) => detailRowHtml(i, d.label, d.body)).join('');
+        return `
+          <div class="section-block editable editing" data-section="details">
+            <h2>Details</h2>
+            <div class="edit-rows">${rows}</div>
+            <button class="btn-add-row" type="button">+ Add detail</button>
+            <div class="edit-actions">
+              <button class="btn-cancel" type="button">Cancel</button>
+              <button class="btn-save" type="button">Save</button>
+            </div>
+          </div>
+        `;
+      }
+      if (!items.length && mode !== 'manager') return '';
+      const editBtn = mode === 'manager'
+        ? '<button class="edit-btn section-edit-btn" type="button">Edit</button>'
+        : '';
+      const listHtml = items.length
+        ? `<div class="detail-list">
+            ${items.map(d => `
+              <div class="detail-item">
+                ${d.label ? `<div class="dlabel">${escHtml(d.label)}</div>` : ''}
+                <div class="dbody">${escHtml(d.body)}</div>
+              </div>
+            `).join('')}
+          </div>`
+        : '<div class="empty-state">No details yet — click Edit to add some.</div>';
+      return `
+        <div class="section-block editable" data-section="details">
+          <div class="section-block-head"><h2>Details</h2>${editBtn}</div>
+          ${listHtml}
+        </div>
+      `;
+    }
+    function renderNotesSection(s, editing) {
+      const mode = getMode();
+      const items = s.notes || [];
+      if (mode === 'manager' && editing) {
+        const rows = items.map((n, i) => noteRowHtml(i, n)).join('');
+        return `
+          <div class="section-block editable editing" data-section="notes">
+            <h2>Notes</h2>
+            <div class="edit-rows">${rows}</div>
+            <button class="btn-add-row" type="button">+ Add note</button>
+            <div class="edit-actions">
+              <button class="btn-cancel" type="button">Cancel</button>
+              <button class="btn-save" type="button">Save</button>
+            </div>
+          </div>
+        `;
+      }
+      if (!items.length && mode !== 'manager') return '';
+      const editBtn = mode === 'manager'
+        ? '<button class="edit-btn section-edit-btn" type="button">Edit</button>'
+        : '';
+      const listHtml = items.length
+        ? `<div class="notes-list">
+            ${items.map(n => `<div class="note">${escHtml(n)}</div>`).join('')}
+          </div>`
+        : '<div class="empty-state">No notes yet — click Edit to add some.</div>';
+      return `
+        <div class="section-block editable" data-section="notes">
+          <div class="section-block-head"><h2>Notes</h2>${editBtn}</div>
+          ${listHtml}
+        </div>
+      `;
+    }
+    function renderSection(stepId, key, editing) {
+      const s = effectiveStep(byId(stepId));
+      if (!s) return '';
+      switch (key) {
+        case 'actionItem': return renderActionItemSection(s, editing);
+        case 'summary':    return renderSummarySection(s, editing);
+        case 'details':    return renderDetailsSection(s, editing);
+        case 'notes':      return renderNotesSection(s, editing);
+        default:           return '';
+      }
+    }
+    function collectSectionEdit(sectionEl, key) {
+      if (key === 'actionItem') {
+        return { actionItem: sectionEl.querySelector('textarea[data-field="actionItem"]').value };
+      }
+      if (key === 'summary') {
+        return { summary: sectionEl.querySelector('textarea[data-field="summary"]').value };
+      }
+      if (key === 'details') {
+        const details = [];
+        sectionEl.querySelectorAll('.edit-row').forEach(r => {
+          const label = r.querySelector('input[data-field="label"]').value.trim();
+          const body  = r.querySelector('textarea[data-field="body"]').value.trim();
+          if (label || body) details.push(label ? { label, body } : { body });
+        });
+        return { details };
+      }
+      if (key === 'notes') {
+        const notes = [];
+        sectionEl.querySelectorAll('.edit-row').forEach(r => {
+          const v = r.querySelector('textarea[data-field="note"]').value.trim();
+          if (v) notes.push(v);
+        });
+        return { notes };
+      }
+      return null;
+    }
+
+    // Pre-sales branches in display order. Each branch is its own flow page;
+    // Phase 1 (universal triage) renders at the top of every branch flow.
+    const BRANCHES = [
+      { slug: 'design',       name: 'Design',       description: 'Labor-only design package. We deliver the design; the client builds out the project separately (or competitively bids it).' },
+      { slug: 'design-build', name: 'Design-Build', description: 'End-to-end. We design and install. Either a fresh lead or a rollover from Design / Budget.' },
+      { slug: 'bid',          name: 'Bid',          description: 'Private-sector competitive bid. Best engineering, priced competitively but not bottom-dollar.' },
+      { slug: 'public-bid',   name: 'Public Bid',   description: 'Public agency bid — lowest cost wins. Pursued selectively where we have a relationship with the customer or GC.' },
+      { slug: 'budget',       name: 'Budget',       description: 'Placeholder pricing for client planning / funding requests. Usually re-enters as another branch later.' }
+    ];
+    const branchBySlug = (slug) => BRANCHES.find(b => b.slug === slug);
+
+    function nodeHtml(step, activeId, hrefBase) {
+      const base = hrefBase || `#/${step.section}`;
+      const isActive = step.id === activeId ? ' active' : '';
+      const isDeliverable = step.kind === 'deliverable';
+      const kindClass = isDeliverable ? ' deliverable' : '';
+      const kindPill = isDeliverable ? '<span class="node-kind-pill">Deliverable</span>' : '';
+      return `
+        <a class="node${kindClass}${isActive}" href="${base}/step/${step.id}">
+          <span class="node-num">${step.num}</span>
+          <span class="node-body">
+            <span class="node-title">${step.title}</span>
+            <span class="node-owner">${kindPill}<span class="owner-dot ${step.ownerKey}"></span>${step.owner}</span>
+          </span>
+          <span class="node-chevron">›</span>
+        </a>
+      `;
+    }
+    function arrow() { return '<div class="arrow"></div>'; }
+
+    // Render one phase grouping (a .subgroup label + a column of nodes with
+    // connector arrows between them). Used by both the pre-sales overview
+    // (Phase 1 only) and branch flows (Phase 1 + branch phases).
+    function renderPhaseGroup(label, steps, activeId, hrefBase) {
+      let html = `<div class="subgroup">${label}</div>`;
+      html += '<div class="col" style="margin-bottom:6px;">';
+      steps.forEach((s, i) => {
+        html += nodeHtml(s, activeId, hrefBase);
+        if (i < steps.length - 1) html += arrow();
+      });
+      html += '</div>';
+      return html;
+    }
+    // Group an array of pre-sales steps by their `phase` number, preserving
+    // step order within each phase. Returns [{ phase, phaseLabel, steps }].
+    function groupByPhase(steps) {
+      const groups = [];
+      const byPhase = new Map();
+      steps.forEach(s => {
+        if (!byPhase.has(s.phase)) {
+          const g = { phase: s.phase, phaseLabel: s.phaseLabel, steps: [] };
+          byPhase.set(s.phase, g);
+          groups.push(g);
+        }
+        byPhase.get(s.phase).steps.push(s);
+      });
+      return groups;
+    }
+
+    // Pre-sales overview: Phase 1 (universal triage) chart, then a 5-card
+    // branch selector. Clicking a triage node opens its detail panel inline;
+    // clicking a branch card navigates to that branch's full flow page.
+    function renderPreOverview(activeId) {
+      const triage = STEPS.filter(s => s.section === 'pre' && s.branch === 'triage');
+      const hrefBase = '#/pre';
+      const phase1Label = `Phase 1 · ${triage[0] ? triage[0].phaseLabel : 'Intake & Qualification'}`;
+      const triageChart = renderPhaseGroup(phase1Label, triage, activeId, hrefBase);
+
+      const cardsHtml = BRANCHES.map(b => {
+        const count = STEPS.filter(s => s.section === 'pre' && s.branch === b.slug).length;
+        return `
+          <a class="branch-card" href="#/pre/${b.slug}">
+            <h3>${b.name}</h3>
+            <p>${b.description}</p>
+            <div class="bc-foot">
+              <span class="count">${count} steps</span>
+              <span class="go">Open flow <span class="arrow">→</span></span>
+            </div>
+          </a>
+        `;
+      }).join('');
+
+      return `
+        <div class="phases">
+          <div class="phase pre">
+            <div class="phase-head">
+              <h2>Universal Triage</h2>
+              <span class="count">${triage.length} STEPS · APPLIES TO ALL</span>
+            </div>
+            ${triageChart}
+          </div>
+        </div>
+        <div class="branch-cards-section">
+          <div class="branch-cards-head">
+            <h2>Branch by project type</h2>
+            <p>After triage, every project takes one of these five flows. Open one to see its full lifecycle.</p>
+          </div>
+          <div class="branch-cards">
+            ${cardsHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    // Branch flow page: Phase 1 (universal triage) at top, then the branch's
+    // own phases grouped under phase subgroup labels, then a terminal bridge.
+    function renderBranchFlow(branchSlug, activeId) {
+      const meta = branchBySlug(branchSlug);
+      if (!meta) return '';
+      const hrefBase = `#/pre/${branchSlug}`;
+      const triage = STEPS.filter(s => s.section === 'pre' && s.branch === 'triage');
+      const branchSteps = STEPS.filter(s => s.section === 'pre' && s.branch === branchSlug);
+
+      let inner = renderPhaseGroup(
+        `Phase 1 · ${triage[0] ? triage[0].phaseLabel : 'Intake & Qualification'}`,
+        triage, activeId, hrefBase
+      );
+      groupByPhase(branchSteps).forEach(g => {
+        inner += renderPhaseGroup(`Phase ${g.phase} · ${g.phaseLabel}`, g.steps, activeId, hrefBase);
+      });
+
+      let bridge;
+      if (branchSlug === 'design') {
+        bridge = '<div class="bridge terminal-rollover">End of Design flow — may roll over to Design-Build or Bid as a new project</div>';
+      } else if (branchSlug === 'budget') {
+        bridge = '<div class="bridge terminal-rollover">Budget submitted — may re-enter as Bid, Public Bid, or Design-Build as a new project</div>';
+      } else {
+        bridge = '<div class="bridge">Contract awarded — kicks off the post-sales cycle</div>';
+      }
+
+      const total = triage.length + branchSteps.length;
+      return `
+        <div class="phases">
+          <div class="phase pre">
+            <div class="phase-head">
+              <h2>${meta.name}</h2>
+              <span class="count">${total} STEPS · INCLUDES PHASE 1</span>
+            </div>
+            ${inner}
+            ${bridge}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPostFlow(activeId) {
+      const post = STEPS.filter(s => s.section === 'post');
+      const hrefBase = '#/post';
+      let inner = '';
+      groupByPhase(post).forEach(g => {
+        inner += renderPhaseGroup(`Phase ${g.phase} · ${g.phaseLabel}`, g.steps, activeId, hrefBase);
+      });
+
+      return `
+        <div class="phases">
+          <div class="phase post">
+            <div class="phase-head">
+              <h2>Post-Sales</h2>
+              <span class="count">${post.length} STEPS</span>
+            </div>
+            ${inner}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPurchasingFlow(activeId) {
+      const steps = STEPS.filter(s => s.section === 'purchasing');
+      const hrefBase = '#/purchasing';
+      let inner = '';
+      groupByPhase(steps).forEach(g => {
+        inner += renderPhaseGroup(`Phase ${g.phase} · ${g.phaseLabel}`, g.steps, activeId, hrefBase);
+      });
+
+      return `
+        <div class="phases">
+          <div class="phase post">
+            <div class="phase-head">
+              <h2>Purchasing</h2>
+              <span class="count">${steps.length} STEPS</span>
+            </div>
+            ${inner}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLanding() {
+      const pre = STEPS.filter(s => s.section === 'pre').length;
+      const post = STEPS.filter(s => s.section === 'post').length;
+      const purchasing = STEPS.filter(s => s.section === 'purchasing').length;
+      const pc = document.getElementById('cc-pre-count');
+      const oc = document.getElementById('cc-post-count');
+      const puc = document.getElementById('cc-purchasing-count');
+      if (pc) pc.textContent = `${pre} steps`;
+      if (oc) oc.textContent = `${post} steps`;
+      if (puc) puc.textContent = `${purchasing} steps`;
+      const gc = document.getElementById('cc-org-count');
+      if (gc) gc.textContent = `${orgPersonCount(getOrg())} people`;
+    }
+
+    function renderFlow(which, stepId) {
+      const body = document.getElementById('flow-body');
+      const eyebrow = document.getElementById('flow-eyebrow');
+      const title = document.getElementById('flow-title');
+      const lead = document.getElementById('flow-lead');
+      const split = document.getElementById('flow-split');
+      const panel = document.getElementById('detail-panel');
+      const flowSec = document.getElementById('flow');
+
+      if (which === 'pre') {
+        eyebrow.textContent = 'Pre-Sales';
+        title.textContent = 'Triage → Branch';
+        lead.textContent = 'Phase 1 triage runs on every project. Once the project type is set, the lifecycle continues in one of five branches. Click a triage step for details, or pick a branch below.';
+        body.innerHTML = renderPreOverview(stepId);
+      } else if (which === 'post') {
+        eyebrow.textContent = 'Post-Sales';
+        title.textContent = 'Kickoff → Closeout';
+        lead.textContent = 'From opening the job through closeout and invoicing. Click any step to open its details, action items, and screenshare tutorial.';
+        body.innerHTML = renderPostFlow(stepId);
+      } else if (which === 'purchasing') {
+        eyebrow.textContent = 'Purchasing';
+        title.textContent = 'Intake → Order Management';
+        lead.textContent = 'From Preliminary BoM at kickoff through vendor pricing, Final BoM scrub, order placement, and PO tracking. Click any step to open its details and action items.';
+        body.innerHTML = renderPurchasingFlow(stepId);
+      } else {
+        const meta = branchBySlug(which);
+        if (!meta) { window.location.hash = '#/pre'; return; }
+        eyebrow.textContent = `Pre-Sales · ${meta.name}`;
+        title.textContent = meta.name;
+        lead.textContent = meta.description;
+        body.innerHTML = renderBranchFlow(which, stepId);
+      }
+
+      if (stepId) {
+        split.classList.add('has-detail');
+        flowSec.classList.add('has-detail-open');
+        panel.classList.remove('hidden');
+        renderInlineDetail(stepId, which);
+      } else {
+        split.classList.remove('has-detail');
+        flowSec.classList.remove('has-detail-open');
+        panel.classList.add('hidden');
+        panel.innerHTML = '';
+      }
+    }
+
+    function renderInlineDetail(id, which) {
+      const base = byId(id);
+      if (!base) return;
+      const s = effectiveStep(base);
+
+      // Derive context (back-link target, prev/next list, breadcrumb / video labels)
+      // from `which`, which is one of: 'pre' (overview), 'post', or a branch slug.
+      let flowHash, prevNextList, displayLabel, videoPill;
+      if (which === 'purchasing') {
+        flowHash = '#/purchasing';
+        prevNextList = STEPS.filter(x => x.section === 'purchasing');
+        displayLabel = 'Purchasing';
+        videoPill = 'PURCHASING';
+      } else if (which === 'post') {
+        flowHash = '#/post';
+        prevNextList = STEPS.filter(x => x.section === 'post');
+        displayLabel = 'Post-Sales';
+        videoPill = 'POST-SALES';
+      } else if (which === 'pre') {
+        flowHash = '#/pre';
+        prevNextList = STEPS.filter(x => x.section === 'pre' && x.branch === 'triage');
+        displayLabel = 'Pre-Sales';
+        videoPill = 'PRE-SALES';
+      } else {
+        // Branch context — prev/next walks triage steps first, then the branch.
+        const meta = branchBySlug(which);
+        flowHash = `#/pre/${which}`;
+        prevNextList = STEPS.filter(x => x.section === 'pre' && (x.branch === 'triage' || x.branch === which));
+        displayLabel = `Pre-Sales · ${meta ? meta.name : which}`;
+        videoPill = (meta ? meta.name : which).toUpperCase();
+      }
+      const idx = prevNextList.findIndex(x => x.id === id);
+      const prev = prevNextList[idx - 1];
+      const next = prevNextList[idx + 1];
+      const sectionLabel = displayLabel;
+      const sectionHash = flowHash;
+
+      const panel = document.getElementById('detail-panel');
+      panel.innerHTML = `
+        <div class="panel-head">
+          <a class="panel-close" href="${sectionHash}">Back to flow</a>
+          <div class="panel-trail">
+            <span class="num">Step ${s.num}</span>
+            <span>·</span>
+            <span>${sectionLabel}</span>
+          </div>
+        </div>
+        <div class="panel-body" data-step-id="${id}">
+          <div class="video-card panel-video">
+            <div class="video-frame">
+              <div class="play-btn" title="Tutorial coming soon"></div>
+              <div class="video-meta">
+                <span class="pill">${videoPill} · ${s.num}</span>
+                <span>Tutorial</span>
+              </div>
+            </div>
+            <div class="video-controls">
+              <span>0:00</span>
+              <div class="vc-bar"></div>
+              <span>—</span>
+            </div>
+          </div>
+
+          <div class="step-head">
+            <div class="top">
+              <span class="num">${sectionLabel} · ${s.num}</span>
+            </div>
+            <h1>${escHtml(s.title)}</h1>
+            <div class="badges">
+              <span class="badge owner-${s.ownerKey}"><span class="owner-dot ${s.ownerKey}"></span>Owner · ${escHtml(s.owner)}</span>
+            </div>
+          </div>
+
+          ${renderActionItemSection(s, false)}
+          ${renderSummarySection(s, false)}
+          ${renderDetailsSection(s, false)}
+          ${renderNotesSection(s, false)}
+
+          <div class="stepnav">
+            ${prev ? `<a href="${flowHash}/step/${prev.id}"><span class="label">← Previous</span><span class="ttl">${escHtml(prev.title)}</span></a>` : '<span></span>'}
+            ${next ? `<a href="${flowHash}/step/${next.id}" class="next"><span class="label">Next →</span><span class="ttl">${escHtml(next.title)}</span></a>` : '<span></span>'}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDetail(id) {
+      const s = byId(id);
+      if (!s) { window.location.hash = '#/'; return; }
+      const idx = STEPS.findIndex(x => x.id === id);
+      const prev = STEPS[idx - 1];
+      const next = STEPS[idx + 1];
+      const sectionLabel = s.section === 'pre' ? 'Pre-Sales' : s.section === 'purchasing' ? 'Purchasing' : 'Post-Sales';
+      const sectionHash = s.section === 'pre' ? '#/pre' : s.section === 'purchasing' ? '#/purchasing' : '#/post';
+
+      const detailsHtml = (s.details && s.details.length)
+        ? `<div class="section-block">
+            <h2>Details</h2>
+            <div class="detail-list">
+              ${s.details.map(d => `
+                <div class="detail-item">
+                  ${d.label ? `<div class="dlabel">${d.label}</div>` : ''}
+                  <div class="dbody">${d.body}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>` : '';
+
+      const notesHtml = (s.notes && s.notes.length)
+        ? `<div class="section-block">
+            <h2>Notes</h2>
+            <div class="notes-list">
+              ${s.notes.map(n => `<div class="note">${n}</div>`).join('')}
+            </div>
+          </div>` : '';
+
+      const html = `
+        <div class="back-row">
+          <a class="back-link" href="${sectionHash}">Back to ${sectionLabel} flow</a>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-main">
+            <div class="step-head">
+              <div class="top">
+                <span class="num">${sectionLabel} · Step ${s.num}</span>
+                <span class="sec-tag">·</span>
+                <span class="sec-tag">${s.title}</span>
+              </div>
+              <h1>${s.title}</h1>
+              <div class="badges">
+                <span class="badge owner-${s.ownerKey}"><span class="owner-dot ${s.ownerKey}"></span>Owner · ${s.owner}</span>
+              </div>
+            </div>
+
+            <div class="action">
+              <div class="icon">!</div>
+              <div>
+                <div class="label">Action item</div>
+                <div class="text">${s.actionItem}</div>
+              </div>
+            </div>
+
+            <div class="section-block">
+              <h2>Summary</h2>
+              <div class="summary">${s.summary}</div>
+            </div>
+
+            ${detailsHtml}
+            ${notesHtml}
+
+            <div class="stepnav">
+              ${prev ? `<a href="#/step/${prev.id}"><span class="label">← Previous</span><span class="ttl">${prev.title}</span></a>` : '<span></span>'}
+              ${next ? `<a href="#/step/${next.id}" class="next"><span class="label">Next →</span><span class="ttl">${next.title}</span></a>` : '<span></span>'}
+            </div>
+          </div>
+
+          <aside>
+            <div class="video-card">
+              <div class="video-frame">
+                <div class="play-btn" title="Tutorial coming soon"></div>
+                <div class="video-meta">
+                  <span class="pill">${sectionLabel.toUpperCase()} · ${s.num}</span>
+                  <span>Tutorial</span>
+                </div>
+              </div>
+              <div class="video-controls">
+                <span>0:00</span>
+                <div class="vc-bar"></div>
+                <span>—</span>
+              </div>
+              <div class="video-empty">
+                <div class="label">Screenshare tutorial</div>
+                <div class="body">A walkthrough video for this step will appear here. ${s.videoUrl ? '' : 'Drop in the recording when it\u2019s ready.'}</div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      `;
+
+      document.getElementById('detail').innerHTML = html;
+    }
+
+    // ───────────────────────── Org chart ─────────────────────────
+    // Persistence is intentionally isolated to getOrg / saveOrg / resetOrg —
+    // mirror of the step-overrides design. When this is folded into the
+    // Instrata project tools app, swap these three for backend calls and gate
+    // Manager mode behind the app's real role check; the render layer is
+    // untouched.
+    const ORG_KEY = 'avss-org';
+    let _orgN = 0;
+    const orgUid = (p) => p + '-' + (Date.now().toString(36)) + (++_orgN).toString(36);
+
+    function orgClone(o) {
+      try { return structuredClone(o); }
+      catch (e) { return JSON.parse(JSON.stringify(o)); }
+    }
+    function getOrg() {
+      try {
+        const raw = localStorage.getItem(ORG_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) {}
+      return orgClone(window.AVSS_ORG);
+    }
+    function saveOrg(org) {
+      localStorage.setItem(ORG_KEY, JSON.stringify(org));
+    }
+    function resetOrg() {
+      localStorage.removeItem(ORG_KEY);
+    }
+
+    // Lookups over a working org object.
+    function orgFindPerson(org, pid) {
+      for (const col of org.columns)
+        for (const b of col.buckets)
+          for (const s of b.sections) {
+            const i = s.people.findIndex(p => p.id === pid);
+            if (i >= 0) return { col, bucket: b, section: s, idx: i, person: s.people[i] };
+          }
+      return null;
+    }
+    function orgFindSection(org, sid) {
+      for (const col of org.columns)
+        for (const b of col.buckets)
+          for (const s of b.sections)
+            if (s.id === sid) return { col, bucket: b, section: s };
+      return null;
+    }
+    function orgFindBucket(org, bid) {
+      for (const col of org.columns)
+        for (const b of col.buckets)
+          if (b.id === bid) return { col, bucket: b };
+      return null;
+    }
+    function orgPersonCount(org) {
+      let n = 0;
+      for (const col of org.columns)
+        for (const b of col.buckets)
+          for (const s of b.sections) n += s.people.length;
+      return n;
+    }
+
+    // The single open inline form (only one at a time), or null.
+    let _orgForm = null;
+    // Section list for the "move to" picker, rebuilt each render.
+    let _orgSecs = [];
+
+    function orgMoveOptions(currentSid) {
+      let html = '<option value="" selected disabled>Move to…</option>';
+      for (const s of _orgSecs) {
+        if (s.id === currentSid) continue;
+        html += `<option value="${s.id}">${escHtml(s.label)}</option>`;
+      }
+      return html;
+    }
+
+    // ----- inline form fragments -----
+    function personFormHtml(sectionId, p) {
+      const v = p || { name: '', title: '', location: '', tbd: false };
+      return `
+        <div class="org-edit-form" data-form="person"
+             data-section="${sectionId}" data-person="${p ? p.id : ''}">
+          <input class="org-inp" name="name" placeholder="Name (or TBD)" value="${escHtml(v.name)}">
+          <input class="org-inp" name="title" placeholder="Title / role" value="${escHtml(v.title)}">
+          <input class="org-inp" name="location" placeholder="Location (optional)" value="${escHtml(v.location)}">
+          <label class="org-inp-row">
+            <input type="checkbox" name="tbd" ${v.tbd ? 'checked' : ''}> Open seat (TBD)
+          </label>
+          <div class="org-form-actions">
+            <button type="button" class="op-btn primary" data-act="commit-person">Save</button>
+            <button type="button" class="op-btn" data-act="cancel-org">Cancel</button>
+          </div>
+        </div>`;
+    }
+    function leadFormHtml(lead) {
+      return `
+        <div class="org-edit-form" data-form="lead" data-lead="${lead.id}">
+          <input class="org-inp" name="name" placeholder="Name" value="${escHtml(lead.name)}">
+          <input class="org-inp" name="title" placeholder="Title" value="${escHtml(lead.title)}">
+          <input class="org-inp" name="location" placeholder="Location (optional)" value="${escHtml(lead.location || '')}">
+          <div class="org-form-actions">
+            <button type="button" class="op-btn primary" data-act="commit-lead">Save</button>
+            <button type="button" class="op-btn" data-act="cancel-org">Cancel</button>
+          </div>
+        </div>`;
+    }
+    function textFormHtml(kind, id, label, withAccent, accent) {
+      const acSel = withAccent ? `
+          <select class="org-inp" name="accent">
+            ${['', 'eng', 'se', 'ne', 'ma', 'sw'].map(a =>
+              `<option value="${a}" ${a === (accent || '') ? 'selected' : ''}>${a ? 'Accent: ' + a.toUpperCase() : 'No accent'}</option>`).join('')}
+          </select>` : '';
+      return `
+        <div class="org-edit-form" data-form="text" data-kind="${kind}" data-id="${id}">
+          <input class="org-inp" name="label" placeholder="Name" value="${escHtml(label || '')}">
+          ${acSel}
+          <div class="org-form-actions">
+            <button type="button" class="op-btn primary" data-act="commit-text">Save</button>
+            <button type="button" class="op-btn" data-act="cancel-org">Cancel</button>
+          </div>
+        </div>`;
+    }
+
+    // ----- render -----
+    function renderOrgPerson(p) {
+      if (_orgForm && _orgForm.t === 'person-edit' && _orgForm.id === p.id) {
+        const fs = orgFindPerson(getOrg(), p.id);
+        return personFormHtml(fs ? fs.section.id : '', p);
+      }
+      const tbd = p.tbd ? ' is-tbd' : '';
+      const loc = p.location ? `<div class="op-loc">${escHtml(p.location)}</div>` : '';
+      return `
+        <div class="org-person${tbd}" data-person="${p.id}">
+          <div class="op-name">${escHtml(p.name || 'TBD')}</div>
+          <div class="op-title">${escHtml(p.title || '')}</div>
+          ${loc}
+          <div class="op-tools">
+            <button type="button" class="op-btn" data-act="edit-person" data-person="${p.id}">Edit</button>
+            <button type="button" class="op-btn icon" data-act="move-up" data-person="${p.id}" title="Move up">▲</button>
+            <button type="button" class="op-btn icon" data-act="move-down" data-person="${p.id}" title="Move down">▼</button>
+            <select class="op-move" data-act="move-person" data-person="${p.id}" title="Move to another team">${orgMoveOptions(_orgPersonSid(p.id))}</select>
+            <button type="button" class="op-btn danger" data-act="del-person" data-person="${p.id}">Remove</button>
+          </div>
+        </div>`;
+    }
+    function _orgPersonSid(pid) {
+      const r = orgFindPerson(getOrg(), pid);
+      return r ? r.section.id : '';
+    }
+    function renderOrgSection(s) {
+      let head = '';
+      if (_orgForm && _orgForm.t === 'section-rename' && _orgForm.id === s.id) {
+        head = textFormHtml('section-rename', s.id, s.label, false);
+      } else if (s.label) {
+        head = `
+          <div class="org-section-head">
+            <span class="org-section-title">${escHtml(s.label)}</span>
+            <span class="org-section-tools">
+              <button type="button" class="op-btn icon" data-act="rename-section" data-section="${s.id}">Rename</button>
+              <button type="button" class="op-btn icon danger" data-act="del-section" data-section="${s.id}" title="Delete team">✕</button>
+            </span>
+          </div>`;
+      }
+      const people = s.people.length
+        ? s.people.map(renderOrgPerson).join('')
+        : `<div class="org-empty">No one assigned yet.</div>`;
+      const addForm = (_orgForm && _orgForm.t === 'person-add' && _orgForm.id === s.id)
+        ? personFormHtml(s.id, null) : '';
+      return `
+        <div class="org-section" data-section="${s.id}">
+          ${head}
+          <div class="org-people">${people}</div>
+          ${addForm}
+          <button type="button" class="org-add" data-act="add-person" data-section="${s.id}">+ Add person</button>
+        </div>`;
+    }
+    function renderOrgBucket(b) {
+      const ac = b.accent ? ` ac-${b.accent}` : '';
+      const count = b.sections.reduce((n, s) => n + s.people.length, 0);
+      let head;
+      if (_orgForm && _orgForm.t === 'bucket-rename' && _orgForm.id === b.id) {
+        head = `<div class="org-bucket-head" style="display:block">${textFormHtml('bucket-rename', b.id, b.label, true, b.accent)}</div>`;
+      } else {
+        head = `
+          <div class="org-bucket-head">
+            <span class="org-bucket-title">${escHtml(b.label)}<span class="ct">${count}</span></span>
+            <span class="org-bucket-tools">
+              <button type="button" class="op-btn icon" data-act="rename-bucket" data-bucket="${b.id}">Rename</button>
+              <button type="button" class="op-btn icon" data-act="add-section" data-bucket="${b.id}">+ Team</button>
+              <button type="button" class="op-btn icon danger" data-act="del-bucket" data-bucket="${b.id}" title="Delete bucket">✕</button>
+            </span>
+          </div>`;
+      }
+      const addSec = (_orgForm && _orgForm.t === 'section-add' && _orgForm.id === b.id)
+        ? textFormHtml('section-add', b.id, '', false) : '';
+      return `
+        <div class="org-bucket${ac}" data-bucket="${b.id}">
+          ${head}
+          <div class="org-bucket-body">
+            ${addSec}
+            ${b.sections.map(renderOrgSection).join('')}
+          </div>
+        </div>`;
+    }
+    function renderOrgColumn(col) {
+      const lead = col.lead
+        ? `<span class="org-col-lead">Reports to <b>${escHtml(col.lead)}</b></span>` : '';
+      const addBucket = (_orgForm && _orgForm.t === 'bucket-add' && _orgForm.id === col.id)
+        ? textFormHtml('bucket-add', col.id, '', true, '')
+        : `<button type="button" class="org-add bucket" data-act="add-bucket" data-col="${col.id}">+ Add ${col.label === 'Operations' ? 'region / team' : 'bucket'}</button>`;
+      return `
+        <div class="org-col" data-col="${col.id}">
+          <div class="org-col-head">
+            <span class="org-col-title">${escHtml(col.label)}</span>
+            ${lead}
+          </div>
+          <div class="org-buckets">
+            ${col.buckets.map(renderOrgBucket).join('')}
+          </div>
+          <div class="org-add-bucket-wrap">${addBucket}</div>
+        </div>`;
+    }
+    function renderOrgLeadership(org) {
+      const L = org.leadership || [];
+      const card = (p, isTop) => {
+        if (_orgForm && _orgForm.t === 'lead-edit' && _orgForm.id === p.id) {
+          return `<div class="org-lead-card${isTop ? ' is-top' : ''}">${leadFormHtml(p)}</div>`;
+        }
+        return `
+          <div class="org-lead-card${isTop ? ' is-top' : ''}" data-lead="${p.id}">
+            <div class="n">${escHtml(p.name)}</div>
+            <div class="t">${escHtml(p.title)}</div>
+            ${p.location ? `<div class="l">${escHtml(p.location)}</div>` : ''}
+            <div class="op-tools" style="justify-content:center">
+              <button type="button" class="op-btn" data-act="edit-lead" data-lead="${p.id}">Edit</button>
+            </div>
+          </div>`;
+      };
+      const top = L[0];
+      const rest = L.slice(1);
+      return `
+        <div class="org-leadership">
+          ${top ? card(top, true) : ''}
+          ${rest.length ? '<div class="org-lead-divider"></div>' : ''}
+          <div class="org-lead-row">${rest.map(p => card(p, false)).join('')}</div>
+        </div>`;
+    }
+    function renderOrg() {
+      const body = document.getElementById('org-body');
+      if (!body) return;
+      const org = getOrg();
+      _orgSecs = [];
+      for (const col of org.columns)
+        for (const b of col.buckets)
+          for (const s of b.sections)
+            _orgSecs.push({ id: s.id, label: b.label + (s.label ? ' › ' + s.label : '') });
+      body.innerHTML =
+        renderOrgLeadership(org) +
+        org.columns.map(renderOrgColumn).join('');
+    }
+
+    function crumbParts(state) {
+      const root = { label: 'Process Document', href: '#/' };
+      if (state.view === 'landing') return [root];
+      if (state.view === 'org') return [root, { label: 'Org Chart', href: '#/org' }];
+      if (state.view === 'purchasing') {
+        const parts = [root, { label: 'Purchasing', href: '#/purchasing' }];
+        if (state.id) parts.push({ label: `${byId(state.id).num}. ${byId(state.id).title}` });
+        return parts;
+      }
+      if (state.view === 'post') {
+        const parts = [root, { label: 'Post-Sales', href: '#/post' }];
+        if (state.id) parts.push({ label: `${byId(state.id).num}. ${byId(state.id).title}` });
+        return parts;
+      }
+      if (state.view === 'pre-overview') {
+        const parts = [root, { label: 'Pre-Sales', href: '#/pre' }];
+        if (state.id) parts.push({ label: `${byId(state.id).num}. ${byId(state.id).title}` });
+        return parts;
+      }
+      if (state.view === 'branch') {
+        const meta = branchBySlug(state.branch);
+        const branchName = meta ? meta.name : state.branch;
+        const parts = [root, { label: 'Pre-Sales', href: '#/pre' }, { label: branchName, href: `#/pre/${state.branch}` }];
+        if (state.id) parts.push({ label: `${byId(state.id).num}. ${byId(state.id).title}` });
+        return parts;
+      }
+      return [root];
+    }
+
+    function setCrumbs(state) {
+      const el = document.getElementById('crumbs');
+      const parts = crumbParts(state);
+
+      // Build the topbar breadcrumb HTML (only shown in standalone mode)
+      const html = parts.map((p, i) => {
+        const isLast = i === parts.length - 1;
+        const sep = i > 0 ? '<span class="sep">/</span>' : '';
+        const item = isLast || !p.href
+          ? `<span class="here">${p.label}</span>`
+          : `<a href="${p.href}">${p.label}</a>`;
+        return sep + item;
+      }).join('');
+      el.innerHTML = html;
+
+      // Notify the host frame (Instrata Project Tools) so the sidebar can
+      // reflect the current position within the doc.
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'avss-crumbs', parts }, '*');
+      }
+    }
+
+    function showOnly(viewId) {
+      ['landing','flow','detail','org'].forEach(v => {
+        const el = document.getElementById(v);
+        if (!el) return;
+        if (v === viewId) el.classList.remove('hidden');
+        else el.classList.add('hidden');
+      });
+    }
+
+    // URL routing. Pattern table (checked top-down):
+    //   #/step/<id>             -> legacy redirect into its section
+    //   #/post/step/<id>        -> post flow + detail panel
+    //   #/post                  -> post flow
+    //   #/pre/step/<id>         -> pre overview + triage detail
+    //   #/pre/<branch>/step/<id>-> branch flow + detail
+    //   #/pre/<branch>          -> branch flow
+    //   #/pre                   -> pre-sales overview
+    //   #/                      -> top landing
+    function route() {
+      const hash = window.location.hash || '#/';
+      let m;
+      updateOrgNav();
+
+      // Legacy: #/step/<id> from older bookmarks — route to the step's modern home.
+      if ((m = hash.match(/^#\/step\/(\d+)/))) {
+        const id = parseInt(m[1], 10);
+        const s = byId(id);
+        if (!s) { window.location.hash = '#/'; return; }
+        if (s.section === 'purchasing') { window.location.hash = `#/purchasing/step/${id}`; return; }
+        if (s.section === 'post') { window.location.hash = `#/post/step/${id}`; return; }
+        if (s.branch === 'triage') { window.location.hash = `#/pre/step/${id}`; return; }
+        window.location.hash = `#/pre/${s.branch}/step/${id}`;
+        return;
+      }
+
+      // Purchasing.
+      if ((m = hash.match(/^#\/purchasing\/step\/(\d+)/))) {
+        const id = parseInt(m[1], 10);
+        if (!byId(id)) { window.location.hash = '#/purchasing'; return; }
+        showOnly('flow');
+        renderFlow('purchasing', id);
+        setCrumbs({ view: 'purchasing', id });
+        window.scrollTo(0, 0);
+        return;
+      }
+      if (/^#\/purchasing(\/|$)/.test(hash)) {
+        showOnly('flow');
+        renderFlow('purchasing');
+        setCrumbs({ view: 'purchasing' });
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Post-sales.
+      if ((m = hash.match(/^#\/post\/step\/(\d+)/))) {
+        const id = parseInt(m[1], 10);
+        if (!byId(id)) { window.location.hash = '#/post'; return; }
+        showOnly('flow');
+        renderFlow('post', id);
+        setCrumbs({ view: 'post', id });
+        window.scrollTo(0, 0);
+        return;
+      }
+      if (/^#\/post(\/|$)/.test(hash)) {
+        showOnly('flow');
+        renderFlow('post');
+        setCrumbs({ view: 'post' });
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Pre-sales overview + triage step.
+      if ((m = hash.match(/^#\/pre\/step\/(\d+)/))) {
+        const id = parseInt(m[1], 10);
+        const s = byId(id);
+        if (!s) { window.location.hash = '#/pre'; return; }
+        // If the user landed here with a non-triage step ID, route them to that
+        // step's proper branch flow so they get the right context.
+        if (s.section !== 'pre') { window.location.hash = `#/post/step/${id}`; return; }
+        if (s.branch !== 'triage') { window.location.hash = `#/pre/${s.branch}/step/${id}`; return; }
+        showOnly('flow');
+        renderFlow('pre', id);
+        setCrumbs({ view: 'pre-overview', id });
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Branch flow + step.
+      if ((m = hash.match(/^#\/pre\/([a-z-]+)\/step\/(\d+)/))) {
+        const branch = m[1];
+        const id = parseInt(m[2], 10);
+        if (!branchBySlug(branch)) { window.location.hash = '#/pre'; return; }
+        if (!byId(id)) { window.location.hash = `#/pre/${branch}`; return; }
+        showOnly('flow');
+        renderFlow(branch, id);
+        setCrumbs({ view: 'branch', branch, id });
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Branch flow (no step).
+      if ((m = hash.match(/^#\/pre\/([a-z-]+)/))) {
+        const branch = m[1];
+        if (!branchBySlug(branch)) { window.location.hash = '#/pre'; return; }
+        showOnly('flow');
+        renderFlow(branch);
+        setCrumbs({ view: 'branch', branch });
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Pre-sales overview (no step).
+      if (/^#\/pre(\/|$)/.test(hash)) {
+        showOnly('flow');
+        renderFlow('pre');
+        setCrumbs({ view: 'pre-overview' });
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Org chart.
+      if (/^#\/org(\/|$)/.test(hash)) {
+        showOnly('org');
+        renderOrg();
+        setCrumbs({ view: 'org' });
+        updateOrgNav();
+        window.scrollTo(0, 0);
+        return;
+      }
+
+      // Default: landing.
+      showOnly('landing');
+      renderLanding();
+      setCrumbs({ view: 'landing' });
+      updateOrgNav();
+      window.scrollTo(0, 0);
+    }
+
+    function updateOrgNav() {
+      const link = document.getElementById('org-nav');
+      if (link) link.classList.toggle('is-active', /^#\/org(\/|$)/.test(window.location.hash || ''));
+    }
+
+    document.getElementById('brand').addEventListener('click', (e) => {
+      e.preventDefault();
+      window.location.hash = '#/';
+    });
+
+    // ---------- Mode toggle wiring ----------
+    function applyMode(mode) {
+      const m = mode === 'manager' ? 'manager' : 'user';
+      localStorage.setItem(MODE_KEY, m);
+      document.body.dataset.mode = m;
+      document.querySelectorAll('#mode-toggle button').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === m);
+      });
+      // On the org chart, re-render so Manager controls appear / disappear.
+      // Cancel any half-open inline form on a mode flip.
+      if (/^#\/org(\/|$)/.test(window.location.hash || '')) {
+        _orgForm = null;
+        renderOrg();
+      }
+      // Re-render the open detail panel (if any) so edit buttons appear /
+      // disappear. Preserve panel scroll so toggling mode doesn't jump.
+      const hash = window.location.hash || '';
+      let which = null, stepId = null;
+      let match;
+      if ((match = hash.match(/^#\/purchasing\/step\/(\d+)/))) {
+        which = 'purchasing'; stepId = parseInt(match[1], 10);
+      } else if ((match = hash.match(/^#\/pre\/([a-z-]+)\/step\/(\d+)/))) {
+        // Branch context. Validate the branch slug; otherwise leave the panel alone.
+        if (branchBySlug(match[1])) { which = match[1]; stepId = parseInt(match[2], 10); }
+      } else if ((match = hash.match(/^#\/pre\/step\/(\d+)/))) {
+        which = 'pre'; stepId = parseInt(match[1], 10);
+      } else if ((match = hash.match(/^#\/post\/step\/(\d+)/))) {
+        which = 'post'; stepId = parseInt(match[1], 10);
+      }
+      if (which && stepId) {
+        const oldBody = document.querySelector('.panel-body');
+        const scrollTop = oldBody ? oldBody.scrollTop : 0;
+        renderInlineDetail(stepId, which);
+        const newBody = document.querySelector('.panel-body');
+        if (newBody) newBody.scrollTop = scrollTop;
+      }
+    }
+    document.getElementById('mode-toggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-mode]');
+      if (!btn) return;
+      applyMode(btn.dataset.mode);
+    });
+
+    // ---------- Inline edit delegation on the detail panel ----------
+    // Single delegated listener — the panel element persists across renders,
+    // only its innerHTML changes, so this only needs to be bound once.
+    document.getElementById('detail-panel').addEventListener('click', (e) => {
+      if (getMode() !== 'manager') return;
+      const panelBody = e.target.closest('.panel-body');
+      if (!panelBody) return;
+      const stepId = parseInt(panelBody.dataset.stepId, 10);
+      if (!stepId) return;
+      const section = e.target.closest('[data-section]');
+
+      if (e.target.matches('.edit-btn') && section) {
+        section.outerHTML = renderSection(stepId, section.dataset.section, true);
+        return;
+      }
+      if (e.target.matches('.btn-cancel') && section) {
+        section.outerHTML = renderSection(stepId, section.dataset.section, false);
+        return;
+      }
+      if (e.target.matches('.btn-save') && section) {
+        const key = section.dataset.section;
+        const patch = collectSectionEdit(section, key);
+        if (patch) saveOverride(stepId, patch);
+        section.outerHTML = renderSection(stepId, key, false);
+        return;
+      }
+      if (e.target.matches('.btn-remove')) {
+        const row = e.target.closest('.edit-row');
+        if (row) row.remove();
+        return;
+      }
+      if (e.target.matches('.btn-add-row') && section) {
+        const rowsEl = section.querySelector('.edit-rows');
+        if (!rowsEl) return;
+        const i = rowsEl.querySelectorAll('.edit-row').length;
+        const html = section.dataset.section === 'details'
+          ? detailRowHtml(i, '', '')
+          : noteRowHtml(i, '');
+        rowsEl.insertAdjacentHTML('beforeend', html);
+        return;
+      }
+    });
+
+    // ---------- Org chart edit delegation (Manager mode only) ----------
+    function openOrgForm(form) {
+      _orgForm = form;
+      renderOrg();
+      const f = document.querySelector('#org .org-edit-form input, #org .org-edit-form select');
+      if (f) { f.focus(); if (f.select) f.select(); }
+    }
+    function orgFormVals() {
+      const form = document.querySelector('#org .org-edit-form');
+      if (!form) return null;
+      const get = (n) => {
+        const el = form.querySelector(`[name="${n}"]`);
+        if (!el) return undefined;
+        return el.type === 'checkbox' ? el.checked : el.value;
+      };
+      return { form, get };
+    }
+
+    document.getElementById('org').addEventListener('click', (e) => {
+      if (getMode() !== 'manager') return;
+
+      // Reset-to-default lives in the hero toolbar.
+      if (e.target.id === 'org-reset') {
+        if (confirm('Reset the org chart to the Q2 2026 default? This discards all changes saved in this browser.')) {
+          resetOrg(); _orgForm = null; renderOrg();
+        }
+        return;
+      }
+
+      const btn = e.target.closest('[data-act]');
+      if (!btn || btn.tagName === 'SELECT') return;
+      const act = btn.dataset.act;
+      const org = getOrg();
+
+      // --- open inline forms ---
+      if (act === 'edit-person')  return openOrgForm({ t: 'person-edit',   id: btn.dataset.person });
+      if (act === 'add-person')   return openOrgForm({ t: 'person-add',    id: btn.dataset.section });
+      if (act === 'edit-lead')    return openOrgForm({ t: 'lead-edit',     id: btn.dataset.lead });
+      if (act === 'rename-bucket')return openOrgForm({ t: 'bucket-rename', id: btn.dataset.bucket });
+      if (act === 'add-section')  return openOrgForm({ t: 'section-add',   id: btn.dataset.bucket });
+      if (act === 'rename-section')return openOrgForm({ t: 'section-rename', id: btn.dataset.section });
+      if (act === 'add-bucket')   return openOrgForm({ t: 'bucket-add',    id: btn.dataset.col });
+      if (act === 'cancel-org')   { _orgForm = null; return renderOrg(); }
+
+      // --- mutations ---
+      if (act === 'del-person') {
+        const r = orgFindPerson(org, btn.dataset.person);
+        if (r && confirm(`Remove ${r.person.name || 'this person'}?`)) {
+          r.section.people.splice(r.idx, 1);
+          saveOrg(org); _orgForm = null; renderOrg();
+        }
+        return;
+      }
+      if (act === 'move-up' || act === 'move-down') {
+        const r = orgFindPerson(org, btn.dataset.person);
+        if (!r) return;
+        const arr = r.section.people;
+        const j = act === 'move-up' ? r.idx - 1 : r.idx + 1;
+        if (j < 0 || j >= arr.length) return;
+        [arr[r.idx], arr[j]] = [arr[j], arr[r.idx]];
+        saveOrg(org); renderOrg();
+        return;
+      }
+      if (act === 'del-bucket') {
+        const f = orgFindBucket(org, btn.dataset.bucket);
+        if (!f) return;
+        const n = f.bucket.sections.reduce((a, s) => a + s.people.length, 0);
+        if (confirm(`Delete "${f.bucket.label}"${n ? ` and its ${n} ${n === 1 ? 'person' : 'people'}` : ''}?`)) {
+          f.col.buckets = f.col.buckets.filter(b => b.id !== f.bucket.id);
+          saveOrg(org); _orgForm = null; renderOrg();
+        }
+        return;
+      }
+      if (act === 'del-section') {
+        const f = orgFindSection(org, btn.dataset.section);
+        if (!f) return;
+        const n = f.section.people.length;
+        if (confirm(`Delete the "${f.section.label}" team${n ? ` and its ${n} ${n === 1 ? 'person' : 'people'}` : ''}?`)) {
+          f.bucket.sections = f.bucket.sections.filter(s => s.id !== f.section.id);
+          saveOrg(org); _orgForm = null; renderOrg();
+        }
+        return;
+      }
+
+      // --- commit forms ---
+      if (act === 'commit-person') {
+        const v = orgFormVals(); if (!v) return;
+        const sid = v.form.dataset.section;
+        const pid = v.form.dataset.person;
+        const tbd = !!v.get('tbd');
+        let name = (v.get('name') || '').trim();
+        if (!name) { name = 'TBD'; }
+        const patch = {
+          name,
+          title: (v.get('title') || '').trim(),
+          location: (v.get('location') || '').trim(),
+          tbd: tbd || name.toUpperCase() === 'TBD'
+        };
+        if (pid) {
+          const r = orgFindPerson(org, pid);
+          if (r) Object.assign(r.person, patch);
+        } else {
+          const f = orgFindSection(org, sid);
+          if (f) f.section.people.push(Object.assign({ id: orgUid('p') }, patch));
+        }
+        saveOrg(org); _orgForm = null; renderOrg();
+        return;
+      }
+      if (act === 'commit-lead') {
+        const v = orgFormVals(); if (!v) return;
+        const lead = (org.leadership || []).find(l => l.id === v.form.dataset.lead);
+        if (lead) {
+          lead.name = (v.get('name') || '').trim() || lead.name;
+          lead.title = (v.get('title') || '').trim();
+          lead.location = (v.get('location') || '').trim();
+        }
+        saveOrg(org); _orgForm = null; renderOrg();
+        return;
+      }
+      if (act === 'commit-text') {
+        const v = orgFormVals(); if (!v) return;
+        const kind = v.form.dataset.kind;
+        const id = v.form.dataset.id;
+        const label = (v.get('label') || '').trim();
+        const accent = v.get('accent');
+        if (kind === 'bucket-rename') {
+          const f = orgFindBucket(org, id);
+          if (f) { if (label) f.bucket.label = label; if (accent !== undefined) f.bucket.accent = accent; }
+        } else if (kind === 'section-rename') {
+          const f = orgFindSection(org, id);
+          if (f && label) f.section.label = label;
+        } else if (kind === 'section-add') {
+          const f = orgFindBucket(org, id);
+          if (f) f.bucket.sections.push({ id: orgUid('s'), label: label || 'New team', people: [] });
+        } else if (kind === 'bucket-add') {
+          const col = org.columns.find(c => c.id === id);
+          if (col) {
+            const isOps = /operation/i.test(col.label);
+            const sections = isOps
+              ? [
+                  { id: orgUid('s'), label: 'AV Project Manager', people: [] },
+                  { id: orgUid('s'), label: 'AV Field Engineers / Technicians', people: [] },
+                  { id: orgUid('s'), label: 'Service', people: [] }
+                ]
+              : [{ id: orgUid('s'), label: '', people: [] }];
+            col.buckets.push({ id: orgUid('b'), label: label || 'New bucket', accent: accent || '', sections });
+          }
+        }
+        saveOrg(org); _orgForm = null; renderOrg();
+        return;
+      }
+    });
+
+    document.getElementById('org').addEventListener('change', (e) => {
+      if (getMode() !== 'manager') return;
+      const sel = e.target.closest('select[data-act="move-person"]');
+      if (!sel || !sel.value) return;
+      const org = getOrg();
+      const r = orgFindPerson(org, sel.dataset.person);
+      const dest = orgFindSection(org, sel.value);
+      if (!r || !dest) return;
+      const [moved] = r.section.people.splice(r.idx, 1);
+      dest.section.people.push(moved);
+      saveOrg(org); _orgForm = null; renderOrg();
+    });
+
+    document.getElementById('org').addEventListener('keydown', (e) => {
+      const form = e.target.closest('.org-edit-form');
+      if (!form) return;
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+        e.preventDefault();
+        const c = form.querySelector('[data-act^="commit"]');
+        if (c) c.click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        _orgForm = null; renderOrg();
+      }
+    });
+
+    // Initialize mode from localStorage on first load.
+    applyMode(getMode());
+
+    window.addEventListener('hashchange', route);
+    route();
+  </script>
+</body>
+</html>

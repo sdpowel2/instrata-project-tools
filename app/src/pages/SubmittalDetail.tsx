@@ -94,19 +94,17 @@ export function SubmittalDetail() {
     if (!item) return;
     setUploadingItemId(itemId);
     try {
-      // Read the file as base64 (no data: prefix) for the edge function body.
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const result = (e.target?.result as string) ?? '';
-          const stripped = result.split(',')[1] ?? '';
-          resolve(stripped);
-        };
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
-
       if (isSupabaseConfigured()) {
+        // Upload directly to a temp Storage bucket to bypass the ~5MB edge
+        // function body limit — image-heavy PDFs easily exceed that threshold.
+        // The edge function downloads from here, forwards to SharePoint, then
+        // deletes the temp file.
+        const tempPath = `${crypto.randomUUID()}_${file.name.replace(/[^A-Za-z0-9._-]+/g, '_')}`;
+        const { error: storageErr } = await supabase.storage
+          .from('cutsheet-temp')
+          .upload(tempPath, file, { cacheControl: '300', upsert: false });
+        if (storageErr) throw storageErr;
+
         // Route through SharePoint staging. The edge function dedupes
         // against the approved repository first — if a match exists,
         // we attach that instead of staging a duplicate.
@@ -117,7 +115,7 @@ export function SubmittalDetail() {
         }>('sharepoint-cutsheet', {
           body: {
             op: 'uploadStaging',
-            fileBase64: base64,
+            storagePath: tempPath,
             filename: file.name,
             manufacturer: item.manufacturer,
             model: item.model,
@@ -144,7 +142,16 @@ export function SubmittalDetail() {
           throw new Error('SharePoint upload returned no result');
         }
       } else {
-        // Demo mode: in-memory base64 (legacy path).
+        // Demo mode: read as base64 and store in-memory (legacy path, no SharePoint).
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const result = (e.target?.result as string) ?? '';
+            resolve(result.split(',')[1] ?? '');
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
         updateItem(submittalId!, itemId, { cutSheetPath: file.name, cutSheetData: base64 });
       }
     } catch (err) {

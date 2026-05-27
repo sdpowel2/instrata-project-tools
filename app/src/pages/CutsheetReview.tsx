@@ -13,7 +13,7 @@
 // optional reason.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw, Check, X as XIcon, AlertCircle, FileText, FolderCheck } from 'lucide-react';
+import { Loader2, RefreshCw, Check, X as XIcon, AlertCircle, FileText, FolderCheck, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Eyebrow, PageHeader } from '../components/ui';
@@ -48,6 +48,11 @@ export function CutsheetReviewPage() {
   // the admin can convert with a single "Mark as duplicate" click instead of
   // having to navigate elsewhere to figure out the linkage.
   const [duplicateOf, setDuplicateOf] = useState<{ id: string; sharepoint_path: string } | null>(null);
+
+  // PDF preview state — effect is wired up below after `selected` is declared.
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   // Per-row metadata edits before approval. Keyed by staging row id so the
   // form state doesn't get clobbered when the user navigates between items.
@@ -115,6 +120,45 @@ export function CutsheetReviewPage() {
   };
 
   const selected = useMemo(() => items.find((i) => i.id === selectedId) ?? null, [items, selectedId]);
+
+  // Fetch PDF bytes into a local blob URL so the browser renders inline
+  // instead of triggering a download (SharePoint download URLs carry
+  // Content-Disposition: attachment which forces a save-to-disk).
+  useEffect(() => {
+    let blobUrl: string | null = null;
+    let cancelled = false;
+
+    setPdfBlobUrl(null);
+    setPdfError(null);
+
+    if (!selected?.downloadUrl) return;
+
+    setPdfLoading(true);
+
+    fetch(selected.downloadUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        blobUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+        setPdfBlobUrl(blobUrl);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('[CutsheetReview] PDF load failed:', err);
+        setPdfError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { if (!cancelled) setPdfLoading(false); });
+
+    return () => {
+      cancelled = true;
+      // Revoke the blob URL when selection changes or component unmounts
+      // to avoid memory leaks.
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [selected?.id]); // re-run only when the selected item changes
 
   // Pull initial edit values from the staging row whenever selection changes.
   useEffect(() => {
@@ -297,30 +341,49 @@ export function CutsheetReviewPage() {
             </div>
           ) : (
             <>
-              <div className="px-5 py-4 border-b border-border">
-                <Eyebrow>Reviewing</Eyebrow>
-                <div className="text-base font-semibold text-navy mt-0.5 truncate">
-                  {selected.original_filename ?? selected.sharepoint_path.split('/').pop()}
+              <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <Eyebrow>Reviewing</Eyebrow>
+                  <div className="text-base font-semibold text-navy mt-0.5 truncate">
+                    {selected.original_filename ?? selected.sharepoint_path.split('/').pop()}
+                  </div>
+                  <div className="text-xs text-fg-2 mt-1">
+                    Uploaded {new Date(selected.created_at).toLocaleString()}
+                    {selected.file_size_bytes ? ` · ${Math.round(selected.file_size_bytes / 1024)} KB` : ''}
+                  </div>
                 </div>
-                <div className="text-xs text-fg-2 mt-1">
-                  Uploaded {new Date(selected.created_at).toLocaleString()}
-                  {selected.file_size_bytes ? ` · ${Math.round(selected.file_size_bytes / 1024)} KB` : ''}
-                </div>
+                {pdfBlobUrl && (
+                  <a
+                    href={pdfBlobUrl}
+                    download={selected.original_filename ?? 'cutsheet.pdf'}
+                    className="btn-secondary flex-shrink-0"
+                  >
+                    <Download size={16} />
+                    Download
+                  </a>
+                )}
               </div>
 
               <div className="grid grid-cols-[1fr_320px] gap-5 p-5 flex-1 min-h-0">
                 {/* PDF preview */}
-                <div className="bg-surface/50 border border-border rounded-lg overflow-hidden">
-                  {selected.downloadUrl ? (
+                <div className="bg-surface/50 border border-border rounded-lg overflow-hidden flex items-center justify-center">
+                  {pdfLoading ? (
+                    <div className="flex items-center gap-2 text-fg-2 text-sm">
+                      <Loader2 size={16} className="animate-spin" /> Loading PDF…
+                    </div>
+                  ) : pdfBlobUrl ? (
                     <iframe
-                      src={selected.downloadUrl}
+                      src={pdfBlobUrl}
                       title="Cutsheet preview"
                       className="w-full h-full min-h-[500px]"
                     />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-fg-2 text-sm">
-                      Preview URL unavailable.
+                  ) : pdfError ? (
+                    <div className="flex flex-col items-center gap-2 text-fg-2 text-sm px-6 text-center">
+                      <AlertCircle size={20} className="text-red-400" />
+                      <div>Preview failed: {pdfError}</div>
                     </div>
+                  ) : (
+                    <div className="text-fg-2 text-sm">Preview URL unavailable.</div>
                   )}
                 </div>
 
