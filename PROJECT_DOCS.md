@@ -45,6 +45,7 @@
 - **UI → Edge Function → External API** whenever a third-party secret is needed (D-Tools, Graph app-only, Monday, Claude). The browser only ever holds the Supabase JWT.
 - **Edge function → Edge function** is used once: `dtools-import-project` delegates BoM sync to `dtools-project-lookup` to avoid duplicating the location/labor logic.
 - **Cutsheet PDFs** live in SharePoint, not Supabase Storage. Only OEM manuals/closeout artifacts use Supabase's `manuals` bucket.
+- **UI → Supabase Realtime** for live push to connected clients. Currently used for the notification inbox badge count — a channel per `user_id` subscribes to `INSERT` events on the `notifications` table so the bell updates without polling.
 
 ---
 
@@ -281,6 +282,32 @@ Vendor (`add_priced_from_to_bom.sql`): `priced_from` text — DTools "Custom Fie
 - Per-manufacturer default ship-to and need-by — `purchasing_items` rows inherit these unless explicitly overridden. The detail-page UI greys-out an inherited value to make the override behavior obvious.
 - Unique on (`purchasing_module_id`, `manufacturer`). **RLS:** project members.
 
+#### `bug_reports` (`add_bug_reports.sql`)
+- `id` uuid PK, `reporter_id` uuid → `profiles` ON DELETE SET NULL
+- `title` text NOT NULL, `body` text NOT NULL
+- `image_url` text — public URL of an uploaded screenshot in the `bug-screenshots` Storage bucket; null if none attached
+- `page_url` text NOT NULL default `''` — `window.location.pathname` captured when the modal opens
+- `status` text NOT NULL default `'open'` — CHECK ∈ `('open', 'in_progress', 'resolved', 'wont_fix', 'duplicate')`
+- `resolution_note` text — admin-written response, shown to the reporter when notifications are delivered
+- `created_at`, `updated_at` timestamptz
+- **RLS:** any authenticated user can INSERT. Reporters can SELECT their own rows. Admins can SELECT all and UPDATE (status + resolution_note).
+- Indexes on `status`, `reporter_id`, `created_at desc`.
+
+#### `notifications` (`add_notifications.sql`)
+- `id` uuid PK, `user_id` uuid NOT NULL → `profiles` ON DELETE CASCADE
+- `type` text NOT NULL — e.g. `'bug_status_changed'`; open enum, no DB CHECK
+- `title` text NOT NULL, `message` text — optional longer body (the admin's resolution note)
+- `related_id` uuid — `bug_report.id`; reserved for future deep-linking
+- `read` boolean NOT NULL default `false`
+- `created_at` timestamptz
+- **RLS:** users SELECT/UPDATE their own rows only (for marking read). Admins INSERT on behalf of any user.
+- Composite index on `(user_id, read, created_at desc)` for the unread-badge query.
+
+#### `notification_preferences` (`add_notifications.sql`)
+- PK (`user_id`, `type`). `user_id` uuid → `profiles` ON DELETE CASCADE, `type` text, `enabled` boolean NOT NULL default `true`.
+- A **missing row means opted-in** — the application treats absence as the default-enabled state so new notification types surface automatically without requiring a seed step.
+- **RLS:** users can SELECT, INSERT, UPDATE, DELETE their own rows.
+
 ### Database Functions
 
 | Function | Type | Purpose |
@@ -361,6 +388,7 @@ Helper function `cutsheet_is_admin()` (SECURITY DEFINER) replicates the `profile
 | `cutsheets` | private | `{project_id}/...` | Authenticated INSERT; SELECT/DELETE gated by `is_project_member((path[0])::uuid)`. |
 | `as-builts` | private | `{project_id}/...` | Authenticated INSERT; SELECT/DELETE gated by `is_project_member`. |
 | `manuals` | private | `{project_id}/...` | Authenticated INSERT; SELECT/DELETE gated by `is_project_member` (added by `add_product_manuals.sql`). |
+| `bug-screenshots` | public | `{uuid}.{ext}` | Any authenticated user INSERT; public SELECT. URLs are stored verbatim on `bug_reports.image_url` and rendered directly — no signed tokens needed. 5 MB limit; PNG/JPEG/GIF/WebP only. |
 
 > Note: cutsheet **PDFs** for the Cutsheet Repository feature live in **SharePoint**, not the `cutsheets` bucket. The bucket appears to predate the SharePoint repository and likely backs `project_bom_items.cut_sheet_url` for legacy / project-local uploads.
 
@@ -493,7 +521,8 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Files (Project Log) | Future | Standardized project file repository (Contracts / Drawings / Submittals / Meeting Notes / Photos / Closeout). Tab placeholder lives in `ProjectLog.tsx`. |
 | Client / GC Log | Future | Auto-generated timeline of client-level changes — meetings, base-bid contracts, change-order tracking (Requested / Proposed / Rejected / On Hold / Accepted), milestone completions. Branded PDF export. Tab placeholder lives in `ProjectLog.tsx`. |
 | Monday Auto Project Creation | Replaced | Was deliberately no-op; `monday-webhook` now actively creates Project Tools rows on `create_pulse` events from either Monday board (different from the old "create on status=Review" behavior — every new Monday item lands in Project Tools). |
-| Settings | Complete | `SettingsPage.tsx`. |
+| Bug Reporting & Notifications | Complete | Three-phase feature. **Phase 1 — Bug Collection:** `BugReportModal.tsx` (title + body + optional screenshot upload); "Report a Bug" button at the bottom of the sidebar in `Layout.tsx` opens the modal from any page; page URL is captured silently. `add_bug_reports.sql` migration creates the `bug_reports` table and `bug-screenshots` Storage bucket. **Phase 2 — Admin Triage Panel:** `BugReportsCard.tsx` added to the Management section of `AdminDashboardSection`; expandable rows show description, screenshot thumbnail, status dropdown (Open / In Progress / Resolved / Won't Fix / Duplicate), resolution note textarea, and Save; closed issues toggle-hidden for a tidy default view. **Phase 3 — Notifications:** `NotificationBell.tsx` in the sidebar user strip — Supabase Realtime subscription on `notifications WHERE user_id = me` drives the live unread badge; panel marks all read on open. When admin saves Resolved / Won't Fix the reporter's `notification_preferences` are checked (default enabled), then a `notifications` row is inserted for the reporter. Settings → Notifications card (all users): toggle per notification type backed by `notification_preferences`. Migrations: `add_notifications.sql`. |
+| Settings | Complete | `SettingsPage.tsx`. Sections: Company Information, PDF Export Defaults, Team Members (admin), Auto Review Thresholds (admin), Labor Rates (admin), Warehouses (admin), Notifications (all users), About. |
 | Auth (Login / Register) | Complete | `Login.tsx`, `Register.tsx`, `AuthContext.tsx`. |
 
 ---
@@ -641,6 +670,13 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-05-30
+- **Bug Reporting & Notifications — feature shipped (all three phases).**
+  - **Phase 1 — Bug Collection.** New `bug_reports` table (`add_bug_reports.sql`) with a 5-status CHECK (`open / in_progress / resolved / wont_fix / duplicate`), `reporter_id`, `image_url`, `page_url`, and RLS (any authenticated user INSERT; own rows SELECT; admin SELECT+UPDATE all). New `bug-screenshots` Storage bucket (public, 5 MB limit, PNG/JPEG/GIF/WebP). New `BugReportModal.tsx` with required Title + Description fields, optional screenshot upload with inline preview and remove action, silent page-URL capture, and a success state that auto-closes after 2 seconds. "Report a Bug" button (Bug icon) added to the bottom of the sidebar in `Layout.tsx` between the nav and the user strip — renders on every authenticated page.
+  - **Phase 2 — Admin Triage Panel.** New `BugReportsCard.tsx` added to the Management section of `AdminDashboardSection.tsx` (between Cutsheet Review and Triage). Shows open count in the header; lists all non-closed reports newest-first with reporter name, date, page URL, and a status chip. Click any row to expand inline: full description, screenshot thumbnail (click to open full-size), status dropdown, resolution note textarea with context-aware placeholder, and a Save button. Closed issues (Resolved / Won't Fix / Duplicate) are hidden behind a "Show N closed" toggle. Save writes `status` + `resolution_note` + `updated_at` to `bug_reports`; a Phase 3 notification write stub was left at the exact insertion point for wiring later (now wired — see Phase 3 below).
+  - **Phase 3 — Notification System.** New `notifications` and `notification_preferences` tables (`add_notifications.sql`). RLS: users own their rows; admins INSERT on behalf of any user. `notification_preferences` absence = opted-in (no seed step required for new types). New `NotificationBell.tsx` component in the sidebar user strip: bell icon with an orange unread badge, Supabase Realtime channel per `user_id` pushing live INSERT events to the badge count; click opens a fixed panel to the right of the sidebar listing recent notifications with unread dot indicators; marks all read on open. BugReportsCard's Save handler now checks the reporter's `notification_preferences` (defaulting to enabled on missing row) before inserting a `notifications` row when status advances to `resolved` or `wont_fix`. New `NotificationsSection` in `SettingsPage.tsx` (visible to all users, not admin-only): toggle for "Bug report status updates" backed by an upsert to `notification_preferences`. Notification preferences are respected immediately — the toggle controls whether the next admin triage action delivers a notification.
+  - **Migrations to run (in order):** `add_bug_reports.sql`, then `add_notifications.sql`. Storage bucket creation is included in `add_bug_reports.sql`.
 
 ### 2026-05-27
 - **Dashboard + Projects refactor — workspace-vs-personal split, admin section folded in, review system split.** Six-phase refactor of the main menu.
