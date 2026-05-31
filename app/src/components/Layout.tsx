@@ -3,12 +3,14 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, Package, Calendar, Truck, Library,
+  Home, ScanLine, Package, Calendar, Truck, Library, Bug,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
 import { useDocNav } from '../store/docNavStore';
 import { StatusBadge } from './StatusBadge';
+import { BugReportModal } from './BugReportModal';
+import { NotificationBell } from './NotificationBell';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import instrataLogo from '../assets/instrata-logo-white.png';
 
@@ -47,6 +49,7 @@ export function Layout() {
   const docCrumbs = useDocNav((s) => s.crumbs);
   const docNavigate = useDocNav((s) => s.navigate);
   const onDocPage = pathname === '/documentation';
+  const [showBugModal, setShowBugModal] = useState(false);
 
   return (
     <div className="flex h-full">
@@ -173,6 +176,17 @@ export function Layout() {
           )}
         </nav>
 
+        {/* Report a Bug */}
+        <div className="px-2.5 py-2 border-t border-white/10">
+          <button
+            onClick={() => setShowBugModal(true)}
+            className="flex items-center gap-3 w-full py-2 px-2.5 rounded-lg text-[13px] font-medium text-white/40 hover:text-white/70 hover:bg-white/5 transition-colors"
+          >
+            <Bug size={15} />
+            <span>Report a Bug</span>
+          </button>
+        </div>
+
         {/* User */}
         {user && (
           <div className="px-4 py-3 border-t border-white/10 flex items-center gap-2.5">
@@ -183,6 +197,7 @@ export function Layout() {
               <div className="text-white text-[13px] font-semibold truncate">{user.fullName || user.email}</div>
               <div className="text-white/50 text-[11px] truncate">{user.role}</div>
             </div>
+            <NotificationBell />
             <button
               onClick={() => signOut()}
               title="Sign out"
@@ -201,6 +216,8 @@ export function Layout() {
       <main className="flex-1 overflow-y-auto">
         <Outlet />
       </main>
+
+      <BugReportModal open={showBugModal} onClose={() => setShowBugModal(false)} />
     </div>
   );
 }

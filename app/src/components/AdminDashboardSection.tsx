@@ -21,6 +21,7 @@ import {
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useStore } from '../store';
 import { Eyebrow } from './ui';
+import { BugReportsCard } from './BugReportsCard';
 import type { Project, ProjectPhase, ProjectStatus, ReviewRun } from '../types';
 
 interface ManagerItem {
@@ -117,6 +118,8 @@ export function AdminDashboardSection() {
 
       <div className="grid grid-cols-1 gap-5">
         <CutsheetReviewCard pendingCount={pendingCutsheets} />
+
+        <BugReportsCard />
 
         <CategoryCard
           eyebrow="Needs Triage"

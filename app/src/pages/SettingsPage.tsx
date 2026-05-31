@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useStore } from '../store';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -574,6 +574,87 @@ function WarehousesSection() {
   );
 }
 
+// ─── Notifications Section ────────────────────────────────────────────────────
+
+function NotificationsSection() {
+  const { user } = useAuth();
+  const configured = isSupabaseConfigured();
+  const [enabled, setEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+
+  useEffect(() => {
+    if (!user || !configured) { setLoading(false); return; }
+    supabase
+      .from('notification_preferences')
+      .select('enabled')
+      .eq('user_id', user.id)
+      .eq('type', 'bug_status_changed')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data !== null) setEnabled(data.enabled);
+        setLoading(false);
+      });
+  }, [user, configured]);
+
+  const handleToggle = async (val: boolean) => {
+    if (!user) return;
+    setEnabled(val);
+    setSaving(true);
+    await supabase
+      .from('notification_preferences')
+      .upsert(
+        { user_id: user.id, type: 'bug_status_changed', enabled: val },
+        { onConflict: 'user_id,type' },
+      );
+    setSaving(false);
+  };
+
+  if (!configured) {
+    return (
+      <p className="text-sm text-text-secondary">
+        Notification preferences require Supabase to be configured.
+      </p>
+    );
+  }
+
+  if (loading) {
+    return <div className="py-4 flex justify-center"><Loader2 size={16} className="animate-spin text-text-secondary" /></div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface/30">
+        <div className="pr-4">
+          <div className="text-sm font-medium text-text-primary">Bug report status updates</div>
+          <div className="text-xs text-text-secondary mt-0.5">
+            Get notified when the status of a bug you reported changes or is resolved
+          </div>
+        </div>
+        <button
+          onClick={() => handleToggle(!enabled)}
+          disabled={saving}
+          aria-label={enabled ? 'Disable notification' : 'Enable notification'}
+          className={[
+            'relative w-10 h-6 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 border-0 outline-none cursor-pointer',
+            enabled ? 'bg-navy' : 'bg-gray-200',
+          ].join(' ')}
+        >
+          <span
+            className={[
+              'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all duration-200',
+              enabled ? 'left-[22px]' : 'left-[2px]',
+            ].join(' ')}
+          />
+        </button>
+      </div>
+      <p className="text-xs text-text-secondary">
+        More notification types will be added as new features roll out.
+      </p>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { isAdmin } = useAuth();
   const configured = isSupabaseConfigured();
@@ -679,6 +760,14 @@ export function SettingsPage() {
           </div>
         </>
       )}
+
+      <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Bell size={18} className="text-navy" />
+          <h2 className="text-base font-semibold text-navy">Notifications</h2>
+        </div>
+        <NotificationsSection />
+      </div>
 
       <div className="bg-white rounded-xl border border-border shadow-sm p-6">
         <h2 className="text-base font-semibold text-navy mb-4">About</h2>
