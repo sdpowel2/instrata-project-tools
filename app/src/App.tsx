@@ -19,6 +19,7 @@ import { CutsheetReviewPage } from './pages/CutsheetReview';
 import { CutsheetRepositoryPage } from './pages/CutsheetRepository';
 import { CutsheetMyUploadsPage } from './pages/CutsheetMyUploads';
 import { ProductsPage } from './pages/ProductsPage';
+import { DirectoryPage } from './pages/DirectoryPage';
 import { EffortSurveyPage } from './pages/EffortSurvey';
 import { ScheduleMilestonesPage } from './pages/operations/ScheduleMilestones';
 import { PurchasingListPage } from './pages/operations/PurchasingList';
@@ -105,6 +106,7 @@ export default function App() {
                 <Route path="purchasing/:purchasingId" element={<PurchasingDetailPage />} />
               </Route>
               <Route path="products" element={<ProductsPage />} />
+              <Route path="directory" element={<DirectoryPage />} />
               <Route path="documentation" element={<DocumentationPage />} />
               <Route path="settings" element={<SettingsPage />} />
 

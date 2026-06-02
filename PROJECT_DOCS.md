@@ -381,6 +381,12 @@ Helper function `cutsheet_is_admin()` (SECURITY DEFINER) replicates the `profile
 | `ms_graph_tokens` | Per-user OAuth tokens. UNIQUE(`user_id`). Stores `access_token`, `refresh_token`, `expires_at`. RLS: own row + admin only. |
 | `personal_ops_email_flags` | Triage state per Graph `message_id`. `status` ∈ active/flagged/deferred/dismissed. `session_type` and `deferred_to` ∈ morning/midday/eod. `urgency_score` numeric, `urgency_reason` text. Indexed by (`user_id`, `message_id`). |
 
+### Directory — Vendor Contacts (`add_vendor_contacts.sql`)
+
+| Table | Purpose |
+|---|---|
+| `vendor_contacts` | Shared, org-wide directory of manufacturer / distributor / rep contacts surfaced under the **Directory** sidebar entry. Columns: `company` (required), `company_type` ∈ `manufacturer`/`distributor`/`rep`/`other` (nullable), `rep_for` (comma-separated brands), `name`, `title`, `email`, `phone`, `website`, `role` ("what they do for us"), `notes`, `technical` bool, `active` bool (deactivate = soft hide; delete = hard remove), `created_by`, `created_at`, `updated_at`. **Open access model** — RLS grants any authenticated user SELECT/INSERT/UPDATE/DELETE (no admin gate, no approval queue). Migration seeds ~80 contacts on an empty table only (guarded by `if not exists (select 1 …)` so re-runs don't duplicate). Replaces the old standalone `Vendor Contacts.html` (localStorage + mailto approval queue). Logos are fetched client-side from the website domain (Clearbit → favicon → initials), so nothing logo-related is stored. |
+
 ### Storage Buckets
 
 | Bucket | Visibility | Path convention | Policies |
@@ -522,6 +528,7 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Client / GC Log | Future | Auto-generated timeline of client-level changes — meetings, base-bid contracts, change-order tracking (Requested / Proposed / Rejected / On Hold / Accepted), milestone completions. Branded PDF export. Tab placeholder lives in `ProjectLog.tsx`. |
 | Monday Auto Project Creation | Replaced | Was deliberately no-op; `monday-webhook` now actively creates Project Tools rows on `create_pulse` events from either Monday board (different from the old "create on status=Review" behavior — every new Monday item lands in Project Tools). |
 | Bug Reporting & Notifications | Complete | Three-phase feature. **Phase 1 — Bug Collection:** `BugReportModal.tsx` (title + body + optional screenshot upload); "Report a Bug" button at the bottom of the sidebar in `Layout.tsx` opens the modal from any page; page URL is captured silently. `add_bug_reports.sql` migration creates the `bug_reports` table and `bug-screenshots` Storage bucket. **Phase 2 — Admin Triage Panel:** `BugReportsCard.tsx` added to the Management section of `AdminDashboardSection`; expandable rows show description, screenshot thumbnail, status dropdown (Open / In Progress / Resolved / Won't Fix / Duplicate), resolution note textarea, and Save; closed issues toggle-hidden for a tidy default view. **Phase 3 — Notifications:** `NotificationBell.tsx` in the sidebar user strip — Supabase Realtime subscription on `notifications WHERE user_id = me` drives the live unread badge; panel marks all read on open. When admin saves Resolved / Won't Fix the reporter's `notification_preferences` are checked (default enabled), then a `notifications` row is inserted for the reporter. Settings → Notifications card (all users): toggle per notification type backed by `notification_preferences`. Migrations: `add_notifications.sql`. |
+| Directory — Vendor Contacts | Complete | `DirectoryPage.tsx` at `/directory` (Workspace sidebar group, `BookUser` icon). Shared org-wide vendor/distributor/rep contact list, ported from the standalone `Vendor Contacts.html`. List view grouped by company + card view, full-text search across company/name/email/phone/title/brands, show-inactive toggle. Add/edit modal with two tabs — manual entry and **Paste signature** (auto-fills name/title/company/email/phone from a pasted email signature via `parseSignature` in `lib/vendorContacts.ts`). Company logos resolved client-side (`VendorLogo.tsx`: Clearbit → Google favicon → initials). **Any signed-in user can add, edit, deactivate, or delete any contact** — no admin gate and no email-approval queue (both removed from the original). Queries Supabase directly (not in the global Zustand store); demo mode renders read-only. Backed by `vendor_contacts` (`add_vendor_contacts.sql`), seeded with ~80 contacts. The route name is intentionally generic to host a future client/CRM database. |
 | Settings | Complete | `SettingsPage.tsx`. Sections: Company Information, PDF Export Defaults, Team Members (admin), Auto Review Thresholds (admin), Labor Rates (admin), Warehouses (admin), Notifications (all users), About. |
 | Auth (Login / Register) | Complete | `Login.tsx`, `Register.tsx`, `AuthContext.tsx`. |
 
@@ -670,6 +677,14 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-06-02
+- **Directory — Vendor Contacts page added; standalone HTML retired.** Folded the standalone `Vendor Contacts.html` (vanilla JS, localStorage-backed, with a mailto "send for approval" queue for non-admins) into the app as a first-class **Directory** feature.
+  - **Server-side persistence.** New `vendor_contacts` table (`add_vendor_contacts.sql`): full contact field set (`company`, `company_type` ∈ manufacturer/distributor/rep/other, `rep_for`, `name`, `title`, `email`, `phone`, `website`, `role`, `notes`, `technical`, `active`) plus `created_by` / `created_at` / `updated_at`. **Open RLS** — any authenticated user can SELECT/INSERT/UPDATE/DELETE (no admin gate). Migration seeds ~80 existing contacts, guarded by `if not exists (select 1 …)` so re-runs never duplicate. Replaces localStorage entirely.
+  - **No admin gate, no approval gateway.** Removed the admin-mode toggle and the mailto/pending-approval queue from the original. Anyone signed in can add/edit/deactivate/delete; "deactivate" soft-hides (`active=false`), delete is permanent.
+  - **New sidebar entry "Directory"** (`/directory`, Workspace group, `BookUser` icon) — for now it opens straight to Vendor Contacts; the generic name reserves room for a future client/CRM database.
+  - **Files.** `app/src/pages/DirectoryPage.tsx` (list-grouped-by-company + card views, search, show-inactive, view/add/edit modal with manual + paste-signature tabs), `app/src/lib/vendorContacts.ts` (ported pure helpers: phone/domain normalization, Clearbit/favicon logo URLs, `parseSignature`, search/sort/group, row mappers), `app/src/components/VendorLogo.tsx` (Clearbit → favicon → initials fallback chain, client-side). Route added in `App.tsx`; sidebar link in `Layout.tsx`. Self-contained — queries Supabase directly rather than going through the global Zustand store.
+  - **Migration to run:** `add_vendor_contacts.sql`.
 
 ### 2026-05-30
 - **Bug Reporting & Notifications — feature shipped (all three phases).**

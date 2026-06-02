@@ -2,5 +2,9 @@ node_modules
 dist
 *.local
 .env
+local.env
 .DS_Store
 *.log
+
+# One-off import sources kept locally, not part of the app
+Vendor Contacts/

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, Package, Calendar, Truck, Library, Bug,
+  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -72,6 +72,7 @@ export function Layout() {
           />
           <SidebarLink to={PROJECTS_NAV.to} icon={PROJECTS_NAV.icon} label={PROJECTS_NAV.label} />
           <SidebarLink to={PRODUCTS_NAV.to} icon={PRODUCTS_NAV.icon} label={PRODUCTS_NAV.label} />
+          <SidebarLink to="/directory" icon={BookUser} label="Directory" />
           <SidebarLink
             to="/documentation"
             icon={Library}
