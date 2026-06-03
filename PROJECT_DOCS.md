@@ -619,6 +619,17 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 ### Fly.io
 - App-level secrets are scoped per Fly app; deployment uses `fly.toml` + `Dockerfile`. The Supabase service-role key **must not** appear here — it stays in Supabase function secrets.
 
+### MCP server (`mcp-server/`, separate Fly app `instrata-project-tools-mcp`)
+Runtime secrets (set via `fly secrets set`, read at **runtime** — not build args):
+
+| Secret | Purpose |
+|---|---|
+| `SUPABASE_URL` | project URL |
+| `SUPABASE_ANON_KEY` | PostgREST apikey (public, same as `VITE_SUPABASE_ANON_KEY`) |
+| `SUPABASE_JWT_SECRET` | **legacy HS256 secret** — mints short-lived per-user JWTs. SENSITIVE; treat like service-role. No service-role key is used by this server. |
+
+Optional client override: `VITE_MCP_SERVER_URL` (frontend build-time) points the Settings "Connect Claude" card at a non-default server URL; defaults to `https://instrata-project-tools-mcp.fly.dev/mcp`.
+
 ### Notable in-code defaults (consider moving to env)
 - D-Tools subsidiary→business-unit map is hard-coded in three functions (`SUBSIDIARY_TO_BU`).
 - Tenant ID `d633c932-8a52-4aeb-a755-c0f1ffaf103c` is a hard-coded fallback in two functions.
@@ -628,7 +639,33 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 
 ---
 
-## 8. Known Limitations & Tech Debt
+## 8. MCP Server (read-only)
+
+A standalone Node/TypeScript service in `mcp-server/`, deployed as a **separate Fly app** (`instrata-project-tools-mcp`) alongside the SPA. It lets internal staff connect a Claude client (Desktop, Code, claude.ai) to their project data and query it in natural language. **Read-only — no write path.**
+
+**Security model (same as the app).** Staff generate a personal token in **Settings → Connect Claude**; only its SHA-256 hash is stored (`mcp_tokens` table). On each request the server resolves the token to a `user_id` (`resolve_mcp_token` RPC), mints a short-lived (~5 min) Supabase JWT for that user, and queries PostgREST **as them** — so the existing RLS policies are the sole authority. A token can only ever surface what its owner already sees in the app. The server holds **no service-role key**.
+
+```
+Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mcp-server
+                                                                      │ resolve_mcp_token → user_id
+                                                                      │ mint {sub:user_id, role:authenticated} JWT
+                                                                      ▼ query AS user
+                                                                  Supabase ── RLS ──▶ only that user's data
+```
+
+**Tools (read-only):** `list_projects`, `get_project`, `get_project_bom`, `list_rfis`, `list_submittals`, `list_purchasing`, `list_milestones`, `search_catalog`, `search_vendor_contacts`. Each mirrors a query already in `app/src/store/index.ts`.
+
+**Transport:** stateless MCP Streamable HTTP (`POST /mcp`), `@modelcontextprotocol/sdk`. Per-token in-memory rate limit. `GET /healthz` for Fly.
+
+⚠️ **Legacy-key dependency.** The minted JWTs are signed with the project's **legacy HS256 secret** (dashboard "Previous Key" — still trusted for verification, and the same key the app's anon key depends on). Stable as long as that key remains. **When you rotate Supabase keys / revoke the legacy HS256 secret, this server's auth must be upgraded at the same time** (relay Supabase-issued tokens, or OAuth). See `mcp-server/README.md`.
+
+**Migration to run:** `add_mcp_tokens.sql` (table + `create_mcp_token` / `resolve_mcp_token` RPCs).
+
+**Deploy:** `cd mcp-server && fly launch --no-deploy && fly secrets set SUPABASE_URL=… SUPABASE_ANON_KEY=… SUPABASE_JWT_SECRET=… && fly deploy`.
+
+---
+
+## 9. Known Limitations & Tech Debt
 
 **Auth & Authorization**
 - `monday-manager-dashboard` does not enforce admin role server-side — it trusts that the UI hides it. A signed-in non-admin who knew the function name could call it.
@@ -671,12 +708,20 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 
 ---
 
-## 9. Changelog
+## 10. Changelog
 
 <!-- Maintained manually. Add entries top-down (newest first). Format suggestion:
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-06-03
+- **MCP server — read-only Claude connector (new `mcp-server/` service).** Standalone Node/TS MCP server (Streamable HTTP, `@modelcontextprotocol/sdk`) deployed as a separate Fly app, letting internal staff connect a Claude client to their project data. See new **§8** for the full design.
+  - **Security = RLS reuse.** Per-user opaque tokens (`add_mcp_tokens.sql`: `mcp_tokens` table storing only SHA-256 hashes, plus `create_mcp_token` / `resolve_mcp_token` RPCs). The server resolves a token to a user, mints a short-lived HS256 JWT for them, and queries PostgREST as that user — existing RLS is the only authority. No service-role key; read-only.
+  - **9 read-only tools** mirroring `app/src/store/index.ts` queries: projects, BoM, RFIs, submittals, purchasing, milestones, catalog search, vendor-contact search.
+  - **Settings → Connect Claude** card (`SettingsPage.tsx`, all signed-in users): generate (shown once), list, and revoke personal tokens; surfaces the server URL + how-to.
+  - **Legacy-key dependency (known):** minted JWTs are signed with the project's legacy HS256 secret (dashboard "Previous Key"). Must upgrade this server's auth whenever Supabase keys are rotated / the legacy secret is revoked.
+  - **Migration to run:** `add_mcp_tokens.sql`. **Deploy:** separate Fly app `instrata-project-tools-mcp` (see `mcp-server/README.md`).
 
 ### 2026-06-02
 - **Directory — Vendor Contacts page added; standalone HTML retired.** Folded the standalone `Vendor Contacts.html` (vanilla JS, localStorage-backed, with a mailto "send for approval" queue for non-admins) into the app as a first-class **Directory** feature.

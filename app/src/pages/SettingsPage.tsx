@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell, KeyRound, Copy, Check } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useStore } from '../store';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -655,6 +655,205 @@ function NotificationsSection() {
   );
 }
 
+// ─── Connect Claude (MCP) Section ─────────────────────────────────────────────
+// Lets any signed-in user mint a personal token for the read-only MCP server
+// (see /mcp-server). Tokens are scoped by RLS exactly like the app, so a token
+// only ever exposes what its owner can already see.
+
+const MCP_SERVER_URL =
+  import.meta.env.VITE_MCP_SERVER_URL || 'https://instrata-project-tools-mcp.fly.dev/mcp';
+
+interface McpToken {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+function ConnectClaudeSection() {
+  const configured = isSupabaseConfigured();
+  const [tokens, setTokens] = useState<McpToken[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [revealedToken, setRevealedToken] = useState<string | null>(null);
+  const [copied, setCopied] = useState<'token' | 'url' | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('mcp_tokens')
+      .select('id, name, created_at, last_used_at')
+      .is('revoked_at', null)
+      .order('created_at', { ascending: false });
+    if (error) console.error('[Settings] Failed to load MCP tokens:', error);
+    else setTokens(data ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (configured) load();
+    else setLoading(false);
+  }, [configured, load]);
+
+  const openModal = () => {
+    setNewName('');
+    setCreateError(null);
+    setRevealedToken(null);
+    setShowModal(true);
+  };
+
+  const handleCreate = async () => {
+    setCreating(true);
+    setCreateError(null);
+    const { data, error } = await supabase.rpc('create_mcp_token', { p_name: newName.trim() });
+    if (error) {
+      setCreateError(error.message);
+    } else {
+      setRevealedToken(data as string);
+      await load();
+    }
+    setCreating(false);
+  };
+
+  const handleRevoke = async (id: string) => {
+    if (!window.confirm('Revoke this token? Any Claude client using it will immediately lose access.')) return;
+    const { error } = await supabase
+      .from('mcp_tokens')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) {
+      alert('Failed to revoke token: ' + error.message);
+      return;
+    }
+    setTokens((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const copy = (text: string, which: 'token' | 'url') => {
+    navigator.clipboard.writeText(text);
+    setCopied(which);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  if (!configured) {
+    return (
+      <p className="text-sm text-text-secondary">
+        Connecting Claude requires Supabase to be configured.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-text-secondary">
+        Generate a personal token to connect a Claude client (Desktop, Code, or claude.ai) to your
+        project data. Claude can read—but never change—exactly what you can see in this app.
+      </p>
+
+      <div className="flex justify-end">
+        <button onClick={openModal} className="btn-primary text-sm">
+          <Plus size={14} /> Generate Token
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="py-4 flex justify-center"><Loader2 size={16} className="animate-spin text-text-secondary" /></div>
+      ) : tokens.length === 0 ? (
+        <p className="text-sm text-text-secondary py-2">No tokens yet. Generate one to get started.</p>
+      ) : (
+        <div className="space-y-2">
+          {tokens.map((t) => (
+            <div key={t.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface/30">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-lg bg-navy/10 flex items-center justify-center flex-shrink-0">
+                  <KeyRound size={16} className="text-navy" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-text-primary truncate">{t.name || 'Untitled token'}</div>
+                  <div className="text-xs text-text-secondary">
+                    Created {new Date(t.created_at).toLocaleDateString()}
+                    {' · '}
+                    {t.last_used_at ? `last used ${new Date(t.last_used_at).toLocaleDateString()}` : 'never used'}
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => handleRevoke(t.id)} title="Revoke" className="p-1.5 rounded-md text-fg-2 hover:bg-red-50 hover:text-red-600 flex-shrink-0">
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal open={showModal} onClose={() => setShowModal(false)} title={revealedToken ? 'Token created' : 'Generate Claude token'}>
+        {revealedToken ? (
+          <div className="space-y-4">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+              Copy this token now — it’s shown only once and can’t be retrieved later. If you lose it, just revoke it and generate a new one.
+            </div>
+
+            <label className="block">
+              <span className="text-sm font-medium text-text-primary">Your token</span>
+              <div className="flex gap-2 mt-1.5">
+                <input readOnly value={revealedToken} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
+                <button onClick={() => copy(revealedToken, 'token')} className="btn-secondary text-sm flex-shrink-0">
+                  {copied === 'token' ? <Check size={14} /> : <Copy size={14} />}
+                </button>
+              </div>
+            </label>
+
+            <label className="block">
+              <span className="text-sm font-medium text-text-primary">MCP server URL</span>
+              <div className="flex gap-2 mt-1.5">
+                <input readOnly value={MCP_SERVER_URL} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
+                <button onClick={() => copy(MCP_SERVER_URL, 'url')} className="btn-secondary text-sm flex-shrink-0">
+                  {copied === 'url' ? <Check size={14} /> : <Copy size={14} />}
+                </button>
+              </div>
+            </label>
+
+            <div className="text-xs text-text-secondary space-y-1">
+              <p className="font-medium text-text-primary">To add it in Claude:</p>
+              <p>Add a custom connector / MCP server using the URL above, with an HTTP header
+              <code className="mx-1 px-1 py-0.5 bg-surface rounded">Authorization: Bearer &lt;token&gt;</code>.</p>
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-border">
+              <button onClick={() => setShowModal(false)} className="btn-primary text-sm">Done</button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <label className="block">
+              <span className="text-sm font-medium text-text-primary">Name</span>
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && !creating && handleCreate()}
+                className="input mt-1.5"
+                placeholder="e.g. Laptop / Claude Desktop"
+              />
+              <span className="text-xs text-text-secondary mt-0.5 block">A label to help you recognize this token later.</span>
+            </label>
+            {createError && (
+              <div className="p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">{createError}</div>
+            )}
+            <div className="flex justify-end gap-2 pt-3 border-t border-border">
+              <button type="button" onClick={() => setShowModal(false)} className="btn-secondary text-sm">Cancel</button>
+              <button onClick={handleCreate} disabled={creating} className="btn-primary text-sm disabled:opacity-50">
+                {creating ? <><Loader2 size={14} className="animate-spin inline mr-1" />Generating…</> : 'Generate'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { isAdmin } = useAuth();
   const configured = isSupabaseConfigured();
@@ -767,6 +966,14 @@ export function SettingsPage() {
           <h2 className="text-base font-semibold text-navy">Notifications</h2>
         </div>
         <NotificationsSection />
+      </div>
+
+      <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <KeyRound size={18} className="text-navy" />
+          <h2 className="text-base font-semibold text-navy">Connect Claude</h2>
+        </div>
+        <ConnectClaudeSection />
       </div>
 
       <div className="bg-white rounded-xl border border-border shadow-sm p-6">

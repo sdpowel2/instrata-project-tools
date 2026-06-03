@@ -1,0 +1,26 @@
+# fly.toml — Instrata Project Tools MCP server (read-only).
+# Deploy from this directory:  fly deploy   (or: fly deploy -c mcp-server/fly.toml)
+# Secrets (runtime env, NOT build args):
+#   fly secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_JWT_SECRET=...
+app = "instrata-project-tools-mcp"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
