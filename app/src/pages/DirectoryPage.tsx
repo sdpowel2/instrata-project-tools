@@ -625,13 +625,30 @@ function ContactFormModal({
             <textarea className="input" rows={3} value={draft.notes} onChange={(e) => set('notes', e.target.value)} placeholder="Any extra context" />
           </Field>
 
-          <label className="flex items-center justify-between p-3 rounded-lg bg-surface border border-border cursor-pointer">
+          <div className="flex items-center justify-between p-3 rounded-lg bg-surface border border-border">
             <div>
               <div className="text-sm font-medium text-fg">{draft.technical ? 'Technical contact' : 'Non-technical contact'}</div>
               <div className="text-xs text-fg-2">{draft.technical ? 'Engineering / support' : 'Sales, account management'}</div>
             </div>
-            <input type="checkbox" checked={draft.technical} onChange={(e) => set('technical', e.target.checked)} className="w-4 h-4 accent-navy" />
-          </label>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={draft.technical}
+              aria-label={draft.technical ? 'Technical contact' : 'Non-technical contact'}
+              onClick={() => set('technical', !draft.technical)}
+              className={[
+                'relative w-10 h-6 rounded-full transition-colors flex-shrink-0 border-0 outline-none cursor-pointer',
+                draft.technical ? 'bg-navy' : 'bg-gray-200',
+              ].join(' ')}
+            >
+              <span
+                className={[
+                  'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all duration-200',
+                  draft.technical ? 'left-[22px]' : 'left-[2px]',
+                ].join(' ')}
+              />
+            </button>
+          </div>
 
           {err && <div className="p-2.5 rounded-lg bg-status-danger-bg text-status-danger-fg text-sm">{err}</div>}
 
