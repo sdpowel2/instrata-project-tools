@@ -98,6 +98,8 @@
 
 > Base schema in `supabase/migration.sql`. Incremental migrations in `supabase/migrations/`. All tables have RLS enabled.
 
+> **Project access model (org-wide view-only, member-gated writes).** As of `open_project_view_access.sql`, every authenticated user has **read-only** access to all project-scoped data — projects and all their children (BoM / DTools sync items, submittals, RFIs, change orders, milestones, closeout, purchasing, quick-start, cutsheet/as-built/manuals storage). **Writes** (INSERT/UPDATE/DELETE) remain gated to project-team members via the `is_project_member()` "manage" policies. Users join a team themselves with the **Add me** button (`allow_self_add_to_project.sql`), then can modify. This mirrors our Monday security parameters. Below, "project members read/manage" describes the *write* gate — reads are open per this model.
+
 ### Core (base schema — `migration.sql`)
 
 #### `profiles`
@@ -313,7 +315,7 @@ Vendor (`add_priced_from_to_bom.sql`): `priced_from` text — DTools "Custom Fie
 | Function | Type | Purpose |
 |---|---|---|
 | `is_admin() → boolean` | SECURITY DEFINER, STABLE | Returns true if `auth.uid()` has `role = 'admin'` in `profiles`. Must be SECURITY DEFINER so the internal `profiles` query bypasses RLS — inline subqueries inside profiles policies cause infinite recursion. Used by the admin SELECT/ALL policies on `profiles`. |
-| `is_project_member(_project_id uuid) → boolean` | SECURITY DEFINER, STABLE | Reused everywhere as the canonical "can see this project" check: admin, OR `projects.created_by = auth.uid()`, OR a row in `project_members`. |
+| `is_project_member(_project_id uuid) → boolean` | SECURITY DEFINER, STABLE | Canonical "can modify this project" check: admin, OR `projects.created_by = auth.uid()`, OR a row in `project_members`. Gates **writes** on project child tables (reads are open org-wide — see the project access model note above). |
 | `set_updated_at()` | trigger fn | Generic — sets `NEW.updated_at = now()`. Wired to `projects` only. |
 | `handle_new_user()` | SECURITY DEFINER | After-insert trigger on `auth.users` — inserts a `profiles` row with `email` + `full_name` from `raw_user_meta_data`. |
 | `cutsheet_is_admin() → boolean` | SECURITY DEFINER | Mirrors the `profiles.role='admin'` check, used inside cutsheet RLS policies. |
@@ -391,9 +393,9 @@ Helper function `cutsheet_is_admin()` (SECURITY DEFINER) replicates the `profile
 
 | Bucket | Visibility | Path convention | Policies |
 |---|---|---|---|
-| `cutsheets` | private | `{project_id}/...` | Authenticated INSERT; SELECT/DELETE gated by `is_project_member((path[0])::uuid)`. |
-| `as-builts` | private | `{project_id}/...` | Authenticated INSERT; SELECT/DELETE gated by `is_project_member`. |
-| `manuals` | private | `{project_id}/...` | Authenticated INSERT; SELECT/DELETE gated by `is_project_member` (added by `add_product_manuals.sql`). |
+| `cutsheets` | private | `{project_id}/...` | Authenticated INSERT; authenticated SELECT (open view, `open_project_view_access.sql`); DELETE gated by `is_project_member((path[0])::uuid)`. |
+| `as-builts` | private | `{project_id}/...` | Authenticated INSERT; authenticated SELECT (open view); DELETE gated by `is_project_member`. |
+| `manuals` | private | `{project_id}/...` | Authenticated INSERT; authenticated SELECT (open view); DELETE gated by `is_project_member` (added by `add_product_manuals.sql`). |
 | `bug-screenshots` | public | `{uuid}.{ext}` | Any authenticated user INSERT; public SELECT. URLs are stored verbatim on `bug_reports.image_url` and rendered directly — no signed tokens needed. 5 MB limit; PNG/JPEG/GIF/WebP only. |
 
 > Note: cutsheet **PDFs** for the Cutsheet Repository feature live in **SharePoint**, not the `cutsheets` bucket. The bucket appears to predate the SharePoint repository and likely backs `project_bom_items.cut_sheet_url` for legacy / project-local uploads.

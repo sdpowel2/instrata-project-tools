@@ -319,24 +319,24 @@ create policy "Users can add themselves to projects"
   on public.project_members for insert with check (user_id = auth.uid());
 
 -- ---- project_bom_items ----
-create policy "Members can view bom items"
-  on public.project_bom_items for select using (public.is_project_member(project_id));
+-- View is open to all authenticated users (see open_project_view_access.sql);
+-- writes stay member-gated via the "manage" FOR ALL policy below.
+create policy "Authenticated users can view bom items"
+  on public.project_bom_items for select using (auth.uid() is not null);
 
 create policy "Members can manage bom items"
   on public.project_bom_items for all using (public.is_project_member(project_id));
 
 -- ---- submittals ----
-create policy "Members can view submittals"
-  on public.submittals for select using (public.is_project_member(project_id));
+create policy "Authenticated users can view submittals"
+  on public.submittals for select using (auth.uid() is not null);
 
 create policy "Members can manage submittals"
   on public.submittals for all using (public.is_project_member(project_id));
 
 -- ---- submittal_items ----
-create policy "Members can view submittal items"
-  on public.submittal_items for select using (
-    public.is_project_member((select project_id from public.submittals where id = submittal_id))
-  );
+create policy "Authenticated users can view submittal items"
+  on public.submittal_items for select using (auth.uid() is not null);
 
 create policy "Members can manage submittal items"
   on public.submittal_items for all using (
@@ -344,24 +344,22 @@ create policy "Members can manage submittal items"
   );
 
 -- ---- rfis ----
-create policy "Members can view rfis"
-  on public.rfis for select using (public.is_project_member(project_id));
+create policy "Authenticated users can view rfis"
+  on public.rfis for select using (auth.uid() is not null);
 
 create policy "Members can manage rfis"
   on public.rfis for all using (public.is_project_member(project_id));
 
 -- ---- closeout_packages ----
-create policy "Members can view closeout packages"
-  on public.closeout_packages for select using (public.is_project_member(project_id));
+create policy "Authenticated users can view closeout packages"
+  on public.closeout_packages for select using (auth.uid() is not null);
 
 create policy "Members can manage closeout packages"
   on public.closeout_packages for all using (public.is_project_member(project_id));
 
 -- ---- warranties ----
-create policy "Members can view warranties"
-  on public.warranties for select using (
-    public.is_project_member((select project_id from public.closeout_packages where id = closeout_id))
-  );
+create policy "Authenticated users can view warranties"
+  on public.warranties for select using (auth.uid() is not null);
 
 create policy "Members can manage warranties"
   on public.warranties for all using (
@@ -369,10 +367,8 @@ create policy "Members can manage warranties"
   );
 
 -- ---- punch_items ----
-create policy "Members can view punch items"
-  on public.punch_items for select using (
-    public.is_project_member((select project_id from public.closeout_packages where id = closeout_id))
-  );
+create policy "Authenticated users can view punch items"
+  on public.punch_items for select using (auth.uid() is not null);
 
 create policy "Members can manage punch items"
   on public.punch_items for all using (
@@ -380,10 +376,8 @@ create policy "Members can manage punch items"
   );
 
 -- ---- sign_off_sheets ----
-create policy "Members can view sign off sheets"
-  on public.sign_off_sheets for select using (
-    public.is_project_member((select project_id from public.closeout_packages where id = closeout_id))
-  );
+create policy "Authenticated users can view sign off sheets"
+  on public.sign_off_sheets for select using (auth.uid() is not null);
 
 create policy "Members can manage sign off sheets"
   on public.sign_off_sheets for all using (
@@ -391,10 +385,8 @@ create policy "Members can manage sign off sheets"
   );
 
 -- ---- as_built_drawings ----
-create policy "Members can view as-built drawings"
-  on public.as_built_drawings for select using (
-    public.is_project_member((select project_id from public.closeout_packages where id = closeout_id))
-  );
+create policy "Authenticated users can view as-built drawings"
+  on public.as_built_drawings for select using (auth.uid() is not null);
 
 create policy "Members can manage as-built drawings"
   on public.as_built_drawings for all using (
@@ -402,8 +394,8 @@ create policy "Members can manage as-built drawings"
   );
 
 -- ---- owner_manuals ----
-create policy "Members can view owner manuals"
-  on public.owner_manuals for select using (public.is_project_member(project_id));
+create policy "Authenticated users can view owner manuals"
+  on public.owner_manuals for select using (auth.uid() is not null);
 
 create policy "Members can manage owner manuals"
   on public.owner_manuals for all using (public.is_project_member(project_id));
@@ -422,12 +414,9 @@ create policy "Authenticated users can upload cutsheets"
   on storage.objects for insert
   with check (bucket_id = 'cutsheets' and auth.uid() is not null);
 
-create policy "Project members can read cutsheets"
+create policy "Authenticated users can read cutsheets"
   on storage.objects for select
-  using (
-    bucket_id = 'cutsheets'
-    and public.is_project_member((string_to_array(name, '/'))[1]::uuid)
-  );
+  using (bucket_id = 'cutsheets' and auth.uid() is not null);
 
 create policy "Project members can delete cutsheets"
   on storage.objects for delete
@@ -440,12 +429,9 @@ create policy "Authenticated users can upload as-builts"
   on storage.objects for insert
   with check (bucket_id = 'as-builts' and auth.uid() is not null);
 
-create policy "Project members can read as-builts"
+create policy "Authenticated users can read as-builts"
   on storage.objects for select
-  using (
-    bucket_id = 'as-builts'
-    and public.is_project_member((string_to_array(name, '/'))[1]::uuid)
-  );
+  using (bucket_id = 'as-builts' and auth.uid() is not null);
 
 create policy "Project members can delete as-builts"
   on storage.objects for delete

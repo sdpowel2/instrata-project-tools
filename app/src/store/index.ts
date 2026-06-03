@@ -1288,10 +1288,16 @@ export const useStore = create<AppState>((set, get) => ({
     const userId = user?.id;
     if (!userId) return;
 
+    // Plain INSERT, not upsert. PostgREST upsert emits ON CONFLICT DO UPDATE,
+    // which makes Postgres evaluate the UPDATE policy ("must already be a
+    // member") even on a first-time add — the chicken-and-egg that silently
+    // blocked non-admins. A bare insert hits only the self-add INSERT policy
+    // (user_id = auth.uid()). A duplicate (already a member) is a harmless
+    // no-op, so we swallow the unique-violation code 23505.
     const { error } = await supabase
       .from('project_members')
-      .upsert({ project_id: projectId, user_id: userId }, { onConflict: 'project_id,user_id' });
-    if (error) {
+      .insert({ project_id: projectId, user_id: userId });
+    if (error && error.code !== '23505') {
       console.error('[Supabase] addSelfToProject failed:', error);
       // Roll back the optimistic update so the UI reflects reality.
       set((s) => {
