@@ -43,6 +43,19 @@ function addFooter(page: PDFPage, font: PDFFont, pageNum: number, totalLabel?: s
   }
 }
 
+/** Draw the navy Table of Contents header band at the top of a TOC page. */
+function drawTocHeader(page: PDFPage, fontBold: PDFFont, continued = false) {
+  const y = PAGE_H - MARGIN;
+  page.drawRectangle({ x: 0, y: y - 4, width: PAGE_W, height: 40, color: NAVY });
+  page.drawText(continued ? 'Table of Contents (continued)' : 'Table of Contents', {
+    x: MARGIN,
+    y: y + 6,
+    size: 18,
+    font: fontBold,
+    color: WHITE,
+  });
+}
+
 /** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
 function sanitize(s: string | null | undefined): string {
   if (!s) return '';
@@ -186,14 +199,17 @@ export async function exportSubmittalPDF(
   coverPage.drawText(footerText, { x: (PAGE_W - ftW) / 2, y: 16, size: 8, font: fontItalic, color: MID_GRAY });
 
   // ===================== TABLE OF CONTENTS =====================
-  const tocPage = pdfDoc.addPage(PageSizes.Letter);
+  // Keep TOC content above the footer; the footer rule sits at y=42, so we
+  // stop new rows once the baseline would drop below the page margin.
+  const TOC_BOTTOM_LIMIT = MARGIN;
+  const TOC_CONTENT_TOP = PAGE_H - MARGIN - 60;
+
+  let tocPage = pdfDoc.addPage(PageSizes.Letter);
   currentPageNum++;
-  let tocY = PAGE_H - MARGIN;
 
   // TOC header
-  tocPage.drawRectangle({ x: 0, y: tocY - 4, width: PAGE_W, height: 40, color: NAVY });
-  tocPage.drawText('Table of Contents', { x: MARGIN, y: tocY + 6, size: 18, font: fontBold, color: WHITE });
-  tocY -= 60;
+  drawTocHeader(tocPage, fontBold);
+  let tocY = TOC_CONTENT_TOP;
 
   // Section entries - we'll fill page numbers in a placeholder approach
   // For now, list sections and items
@@ -216,9 +232,10 @@ export async function exportSubmittalPDF(
     }
   }
 
-  // We'll draw TOC entries and come back to fill page numbers
-  // For now, store positions
-  const tocEntryPositions: { entry: typeof tocEntries[0]; y: number }[] = [];
+  // We'll draw TOC entries and come back to fill page numbers. Track the page
+  // each entry lands on so the page-number/link fill-in below targets the
+  // right page once the TOC spills past page one.
+  const tocEntryPositions: { entry: typeof tocEntries[0]; y: number; page: PDFPage }[] = [];
 
   for (const entry of tocEntries) {
     const x = MARGIN + entry.indent * 20;
@@ -229,9 +246,18 @@ export async function exportSubmittalPDF(
 
     if (isHeader && tocEntries.indexOf(entry) > 0) tocY -= 8;
 
+    // Break to a new TOC page before we'd overlap the footer.
+    if (tocY < TOC_BOTTOM_LIMIT) {
+      addFooter(tocPage, fontRegular, currentPageNum, 'Table of Contents');
+      tocPage = pdfDoc.addPage(PageSizes.Letter);
+      currentPageNum++;
+      drawTocHeader(tocPage, fontBold, true);
+      tocY = TOC_CONTENT_TOP;
+    }
+
     const tocLabel = sanitize(entry.label);
     tocPage.drawText(tocLabel, { x, y: tocY, size, font, color });
-    tocEntryPositions.push({ entry, y: tocY });
+    tocEntryPositions.push({ entry, y: tocY, page: tocPage });
 
     // Draw dot leader
     const textW = font.widthOfTextAtSize(tocLabel, size);
@@ -413,7 +439,7 @@ export async function exportSubmittalPDF(
   // ===================== FILL IN TOC PAGE NUMBERS + LINKS =====================
   // Now go back and write page numbers on the TOC and add clickable links
   const allPages = pdfDoc.getPages();
-  for (const { entry, y } of tocEntryPositions) {
+  for (const { entry, y, page: entryPage } of tocEntryPositions) {
     let pageNum = 0;
     if (entry.pageRef === 'bom') {
       pageNum = bomStartPage;
@@ -428,7 +454,7 @@ export async function exportSubmittalPDF(
     if (pageNum > 0) {
       const pageText = String(pageNum);
       const textX = PAGE_W - MARGIN - fontRegular.widthOfTextAtSize(pageText, 10);
-      tocPage.drawText(pageText, { x: textX, y, size: 10, font: fontRegular, color: NAVY });
+      entryPage.drawText(pageText, { x: textX, y, size: 10, font: fontRegular, color: NAVY });
 
       // Add a clickable link annotation spanning the full TOC row
       const targetPageIdx = pageNum - 1; // 0-based page index
@@ -437,7 +463,7 @@ export async function exportSubmittalPDF(
         const linkX = MARGIN;
         const linkW = PAGE_W - MARGIN * 2;
         const linkH = 16;
-        tocPage.node.addAnnot(
+        entryPage.node.addAnnot(
           pdfDoc.context.register(
             pdfDoc.context.obj({
               Type: 'Annot',
