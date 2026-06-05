@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck, Clock, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ArrowLeft, Download, Upload, FileText, X as XIcon, Check, Loader2, Filter, ChevronDown, ChevronRight, FolderCheck, Clock, RotateCcw, RefreshCw } from 'lucide-react';
 import { useStore } from '../store';
+import { useAuth } from '../contexts/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
@@ -24,11 +25,19 @@ export function SubmittalDetail() {
   const deleteItem = useStore((s) => s.deleteSubmittalItem);
   const setItemApproval = useStore((s) => s.setSubmittalItemApproval);
   const populateFromBoM = useStore((s) => s.populateSubmittalFromBoM);
+  const attachRepoCutsheets = useStore((s) => s.attachRepoCutsheetsToSubmittal);
+  const myProjectIds = useStore((s) => s.myProjectIds);
+  const { isAdmin } = useAuth();
   const allBoM = useStore((s) => s.projectBoM);
   const bomItems = allBoM.filter((b) => b.projectId === projectId);
   const [showAddItem, setShowAddItem] = useState(false);
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [syncingCutsheets, setSyncingCutsheets] = useState(false);
+  const [cutsheetSyncMsg, setCutsheetSyncMsg] = useState<string | null>(null);
+  // Auto cutsheet-sync runs once per submittal open; this guards against the
+  // effect re-firing as items get attached (and React strict-mode double-run).
+  const autoSyncedRef = useRef<string | null>(null);
   const [itemForm, setItemForm] = useState({
     manufacturer: '', model: '', description: '', category: 'Display' as ItemCategory,
     qty: 1, notes: '', sortOrder: 0,
@@ -36,7 +45,46 @@ export function SubmittalDetail() {
   const [excludedExpanded, setExcludedExpanded] = useState(false);
   const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
 
+  // Writes to submittal_items are RLS-gated to project-team members (admins
+  // bypass). Cutsheet auto-attach writes back to those rows, so a non-member's
+  // sync would silently fail — only run/offer it for editors.
+  const canEdit = isAdmin || (!!projectId && myProjectIds.has(projectId));
+
+  // Auto-pull repository cutsheets for any item that's still missing one when
+  // an existing submittal is opened. Previously this only ran at populate
+  // time, so submittals built before a cutsheet was added to the repository
+  // never picked it up.
+  useEffect(() => {
+    if (!submittal || !canEdit || !isSupabaseConfigured()) return;
+    if (autoSyncedRef.current === submittal.id) return;
+    const hasCandidates = submittal.items.some((it) => !it.cutSheetData && !it.cutsheetRepositoryId);
+    if (!hasCandidates) return;
+    autoSyncedRef.current = submittal.id;
+    void attachRepoCutsheets(submittal.id).catch((err) =>
+      console.warn('[SubmittalDetail] auto cutsheet sync failed:', err));
+  }, [submittal, canEdit, attachRepoCutsheets]);
+
   if (!submittal) return <div className="p-8 text-text-secondary">Submittal not found.</div>;
+
+  const handleSyncCutsheets = async () => {
+    setSyncingCutsheets(true);
+    setCutsheetSyncMsg(null);
+    try {
+      const { attached, checked } = await attachRepoCutsheets(submittalId!);
+      setCutsheetSyncMsg(
+        attached > 0
+          ? `Attached ${attached} cutsheet${attached === 1 ? '' : 's'} from the repository.`
+          : checked === 0
+            ? 'All items already have cutsheets.'
+            : 'No new repository matches found.',
+      );
+    } catch (err) {
+      console.error('Cutsheet sync failed:', err);
+      setCutsheetSyncMsg(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSyncingCutsheets(false);
+    }
+  };
 
   const handleAddItem = (e: React.FormEvent) => {
     e.preventDefault();
@@ -250,7 +298,21 @@ export function SubmittalDetail() {
           </button>
           <button onClick={() => setShowCSVImport(true)} className="btn-secondary text-sm"><Upload size={14} /> Import CSV</button>
           <button onClick={() => setShowAddItem(true)} className="btn-secondary text-sm"><Plus size={14} /> Add Line Item</button>
+          {canEdit && isSupabaseConfigured() && (
+            <button
+              onClick={handleSyncCutsheets}
+              disabled={syncingCutsheets}
+              className="btn-secondary text-sm disabled:opacity-60"
+              title="Check the cutsheet repository for any items still missing a cutsheet and attach matches"
+            >
+              {syncingCutsheets ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              {syncingCutsheets ? 'Syncing…' : 'Sync cutsheets from repository'}
+            </button>
+          )}
         </div>
+        {cutsheetSyncMsg && (
+          <div className="mt-3 text-xs text-fg-2">{cutsheetSyncMsg}</div>
+        )}
       </div>
 
       {/* Excluded-from-import banner */}

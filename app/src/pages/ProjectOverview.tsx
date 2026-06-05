@@ -7,7 +7,9 @@ import {
   Calendar, Truck, ShieldCheck,
 } from 'lucide-react';
 import { useStore } from '../store';
+import { useAuth } from '../contexts/AuthContext';
 import { Modal } from '../components/Modal';
+import { JoinProjectModal } from '../components/JoinProjectModal';
 import { CSVImportModal, type ImportedItem } from '../components/CSVImportModal';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { Eyebrow } from '../components/ui';
@@ -42,6 +44,9 @@ export function ProjectOverview() {
   const importBoMItems = useStore((s) => s.importBoMItems);
   const syncDToolsBoM = useStore((s) => s.syncDToolsBoM);
   const linkDToolsAndSyncBoM = useStore((s) => s.linkDToolsAndSyncBoM);
+  const myProjectIds = useStore((s) => s.myProjectIds);
+  const addSelfToProject = useStore((s) => s.addSelfToProject);
+  const { isAdmin } = useAuth();
 
   const submittals = useMemo(() => allSubmittals.filter((x) => x.projectId === projectId), [allSubmittals, projectId]);
   const rfis = useMemo(() => allRfis.filter((x) => x.projectId === projectId), [allRfis, projectId]);
@@ -58,6 +63,10 @@ export function ProjectOverview() {
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
   const [showDToolsPicker, setShowDToolsPicker] = useState(false);
+  // Action a non-member is trying to take — drives the "join or view-only"
+  // modal. `allowViewOnly` is true for read-only destinations (opening a tool),
+  // false for edits (which can't proceed without joining). null = no prompt.
+  const [pendingAction, setPendingAction] = useState<{ run: () => void; allowViewOnly: boolean } | null>(null);
   const [itemForm, setItemForm] = useState({
     manufacturer: '', model: '', description: '',
     category: 'Display' as ItemCategory,
@@ -65,6 +74,46 @@ export function ProjectOverview() {
   });
 
   if (!project) return null;
+
+  // Editing project-scoped data is RLS-gated to team members (admins bypass).
+  // A non-member opening a tool can view it, but their edits won't persist —
+  // so prompt them to join first, unless they've already chosen view-only for
+  // this project this session.
+  const canEdit = isAdmin || myProjectIds.has(project.id);
+  const viewOnlyKey = `viewOnly:${project.id}`;
+  const dismissedViewOnly = () => sessionStorage.getItem(viewOnlyKey) === '1';
+
+  // Gate any membership-requiring action behind the join prompt. Editors run
+  // it immediately. Non-members get the modal — except read-only actions
+  // (allowViewOnly) are let through once they've opted into view-only this
+  // session, so browsing isn't nagged on every click.
+  const requireMembership = (run: () => void, opts?: { allowViewOnly?: boolean }) => {
+    const allowViewOnly = opts?.allowViewOnly ?? false;
+    if (canEdit || (allowViewOnly && dismissedViewOnly())) {
+      run();
+      return;
+    }
+    setPendingAction({ run, allowViewOnly });
+  };
+
+  const handleOpenTool = (tool: string) =>
+    requireMembership(() => navigate(`/projects/${projectId}/${tool}`), { allowViewOnly: true });
+
+  const handleJoinFromPrompt = async () => {
+    const action = pendingAction;
+    await addSelfToProject(project.id);
+    setPendingAction(null);
+    action?.run();
+  };
+
+  const handleViewOnly = () => {
+    const action = pendingAction;
+    sessionStorage.setItem(viewOnlyKey, '1');
+    setPendingAction(null);
+    // Edits can't proceed view-only — just dismiss. Read-only destinations
+    // continue through.
+    if (action?.allowViewOnly) action.run();
+  };
 
   const handleAddItem = (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,13 +277,13 @@ export function ProjectOverview() {
           phase="Pre-Sales"
           items={preItems}
           description="Winning the work. Review specs, compare vendor bids, manage RFIs."
-          onOpen={(tool) => navigate(`/projects/${projectId}/${tool}`)}
+          onOpen={handleOpenTool}
         />
         <ToolGroupCard
           phase="Post-Sales"
           items={postItems}
           description="Delivering the work. Submittals, closeout, and owner handoff."
-          onOpen={(tool) => navigate(`/projects/${projectId}/${tool}`)}
+          onOpen={handleOpenTool}
         />
         <ToolGroupCard
           phase="Operations"
@@ -242,7 +291,7 @@ export function ProjectOverview() {
           description="Running the work day-to-day. Schedule, purchasing, and inventory."
           // Schedule & Milestones is live; Purchasing / Inventory are flagged
           // disabled per-item so they still render dimmed.
-          onOpen={(tool) => navigate(`/projects/${projectId}/${tool}`)}
+          onOpen={handleOpenTool}
         />
       </div>
 
@@ -268,7 +317,7 @@ export function ProjectOverview() {
           project={project}
           bomItems={bomItems}
           changeOrders={changeOrders}
-          onSync={() => {
+          onSync={() => requireMembership(() => {
             if (!projectId) return;
             // Linked already → re-sync against the same DTools project.
             // Not linked yet → open the picker so the user can choose which
@@ -278,13 +327,21 @@ export function ProjectOverview() {
             } else {
               setShowDToolsPicker(true);
             }
-          }}
-          onCsvImport={() => setShowCSVImport(true)}
-          onAddItem={() => setShowAddItem(true)}
+          })}
+          onCsvImport={() => requireMembership(() => setShowCSVImport(true))}
+          onAddItem={() => requireMembership(() => setShowAddItem(true))}
         />
       </div>
 
       <EffortSurveyFooter project={project} onNavigate={(p) => navigate(p)} />
+
+      <JoinProjectModal
+        open={pendingAction !== null}
+        projectName={project.name}
+        onJoin={handleJoinFromPrompt}
+        onViewOnly={handleViewOnly}
+        onClose={() => setPendingAction(null)}
+      />
 
       <CSVImportModal open={showCSVImport} onClose={() => setShowCSVImport(false)} onImport={handleCSVImport} />
 

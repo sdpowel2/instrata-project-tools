@@ -698,6 +698,7 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - Manufacturer subfolder names are sanitized with a single regex; collisions on different inputs that sanitize the same way (e.g. `AB:CD` and `AB-CD`) merge silently.
 
 **Frontend**
+- Project-tool membership gate (`JoinProjectModal` on `ProjectOverview`): a non-member who opens a tool or tries to edit BoM data is prompted to join the project or continue view-only. The **"view only" choice is persisted only for the session** via `sessionStorage` (`viewOnly:{projectId}`), so it re-prompts after a reload or in a new tab. Decision held intentionally — revisit whether to persist this per-user durably (e.g. a `dismissed_view_only` preference) so users who routinely browse other teams' projects aren't re-prompted each session. Note the flag only suppresses the prompt for read-only navigation; edit actions still prompt every time until the user joins.
 - `app/src/store/index.ts` is a single Zustand store — no slicing observable; large pages may re-render aggressively.
 - React 19 + Vite 8 + Tailwind 4 is the bleeding edge; expect ecosystem friction (some libs still emit React 18-era warnings).
 
@@ -716,6 +717,11 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-06-05
+- **Submittal PDF** — Table of Contents now paginates instead of overlapping the footer and getting cut off after page one.
+- **Cutsheets / Auth** — Non-members opening a project tool (or editing BoM data) on `ProjectOverview` now get a `JoinProjectModal` to add themselves to the team or continue view-only, instead of having their writes silently fail under RLS. Root cause: `submittal_items`/BoM writes are gated to project members (admins bypass), and the client swallowed the rejected writes.
+- **Cutsheets** — `SubmittalDetail` now re-runs repository cutsheet auto-attach when an existing submittal is opened (previously only at populate-from-BoM time), plus a manual "Sync cutsheets from repository" button. Gated to editors so view-only users don't trigger silently-failing writes.
 
 ### 2026-06-03
 - **MCP server — read-only Claude connector (new `mcp-server/` service).** Standalone Node/TS MCP server (Streamable HTTP, `@modelcontextprotocol/sdk`) deployed as a separate Fly app, letting internal staff connect a Claude client to their project data. See new **§8** for the full design.
