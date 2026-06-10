@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, MessageSquareWarning, Download, Search } from 'lucide-react';
+import { Plus, MessageSquareWarning, Download, Search, FileText } from 'lucide-react';
 import { useStore } from '../store';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
@@ -8,7 +8,7 @@ import { Modal } from '../components/Modal';
 import { LocationProductPicker } from '../components/LocationProductPicker';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { PhaseRibbon } from '../components/PhaseRibbon';
-import { exportRFIPDF } from '../utils/exportRFIPDF';
+import { exportRFIPDF, exportRFILogPDF } from '../utils/exportRFIPDF';
 import type { RFIStatus } from '../types';
 
 export function RFIList() {
@@ -68,6 +68,13 @@ export function RFIList() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
+  // Open + Answered RFIs are client-facing; Closed/Void stay internal-only.
+  const openRFIs = rfis.filter((r) => r.status !== 'Closed' && r.status !== 'Void');
+
+  const handleExportPDF = () => {
+    if (project) exportRFILogPDF(rfis, project);
+  };
+
   const handleAnswer = () => {
     if (!selectedRFI) return;
     updateRFI(selectedRFI.id, {
@@ -94,6 +101,14 @@ export function RFIList() {
         </div>
         <div className="flex gap-3">
           <button onClick={handleExportCSV} className="btn-secondary text-sm"><Download size={14} /> Export CSV</button>
+          <button
+            onClick={handleExportPDF}
+            disabled={openRFIs.length === 0}
+            title={openRFIs.length === 0 ? 'No open RFIs to export' : `Export ${openRFIs.length} open RFI${openRFIs.length === 1 ? '' : 's'} as a client-facing PDF`}
+            className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <FileText size={14} /> Export PDF
+          </button>
           <button onClick={() => setShowNew(true)} className="btn-orange text-sm"><Plus size={16} /> New RFI</button>
         </div>
       </div>
