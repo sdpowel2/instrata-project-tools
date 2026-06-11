@@ -22,7 +22,7 @@ const result = buildChangeOrderItems(co, parent, parentResult.laborMeta);
 for (const line of result.log) console.log(line);
 console.log('\nitems:');
 for (const it of result.items) {
-  console.log(`  [${it.change_type}] ${it.model}  qty=${it.qty}  equip=${(it.qty * it.unit_price).toFixed(2)}  laborH=${it.labor_hours}  labor$=${it.labor_price.toFixed(2)}`);
+  console.log(`  [${it.change_type}] ${it.model}  qty=${it.qty}  equip=${(it.qty * it.unit_price).toFixed(2)}  laborH=${it.labor_hours}  labor$=${it.labor_price.toFixed(2)}  loc=${it.location || '(none)'}`);
 }
 console.log(`\npriceDelta=${result.priceDelta}  costDelta=${result.costDelta}  hoursDelta=${result.hoursDelta}`);
 console.log(`rootPrice=${result.rootPrice}  rootCost=${result.rootCost}`);

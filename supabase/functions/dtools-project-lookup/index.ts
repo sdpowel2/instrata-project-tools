@@ -205,6 +205,10 @@ serve(async (req) => {
         payloadFlavor,
         unattributedLaborCost: totals.unattributedLaborCost,
         unattributedLaborPrice: totals.unattributedLaborPrice,
+        // When the parent project last published to the API. COs approved
+        // AFTER this moment cannot be merged into the synced totals yet —
+        // the UI uses it to flag the drift and prompt an SI republish.
+        publishedOn: String(fullProject?.PublishedOn ?? ''),
       },
       updated_at: new Date().toISOString(),
     };

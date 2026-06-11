@@ -4,7 +4,7 @@ import {
   FileText, MessageSquareWarning, ClipboardCheck, BookOpen,
   Upload, Plus, Package, RefreshCw, Loader2, Check,
   ScanLine, Scale, ChevronRight, Users, ChevronDown,
-  Calendar, Truck, ShieldCheck,
+  Calendar, Truck, ShieldCheck, MapPin,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -634,6 +634,29 @@ interface LocationNode {
   children: Map<string, LocationNode>;
   // Items physically present at THIS node (qty for this location).
   items: { item: BoMRow; qty: number }[];
+  // CO deltas that would land at this node but are NOT in the contract BoM:
+  // pending COs, plus approved COs DTools hasn't republished into the
+  // project payload yet. Rendered as ghost rows; excluded from subtotals.
+  ghosts: GhostEntry[];
+}
+
+// One CO line item shown as a ghost row inside the BoM tree.
+interface GhostEntry {
+  coNumber: string;
+  status: ChangeOrderStatus;
+  /** True for approved COs whose effects aren't in the synced totals yet. */
+  awaitingRepublish: boolean;
+  item: ChangeOrderItem;
+}
+
+/** Approved in DTools but approved AFTER the parent project last published —
+ *  its items/dollars cannot be in the synced BoM until an SI republish. */
+function isApprovedUnmerged(co: ProjectChangeOrder, publishedOn?: string): boolean {
+  if (co.status !== 'Approved' || !co.resolvedAt || !publishedOn) return false;
+  const resolved = new Date(co.resolvedAt).getTime();
+  const published = new Date(publishedOn).getTime();
+  if (isNaN(resolved) || isNaN(published)) return false;
+  return resolved > published;
 }
 
 interface BoMRow {
@@ -692,8 +715,8 @@ function nodeSubtotal(node: LocationNode): { equip: number; labor: number } {
   return { equip: r2(equip), labor: r2(labor) };
 }
 
-function buildLocationTree(bomItems: BoMRow[]): LocationNode {
-  const root: LocationNode = { name: '', fullPath: '', children: new Map(), items: [] };
+function buildLocationTree(bomItems: BoMRow[], ghosts: GhostEntry[] = []): LocationNode {
+  const root: LocationNode = { name: '', fullPath: '', children: new Map(), items: [], ghosts: [] };
 
   const ensureNode = (path: string[]): LocationNode => {
     let node = root;
@@ -701,7 +724,7 @@ function buildLocationTree(bomItems: BoMRow[]): LocationNode {
     for (const seg of path) {
       cumulative = cumulative ? `${cumulative} / ${seg}` : seg;
       if (!node.children.has(seg)) {
-        node.children.set(seg, { name: seg, fullPath: cumulative, children: new Map(), items: [] });
+        node.children.set(seg, { name: seg, fullPath: cumulative, children: new Map(), items: [], ghosts: [] });
       }
       node = node.children.get(seg)!;
     }
@@ -726,7 +749,22 @@ function buildLocationTree(bomItems: BoMRow[]): LocationNode {
     }
   }
 
+  // Ghost CO items land in their own room (CO payloads can introduce new
+  // rooms — the node gets created even if no contract items live there yet).
+  for (const g of ghosts) {
+    const fallback = g.item.itemType === 'Labor' ? 'Project Labor' : 'Unassigned';
+    const segs = locationPath(g.item.location);
+    ensureNode(segs.length > 0 ? segs : [fallback]).ghosts.push(g);
+  }
+
   return root;
+}
+
+// Ghost count under a node (recursive) for the branch-header badge.
+function countGhosts(node: LocationNode): number {
+  let count = node.ghosts.length;
+  for (const child of node.children.values()) count += countGhosts(child);
+  return count;
 }
 
 // Total qty of items under a node (recursive). Used in branch headers so
@@ -740,6 +778,21 @@ function countNode(node: LocationNode): number {
 function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImport, onAddItem }: ProjectQuoteSectionProps) {
   const syncing = project.dtoolsBomStatus === 'loading';
   const synced = project.dtoolsBomStatus === 'found';
+  const publishedOn = project.dtoolsSyncDelta?.publishedOn;
+
+  // CO deltas not yet part of the contract BoM, shown as ghost rows in the
+  // location tree: pending COs + approved ones awaiting an SI republish.
+  const ghosts = useMemo<GhostEntry[]>(() => {
+    const out: GhostEntry[] = [];
+    for (const co of changeOrders) {
+      const awaitingRepublish = isApprovedUnmerged(co, publishedOn);
+      if (co.status !== 'Pending' && !awaitingRepublish) continue;
+      for (const item of co.items ?? []) {
+        out.push({ coNumber: co.number, status: co.status, awaitingRepublish, item });
+      }
+    }
+    return out;
+  }, [changeOrders, publishedOn]);
   // Header badge shows the canonical DTools value only — equipment-level
   // pricing is intentionally hidden in this view (the user manages pricing
   // in DTools, not here).
@@ -808,7 +861,7 @@ function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImp
         </div>
       ) : (
         <div>
-          <BoMLocationTree bomItems={bomItems} />
+          <BoMLocationTree bomItems={bomItems} ghosts={ghosts} />
           <QuoteTotalsFooter project={project} bomItems={bomItems} />
           <div className="px-5.5 py-2.5 border-t border-border text-xs text-fg-2" style={{ paddingLeft: 22, paddingRight: 22 }}>
             {bomItems.length} line items{synced ? ' · pulled from DTools' : ''}
@@ -832,7 +885,7 @@ function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImp
           {/* Contract Value summary — Original + Approved = Current, with
               pending exposure surfaced separately so it can never be
               confused with the contracted total. */}
-          <ContractValueSummary projectValue={project.value} changeOrders={changeOrders} />
+          <ContractValueSummary projectValue={project.value} changeOrders={changeOrders} publishedOn={publishedOn} />
         </div>
       )}
     </div>
@@ -1184,6 +1237,14 @@ function COItemsTable({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: 
                   <span className="font-mono font-semibold">{it.model}</span>
                   {it.manufacturer && <span className="text-fg-2"> · {it.manufacturer}</span>}
                   {it.description && <span className="text-fg-2"> — {it.description}</span>}
+                  {it.location && (
+                    <span
+                      className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-navy align-middle"
+                      style={{ padding: '1px 6px', borderRadius: 4, background: 'rgba(34,50,110,0.06)', border: '1px solid rgba(34,50,110,0.15)', whiteSpace: 'nowrap' }}
+                    >
+                      <MapPin size={9} /> {it.location}
+                    </span>
+                  )}
                 </td>
                 <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>
                   {isLabor ? '—' : fmtSignedCents(equip)}
@@ -1248,9 +1309,11 @@ function COItemsFooter({ items, tax, amount }: { items: ChangeOrderItem[]; tax?:
 interface ContractValueSummaryProps {
   projectValue?: string;
   changeOrders: ProjectChangeOrder[];
+  /** Parent project's last publish to the DTools API (from the sync delta). */
+  publishedOn?: string;
 }
 
-function ContractValueSummary({ projectValue, changeOrders }: ContractValueSummaryProps) {
+function ContractValueSummary({ projectValue, changeOrders, publishedOn }: ContractValueSummaryProps) {
   const approved = changeOrders.filter((c) => c.status === 'Approved');
   const pending = changeOrders.filter((c) => c.status === 'Pending');
 
@@ -1258,7 +1321,16 @@ function ContractValueSummary({ projectValue, changeOrders }: ContractValueSumma
   // the existing footer "DTools Project Total" already covers that case.
   if (!projectValue && approved.length === 0 && pending.length === 0) return null;
 
-  const original = parseProjectValue(projectValue);
+  // The synced project value already INCLUDES approved COs that DTools has
+  // republished into the parent payload. Back those out to get the true
+  // original; COs approved after the last publish aren't in the value yet
+  // (drift — flagged below with the SI remedy).
+  const unmerged = approved.filter((c) => isApprovedUnmerged(c, publishedOn));
+  const mergedDelta = approved.filter((c) => !unmerged.includes(c)).reduce((s, c) => s + c.amount, 0);
+  const unmergedDelta = unmerged.reduce((s, c) => s + c.amount, 0);
+
+  const syncedValue = parseProjectValue(projectValue);
+  const original = syncedValue - mergedDelta;
   const approvedDelta = approved.reduce((s, c) => s + c.amount, 0);
   const pendingExposure = pending.reduce((s, c) => s + c.amount, 0);
   const current = original + approvedDelta;
@@ -1285,6 +1357,32 @@ function ContractValueSummary({ projectValue, changeOrders }: ContractValueSumma
         <SummaryOp symbol="=" />
         <SummaryCol eyebrow="Current Contract Value" value={fmtUSD(current)} tone="hero" />
       </div>
+
+      {unmerged.length > 0 && (
+        <div
+          className="mt-4 flex items-center justify-between gap-3.5 flex-wrap"
+          style={{
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: 'rgba(185,28,28,0.06)',
+            border: '1px solid rgba(185,28,28,0.25)',
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-[0.12em] uppercase" style={{ color: '#B91C1C' }}>
+              <span className="inline-block w-[7px] h-[7px] rounded-full" style={{ background: '#B91C1C' }} />
+              Awaiting DTools Republish
+            </span>
+            <span className="text-[13px] text-fg">
+              <strong className="font-mono">{fmtSigned(unmergedDelta)}</strong>
+              <span className="text-fg-2">
+                {' '}from {unmerged.map((c) => c.number).join(', ')} — approved after the project last published, so the synced BoM and totals exclude it
+              </span>
+            </span>
+          </div>
+          <span className="text-xs text-fg-2 italic">Open + re-close the CO in SI, then re-sync</span>
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div
@@ -1358,8 +1456,8 @@ function SummaryOp({ symbol }: { symbol: string }) {
 // BoMLocationTree — collapsible Floor → Room → … hierarchy of BoM items
 // =============================================================================
 
-function BoMLocationTree({ bomItems }: { bomItems: BoMRow[] }) {
-  const tree = useMemo(() => buildLocationTree(bomItems), [bomItems]);
+function BoMLocationTree({ bomItems, ghosts = [] }: { bomItems: BoMRow[]; ghosts?: GhostEntry[] }) {
+  const tree = useMemo(() => buildLocationTree(bomItems, ghosts), [bomItems, ghosts]);
 
   // Default state: only the top-level branches are expanded. Big projects
   // collapse rooms by default so the page is scannable.
@@ -1443,6 +1541,7 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
   const isOpen = expanded.has(node.fullPath);
   const childCount = node.children.size;
   const itemCount = countNode(node);
+  const ghostCount = countGhosts(node);
   const subtotal = useMemo(() => nodeSubtotal(node), [node]);
   const hasMoney = subtotal.equip > 0 || subtotal.labor > 0;
   // Indent each level by ~20px so deep hierarchies stay scannable.
@@ -1464,6 +1563,11 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
         <span className="text-[11px] text-fg-2 flex items-center gap-3 flex-shrink-0">
           {childCount > 0 && <span>{childCount} sub-location{childCount === 1 ? '' : 's'}</span>}
           <span>{itemCount} item{itemCount === 1 ? '' : 's'}</span>
+          {ghostCount > 0 && (
+            <span className="font-semibold text-orange">
+              +{ghostCount} CO item{ghostCount === 1 ? '' : 's'}
+            </span>
+          )}
           {hasMoney && (
             <span className="font-mono font-semibold text-navy">
               {fmtMoney(subtotal.equip + subtotal.labor)}
@@ -1475,7 +1579,7 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
       {isOpen && (
         <>
           {/* Items physically present at THIS node (not in deeper sub-locations) */}
-          {node.items.length > 0 && (
+          {(node.items.length > 0 || node.ghosts.length > 0) && (
             <div className="bg-white">
               <table className="w-full border-collapse">
                 <thead>
@@ -1516,6 +1620,9 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
                       </tr>
                     );
                   })}
+                  {node.ghosts.map((g, i) => (
+                    <GhostItemRow key={`ghost-${g.coNumber}-${g.item.id}-${i}`} ghost={g} indent={indent} />
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -1535,6 +1642,57 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
         </>
       )}
     </div>
+  );
+}
+
+// Ghost row: a CO line item rendered inside the BoM tree at the room it
+// would land in. Not part of the contract BoM — tinted by status, excluded
+// from location subtotals and the quote footer.
+function GhostItemRow({ ghost, indent }: { ghost: GhostEntry; indent: number }) {
+  const { item: it, coNumber, awaitingRepublish } = ghost;
+  const removed = it.changeType === 'Removed';
+  const isLabor = it.itemType === 'Labor';
+  const equip = r2(it.qty * it.unitPrice);
+  const laborDollars = isLabor ? r2(equip + it.laborPrice) : it.laborPrice;
+
+  const accent = awaitingRepublish ? '#15803D' : 'var(--color-orange)';
+  const tint = awaitingRepublish ? 'rgba(21,128,61,0.05)' : 'rgba(246,141,46,0.06)';
+  const chipLabel = awaitingRepublish ? `${coNumber} · approved` : `${coNumber} · pending`;
+  const strike = removed ? 'line-through' : 'none';
+
+  return (
+    <tr className="border-t border-border-soft" style={{ background: tint }}>
+      <td className="py-2 text-[13px] font-semibold font-mono align-top" style={{ paddingLeft: indent + 24, paddingRight: 22 }}>
+        {isLabor && it.laborHours !== 0 ? `${Number(Math.abs(it.laborHours).toFixed(2))} hr` : it.qty}
+      </td>
+      <td className="py-2 text-[13px] font-mono align-top pr-5">
+        <span style={{ textDecoration: strike }}>{it.model}</span>
+        <span
+          className="ml-2 text-[9px] font-bold tracking-[0.08em] uppercase align-middle"
+          style={{
+            padding: '1px 6px',
+            borderRadius: 4,
+            color: removed ? '#B91C1C' : accent,
+            background: removed ? 'rgba(185,28,28,0.08)' : tint,
+            border: `1px solid ${removed ? 'rgba(185,28,28,0.3)' : accent}33`,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {removed ? `${coNumber} · removes` : chipLabel}
+        </span>
+      </td>
+      <td className="py-2 text-[13px] text-fg-2 align-top pr-5" style={{ textDecoration: strike }}>{it.manufacturer}</td>
+      <td className="py-2 text-[13px] align-top pr-5" style={{ textDecoration: strike }}>{it.description}</td>
+      <td className="py-2 text-[13px] font-mono align-top pr-5 text-right" style={{ color: accent }}>
+        {it.unitPrice !== 0 ? `${fmtMoney(it.unitPrice)}${isLabor ? '/hr' : ''}` : '—'}
+      </td>
+      <td className="py-2 text-[13px] font-mono align-top pr-5 text-right" style={{ color: accent }}>
+        {isLabor ? '—' : fmtSignedCents(equip)}
+      </td>
+      <td className="py-2 text-[13px] font-mono align-top text-right" style={{ paddingRight: 22, color: accent }}>
+        {laborDollars !== 0 ? fmtSignedCents(laborDollars) : '—'}
+      </td>
+    </tr>
   );
 }
 

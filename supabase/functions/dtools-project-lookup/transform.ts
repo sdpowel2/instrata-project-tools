@@ -312,6 +312,9 @@ export interface CoItemRow {
   /** 'Labor' for located labor items and phase residuals — their dollars
    *  belong in the Labor column even when carried in unit_price. */
   item_type: 'Product' | 'Labor';
+  /** Room name resolved from the CO payload's own Locations map; '' when the
+   *  row has no LocationId (phase rollups, residual labor lines). */
+  location: string;
   labor_hours: number; // signed line-total raw hours
   labor_cost: number;  // signed line dollars at parent rates
   labor_price: number;
@@ -367,6 +370,16 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
   const log: string[] = [];
   const rates = coRateLookup(parentProject, priorMeta, log);
   const coNumber = String(coProject?.CONumber ?? '').trim();
+
+  // CO payloads carry their own Locations map (including rooms the CO itself
+  // introduces, e.g. a new lobby display location) — resolve per-item rooms
+  // from it so the UI can show where each delta lands in the BoM.
+  const coLocationMap = new Map<string, string>();
+  for (const loc of coProject?.Locations ?? []) {
+    coLocationMap.set(String(loc.Id), loc.FullName || loc.Name || String(loc.Id));
+  }
+  const coLocName = (item: any): string =>
+    item.LocationId ? (coLocationMap.get(String(item.LocationId)) ?? String(item.LocationId)) : '';
 
   const items: CoItemRow[] = [];
   let costDelta = 0, priceDelta = 0, hoursDelta = 0, sort = 0;
@@ -443,6 +456,7 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
       unit_cost: unitCost,
       unit_price: unitPrice,
       item_type: isLaborItem ? 'Labor' : 'Product',
+      location: coLocName(it),
       labor_hours: round6(laborHours),
       labor_cost: round2(laborCost),
       labor_price: round2(laborPrice),
@@ -491,6 +505,7 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
       unit_cost: 0,
       unit_price: 0,
       item_type: 'Labor',
+      location: coLocName(p),
       labor_hours: residual,
       labor_cost: laborCost,
       labor_price: laborPrice,

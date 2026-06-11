@@ -698,6 +698,7 @@ function rowToChangeOrder(r: any): ProjectChangeOrder {
             unitCost: Number(it.unit_cost) || 0,
             unitPrice: Number(it.unit_price) || 0,
             itemType: it.item_type ?? 'Product',
+            location: it.location ?? '',
             laborHours: Number(it.labor_hours) || 0,
             laborCost: Number(it.labor_cost) || 0,
             laborPrice: Number(it.labor_price) || 0,

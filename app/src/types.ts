@@ -232,6 +232,9 @@ export interface ChangeOrderItem {
   /** 'Labor' for located labor items and phase residuals — their dollars
    *  display in the Labor column even when carried in unitPrice. */
   itemType: 'Product' | 'Labor';
+  /** Room name from the CO payload's own location map; '' when the row has
+   *  no location (residual labor lines). */
+  location: string;
   laborHours: number;
   laborCost: number;
   laborPrice: number;
@@ -297,6 +300,10 @@ export interface DToolsSyncDelta {
    *  converted to Travel hours). Their dollars live in their own row here. */
   echoModels: string[];
   verified: boolean;
+  /** ISO timestamp of the parent project's last publish to the API. COs
+   *  approved after this moment are NOT in the synced totals yet — the
+   *  Contract Value summary flags them and prompts an SI republish. */
+  publishedOn?: string;
 }
 
 // ===================== PROJECT LINE ITEMS =====================
