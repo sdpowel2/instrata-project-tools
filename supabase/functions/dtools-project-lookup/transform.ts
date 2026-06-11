@@ -289,11 +289,17 @@ function derivePriceRatesFromItems(items: any[], log: string[]): Map<string, num
 // project whose items carry COChangeTypeId: 1 = Added, 2 = Removed (same item
 // with NEGATED unit cost/price/hours and positive Qty), 3 = presumed Modified
 // (no example yet). Root Price/Cost/PriceWithoutTax are the CO's NET signed
-// delta. Root Hours echoes the PARENT project — ignore it. The CO's own phase
-// rollup rows are zero-priced hour echoes, so labor dollars must be priced
-// with the parent's rates (live phase rows or persisted LaborMeta).
+// delta. Root Hours echoes the PARENT project — ignore it.
 // Verified on AVCO-4: Σ item lines + (net raw hours × parent rate) equals the
 // CO root Price exactly; cost within 1¢.
+//
+// Phase rollup rows in a CO mirror the parent payload's two flavors
+// (AVCO-1 on AlphaDetect 2026-06-11 arrived PRICED): each carries the type's
+// total CO hours — item-attached hours PLUS any manual hours added directly
+// to the phase. The item-attached share is an echo of ItemLaborTypes (already
+// priced on the item lines); the residual is real labor-only work that must
+// become its own line or the CO under-counts. Lines sum to the CO's
+// PriceWithoutTax; root Price additionally includes Tax.
 
 export interface CoItemRow {
   change_type: 'Added' | 'Removed' | 'Adjusted' | 'Other';
@@ -313,10 +319,12 @@ export interface CoItemRow {
 export interface CoTransformResult {
   items: CoItemRow[];
   costDelta: number;   // our derived net cost
-  priceDelta: number;  // our derived net price
+  priceDelta: number;  // our derived net price (pre-tax, like the lines)
   hoursDelta: number;  // net signed raw labor hours
   rootCost: number;    // CO payload's own (authoritative) net numbers
-  rootPrice: number;
+  rootPrice: number;   // tax-inclusive grand total
+  rootPriceWithoutTax: number;
+  rootTax: number;
   verified: boolean;
   log: string[];
 }
@@ -360,8 +368,20 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
   const items: CoItemRow[] = [];
   let costDelta = 0, priceDelta = 0, hoursDelta = 0, sort = 0;
 
-  for (const it of coProject?.Items ?? []) {
-    if (it.TypeId == 2 && it.LaborType === 'Phase') continue; // zero-priced hour echo
+  const coItems: any[] = coProject?.Items ?? [];
+  const phaseRows = coItems.filter((i) => i.TypeId == 2 && i.LaborType === 'Phase');
+  // Item-attached hours per type — the echo share of each phase rollup.
+  // Counted regardless of rate availability: attached hours are never
+  // labor-only work, even when we can't price them.
+  const itemHoursByType = new Map<string, number>();
+
+  for (const it of coItems) {
+    if (it.TypeId == 2 && it.LaborType === 'Phase') continue; // handled after the loop
+    for (const lt of it.ItemLaborTypes ?? []) {
+      const typeName = String(lt.Name ?? '').trim();
+      if (!typeName) continue;
+      itemHoursByType.set(typeName, (itemHoursByType.get(typeName) ?? 0) + num(it.Quantity) * num(lt.Hours));
+    }
     const qty = num(it.Quantity);
     const unitCost = num(it.UnitCost);
     const unitPrice = num(it.UnitPrice);
@@ -412,19 +432,77 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
     hoursDelta += laborHours;
   }
 
+  // ── Phase rollups: split echo share from labor-only residual ──────────────
+  // The item-attached share is already priced on the lines above; any
+  // remaining hours are manual labor-only work that needs its own line.
+  // Zero-priced CO payloads carry ADJUSTED phase hours (same as the parent
+  // flavor) — un-adjust with the per-type factor before differencing.
+  const coZeroPriced =
+    phaseRows.length > 0 && phaseRows.every((p) => num(p.UnitPrice) === 0 && num(p.UnitCost) === 0);
+  const coFactors = factorsFromItems(coItems);
+  for (const p of phaseRows) {
+    const typeName = String(p.Model ?? '').trim();
+    if (!typeName) continue;
+    let phaseHours = num(p.Quantity);
+    if (coZeroPriced) {
+      const factor = coFactors.get(typeName) ?? (priorMeta?.factors?.[typeName] ?? 1);
+      phaseHours = phaseHours / (factor > 0 ? factor : 1);
+    }
+    const residual = round6(phaseHours - (itemHoursByType.get(typeName) ?? 0));
+    if (Math.abs(residual) <= 0.01) continue; // pure echo of item-attached hours
+    // Priced CO phase rows carry the rates themselves; fall back to parent.
+    const own: LaborRate = { costPerHour: num(p.UnitCost), pricePerHour: num(p.UnitPrice) };
+    const rate = own.costPerHour > 0 || own.pricePerHour > 0 ? own : rates.get(typeName);
+    if (!rate) {
+      log.push(`[transform] WARNING: CO ${coNumber} has ${residual}h labor-only "${typeName}" with no known rate — labor unpriced`);
+      continue;
+    }
+    const laborCost = round2(residual * rate.costPerHour);
+    const laborPrice = round2(residual * rate.pricePerHour);
+    items.push({
+      change_type: residual > 0 ? 'Added' : 'Removed',
+      manufacturer: '',
+      model: `${typeName} Labor`,
+      description: String(p.Description ?? '').trim() || `${typeName} labor (hours not attached to items)`,
+      qty: Math.abs(residual),
+      unit_cost: 0,
+      unit_price: 0,
+      labor_hours: residual,
+      labor_cost: laborCost,
+      labor_price: laborPrice,
+      labor_breakdown: [{
+        type: typeName,
+        hours: residual,
+        totalHours: round6(num(p.TotalHours)),
+        costRate: rate.costPerHour,
+        priceRate: rate.pricePerHour,
+      }],
+      sort_order: sort++,
+    });
+    costDelta += laborCost;
+    priceDelta += laborPrice;
+    hoursDelta += residual;
+    log.push(`[transform] CO ${coNumber}: labor-only residual ${residual}h "${typeName}" → $${laborCost}/$${laborPrice}`);
+  }
+
   costDelta = round2(costDelta);
   priceDelta = round2(priceDelta);
   hoursDelta = round6(hoursDelta);
 
   const rootCost = num(coProject?.Cost);
   const rootPrice = num(coProject?.Price);
+  // Lines are pre-tax, so reconcile against PriceWithoutTax; root Price adds
+  // Tax on top (older payloads without the field: Price IS pre-tax).
+  const rootPriceWithoutTax =
+    coProject?.PriceWithoutTax != null ? num(coProject.PriceWithoutTax) : rootPrice;
+  const rootTax = num(coProject?.Tax);
   const verified =
-    Math.abs(priceDelta - rootPrice) <= VERIFY_TOLERANCE &&
+    Math.abs(priceDelta - rootPriceWithoutTax) <= VERIFY_TOLERANCE &&
     Math.abs(costDelta - rootCost) <= VERIFY_TOLERANCE;
 
-  log.push(`[transform] CO ${coNumber}: ${items.length} lines, Δ $${costDelta}/$${priceDelta} (${hoursDelta}h) vs root $${rootCost}/$${rootPrice} → ${verified ? 'VERIFIED' : 'MISMATCH'}`);
+  log.push(`[transform] CO ${coNumber}: ${items.length} lines, Δ $${costDelta}/$${priceDelta} (${hoursDelta}h) vs root $${rootCost}/$${rootPriceWithoutTax} (+$${rootTax} tax = $${rootPrice}) → ${verified ? 'VERIFIED' : 'MISMATCH'}`);
 
-  return { items, costDelta, priceDelta, hoursDelta, rootCost, rootPrice, verified, log };
+  return { items, costDelta, priceDelta, hoursDelta, rootCost, rootPrice, rootPriceWithoutTax, rootTax, verified, log };
 }
 
 // ─── Main BoM transform ──────────────────────────────────────────────────────

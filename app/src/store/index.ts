@@ -681,6 +681,7 @@ function rowToChangeOrder(r: any): ProjectChangeOrder {
     resolvedAt: r.resolved_at ? toDate(r.resolved_at) : undefined,
     dToolsId: r.dtools_id ?? '',
     cost: r.cost != null ? Number(r.cost) : undefined,
+    tax: r.tax != null ? Number(r.tax) : undefined,
     laborHours: r.labor_hours != null ? Number(r.labor_hours) : undefined,
     dtoolsVerified: r.dtools_verified ?? undefined,
     items: itemRows.length > 0

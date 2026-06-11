@@ -1117,7 +1117,7 @@ function CORow({ co, status }: CORowProps) {
             <span className="text-orange-600 font-semibold">⚠ lines don't reconcile with CO total</span>
           )}
         </div>
-        {showItems && co.items && <COItemsTable items={co.items} />}
+        {showItems && co.items && <COItemsTable items={co.items} tax={co.tax} amount={co.amount} />}
       </div>
       <div
         className="flex-shrink-0 text-right font-mono text-[15px] font-bold"
@@ -1134,8 +1134,9 @@ function CORow({ co, status }: CORowProps) {
 
 // Signed delta lines inside a published CO. Removals arrive from DTools with
 // negated unit prices/hours, so the line totals are already signed — we just
-// color-code by change type.
-function COItemsTable({ items }: { items: ChangeOrderItem[] }) {
+// color-code by change type. Lines are pre-tax; the footer adds the CO's tax
+// so the table visibly sums to the CO amount.
+function COItemsTable({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: number; amount?: number }) {
   const typeStyle = (t: ChangeOrderItem['changeType']) => {
     if (t === 'Added') return { color: '#15803D', bg: 'rgba(21,128,61,0.08)', label: 'Added' };
     if (t === 'Removed') return { color: '#B91C1C', bg: 'rgba(185,28,28,0.08)', label: 'Removed' };
@@ -1159,6 +1160,9 @@ function COItemsTable({ items }: { items: ChangeOrderItem[] }) {
         <tbody>
           {items.map((it) => {
             const s = typeStyle(it.changeType);
+            // Labor-only lines (phase residuals) carry their dollars in
+            // laborPrice with zero unit price — qty is hours.
+            const laborOnly = it.unitPrice === 0 && it.laborHours !== 0;
             const equip = r2(it.qty * it.unitPrice);
             const total = r2(equip + it.laborPrice);
             return (
@@ -1171,13 +1175,15 @@ function COItemsTable({ items }: { items: ChangeOrderItem[] }) {
                     {s.label}
                   </span>
                 </td>
-                <td className="py-1.5 pr-3 font-mono">{it.qty}</td>
+                <td className="py-1.5 pr-3 font-mono">{laborOnly ? `${Number(it.qty.toFixed(2))} hr` : it.qty}</td>
                 <td className="py-1.5 pr-3">
                   <span className="font-mono font-semibold">{it.model}</span>
                   {it.manufacturer && <span className="text-fg-2"> · {it.manufacturer}</span>}
                   {it.description && <span className="text-fg-2"> — {it.description}</span>}
                 </td>
-                <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>{fmtSignedCents(equip)}</td>
+                <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>
+                  {laborOnly ? '—' : fmtSignedCents(equip)}
+                </td>
                 <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>
                   {it.laborPrice !== 0 ? fmtSignedCents(it.laborPrice) : '—'}
                 </td>
@@ -1185,9 +1191,51 @@ function COItemsTable({ items }: { items: ChangeOrderItem[] }) {
               </tr>
             );
           })}
+          <COItemsFooter items={items} tax={tax} amount={amount} />
         </tbody>
       </table>
     </div>
+  );
+}
+
+// Footer rows: equipment + labor subtotals, then tax → CO total when the
+// sync captured a tax split (lines are pre-tax, the CO amount is not).
+function COItemsFooter({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: number; amount?: number }) {
+  let equip = 0, labor = 0;
+  for (const it of items) {
+    equip += r2(it.qty * it.unitPrice);
+    labor += it.laborPrice;
+  }
+  equip = r2(equip);
+  labor = r2(labor);
+  const subtotal = r2(equip + labor);
+  const hasTax = tax != null && tax !== 0;
+
+  return (
+    <>
+      <tr className="border-t border-border bg-navy/[0.03]">
+        <td className="py-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.05em] text-fg-2" colSpan={3}>
+          {hasTax ? 'Subtotal (pre-tax)' : 'Subtotal'}
+        </td>
+        <td className="py-1.5 pr-3 text-right font-mono font-semibold">{fmtSignedCents(equip)}</td>
+        <td className="py-1.5 pr-3 text-right font-mono font-semibold">{fmtSignedCents(labor)}</td>
+        <td className="py-1.5 pr-3 text-right font-mono font-bold">{fmtSignedCents(subtotal)}</td>
+      </tr>
+      {hasTax && (
+        <>
+          <tr className="bg-navy/[0.03]">
+            <td className="py-1 px-3 text-[10px] font-semibold uppercase tracking-[0.05em] text-fg-2" colSpan={5}>Tax</td>
+            <td className="py-1 pr-3 text-right font-mono">{fmtSignedCents(tax)}</td>
+          </tr>
+          <tr className="bg-navy/[0.03]">
+            <td className="py-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.05em] text-navy" colSpan={5}>CO Total</td>
+            <td className="py-1.5 pr-3 text-right font-mono font-bold text-navy">
+              {fmtSignedCents(amount ?? r2(subtotal + tax))}
+            </td>
+          </tr>
+        </>
+      )}
+    </>
   );
 }
 

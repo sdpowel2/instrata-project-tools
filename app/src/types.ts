@@ -207,6 +207,8 @@ export interface ProjectChangeOrder {
   dToolsId: string;
   /** CO net cost delta from the published CO payload (signed). */
   cost?: number;
+  /** Tax portion of `amount`. Line items are pre-tax: Σ lines + tax = amount. */
+  tax?: number;
   /** Net signed raw labor hours in the CO. */
   laborHours?: number;
   /** True when our priced lines reconcile with the CO's own root totals. */

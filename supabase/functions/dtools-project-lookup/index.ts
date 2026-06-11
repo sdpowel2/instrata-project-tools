@@ -294,6 +294,7 @@ serve(async (req) => {
             description: String(co.CONotes ?? '').trim(),
             amount: num(co.Price ?? listRow.Price ?? 0),
             cost: detail ? num(co.Cost) : null,
+            tax: co.Tax != null ? num(co.Tax) : null,
             labor_hours: coResult ? coResult.hoursDelta : null,
             dtools_verified: coResult ? coResult.verified : null,
             items_synced: !!coResult,
