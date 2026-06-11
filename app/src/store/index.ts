@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type {
   Project, Submittal, SubmittalItem, RFI, CloseoutPackage,
   Warranty, PunchItem, SignOffSheet, OwnerManual, ManualSection, ManualDevice,
-  ProjectBoMItem, BomItemType, AsBuiltDrawing,
+  ProjectBoMItem, BomItemType, AsBuiltDrawing, LaborBreakdownEntry,
   QuickStartRoom, QuickStartStep,
   ItemCategory,
   SubmittalItemLocation,
@@ -910,7 +910,7 @@ interface AppState {
   addBoMItem: (projectId: string, item: Omit<ProjectBoMItem, 'id' | 'projectId'>) => string;
   updateBoMItem: (itemId: string, updates: Partial<ProjectBoMItem>) => void;
   deleteBoMItem: (itemId: string) => void;
-  importBoMItems: (projectId: string, items: { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; notes: string; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string; itemType?: BomItemType; unitCost?: number; unitPrice?: number; laborHours?: number; laborUnitCost?: number; laborUnitPrice?: number; fixedLaborCost?: number; fixedLaborPrice?: number; marginPct?: number; ownerFurnished?: boolean; optional?: boolean }[]) => void;
+  importBoMItems: (projectId: string, items: { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; notes: string; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string; itemType?: BomItemType; unitCost?: number; unitPrice?: number; laborHours?: number; laborUnitCost?: number; laborUnitPrice?: number; fixedLaborCost?: number; fixedLaborPrice?: number; marginPct?: number; ownerFurnished?: boolean; optional?: boolean; laborType?: string; laborBreakdown?: LaborBreakdownEntry[]; includedInPhase?: boolean }[]) => void;
 
   // Submittal actions
   addSubmittal: (s: Omit<Submittal, 'id' | 'createdAt' | 'items'>) => string;
