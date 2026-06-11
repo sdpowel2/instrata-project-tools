@@ -205,6 +205,31 @@ export interface ProjectChangeOrder {
   resolvedAt?: string;
   /** DTools internal id for cross-referencing. Display-only. */
   dToolsId: string;
+  /** CO net cost delta from the published CO payload (signed). */
+  cost?: number;
+  /** Net signed raw labor hours in the CO. */
+  laborHours?: number;
+  /** True when our priced lines reconcile with the CO's own root totals. */
+  dtoolsVerified?: boolean;
+  /** Signed line-item deltas — present once the CO payload has been
+   *  published to the API integration and synced. */
+  items?: ChangeOrderItem[];
+}
+
+/** One signed delta line inside a published DTools change order. Removed
+ *  lines carry DTools' own NEGATED unit prices/hours with positive qty. */
+export interface ChangeOrderItem {
+  id: string;
+  changeType: 'Added' | 'Removed' | 'Adjusted' | 'Other';
+  manufacturer: string;
+  model: string;
+  description: string;
+  qty: number;
+  unitCost: number;
+  unitPrice: number;
+  laborHours: number;
+  laborCost: number;
+  laborPrice: number;
 }
 
 export interface Project {
@@ -236,8 +261,37 @@ export interface Project {
   mondayItemId?: number;
   dtoolsProjectId?: string;
   dtoolsBomStatus: DToolsBomStatus;
+  /** Authoritative DTools root totals, captured at sync time. These are what
+   *  the customer sees on the DTools quote; the BoM table sums its own lines
+   *  (cents may differ — see dtoolsSyncDelta). */
+  dtoolsCost?: number;
+  dtoolsPriceWithoutTax?: number;
+  dtoolsTax?: number;
+  dtoolsPrice?: number;
+  dtoolsHours?: number;
+  dtoolsSyncedAt?: string;
+  dtoolsSyncDelta?: DToolsSyncDelta;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Reconciliation snapshot stored by the DTools sync: our derived
+ *  equipment/labor split plus the deltas against DTools' root fields.
+ *  verified=true means everything reconciled within $1 (expected drift is
+ *  per-line rounding cents). */
+export interface DToolsSyncDelta {
+  equipmentCost: number;
+  equipmentPrice: number;
+  laborCost: number;
+  laborPrice: number;
+  costDelta: number;
+  priceDelta: number;
+  rowCostDelta: number;
+  rowPriceDelta: number;
+  /** Companion labor lines DTools rolled into a phase rollup (e.g. Airfare
+   *  converted to Travel hours). Their dollars live in their own row here. */
+  echoModels: string[];
+  verified: boolean;
 }
 
 // ===================== PROJECT LINE ITEMS =====================
@@ -276,6 +330,25 @@ export interface ProjectBoMItem {
   /** DTools "Priced From" custom field — vendor + last priced date,
    *  formatted "VENDOR MM/DD/YY". Surfaces in the Purchasing module only. */
   pricedFrom?: string;
+  /** For Labor rows: the DTools labor type (Install, Cabling, Travel, …).
+   *  Empty for products. */
+  laborType: string;
+  /** For products: per-labor-type attribution from DTools ItemLaborTypes.
+   *  hours are LINE-total raw hours (pricing basis); totalHours are DTools'
+   *  display hours (may include a per-type hour adjustment, e.g. ×1.03). */
+  laborBreakdown: LaborBreakdownEntry[];
+  /** Labor line whose dollars DTools also folded into a phase rollup as
+   *  converted hours. Informational — our phase residual rows already have
+   *  the converted hours removed, so this row's dollars count normally. */
+  includedInPhase: boolean;
+}
+
+export interface LaborBreakdownEntry {
+  type: string;
+  hours: number;
+  totalHours: number;
+  costRate: number;
+  priceRate: number;
 }
 
 // ===================== SUBMITTALS =====================

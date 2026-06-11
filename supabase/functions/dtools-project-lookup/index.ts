@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { buildBomFromDtools, buildChangeOrderItems, type LaborMeta } from './transform.ts';
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 
@@ -13,13 +14,6 @@ function corsHeaders() {
 // ─── D-Tools API helpers ─────────────────────────────────────────────────────
 
 const DTOOLS_BASE = 'https://api.d-tools.com/SI';
-
-interface DToolsLocation {
-  Id: string;
-  Name: string;
-  FullName?: string;
-  ParentId?: string | null;
-}
 
 async function dtoolsFetch(apiKey: string, path: string): Promise<any> {
   const res = await fetch(`${DTOOLS_BASE}${path}`, {
@@ -37,27 +31,6 @@ function num(v: any): number {
   if (v === null || v === undefined) return 0;
   const n = typeof v === 'string' ? parseFloat(v) : Number(v);
   return isNaN(n) ? 0 : n;
-}
-
-/** Pull DTools per-item Custom Field 1 ("Priced From"). Format used by the
- *  team is "VENDOR MM/DD/YY" (e.g. "ADI 4/11/26"). The string is shown
- *  verbatim in the Purchasing module's Vendor column. Falls back across the
- *  array-of-fields shape and a few flat-property aliases. */
-function extractPricedFrom(item: any): string {
-  const candidates: any[] = [];
-  if (Array.isArray(item?.CustomFields)) candidates.push(...item.CustomFields);
-  if (Array.isArray(item?.ItemCustomFields)) candidates.push(...item.ItemCustomFields);
-
-  for (const cf of candidates) {
-    const id = String(cf?.Id ?? cf?.id ?? '');
-    const name = String(cf?.Name ?? cf?.name ?? '').toLowerCase();
-    if (id === '1' || name === 'priced from' || name === 'pricedfrom') {
-      const v = cf?.Value ?? cf?.value;
-      return v ? String(v).trim() : '';
-    }
-  }
-  const flat = item?.CustomField1 ?? item?.customField1 ?? item?.PricedFrom ?? item?.pricedFrom;
-  return flat ? String(flat).trim() : '';
 }
 
 /** Map a DTools change-order status string to our enum.
@@ -93,39 +66,6 @@ function toDate(v: any): string | null {
   const d = new Date(v);
   if (isNaN(d.getTime())) return null;
   return d.toISOString().slice(0, 10);
-}
-
-function mapCategory(cat?: string): string {
-  if (!cat) return 'Other';
-  const c = cat.toLowerCase();
-  if (c.includes('display') || c.includes('monitor') || c.includes('screen') || c.includes('projector')) return 'Display';
-  if (c.includes('audio') || c.includes('speaker') || c.includes('microphone') || c.includes('amplifier') || c.includes('dsp')) return 'Audio';
-  if (c.includes('control') || c.includes('processor') || c.includes('switcher') || c.includes('matrix')) return 'Control';
-  if (c.includes('network') || c.includes('switch') || c.includes('router') || c.includes('wireless')) return 'Networking';
-  if (c.includes('cable') || c.includes('wire') || c.includes('connector') || c.includes('adapter')) return 'Cabling';
-  return 'Other';
-}
-
-interface GroupedItem {
-  manufacturer: string;
-  model: string;
-  description: string;
-  category: string;
-  qty: number;
-  notes: string;
-  locations: Map<string, number>;
-  itemType: string;
-  unitCost: number;
-  unitPrice: number;
-  laborHours: number;
-  laborUnitCost: number;
-  laborUnitPrice: number;
-  fixedLaborCost: number;
-  fixedLaborPrice: number;
-  marginPct: number;
-  ownerFurnished: boolean;
-  optional: boolean;
-  pricedFrom: string;
 }
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
@@ -196,219 +136,37 @@ serve(async (req) => {
     const dtoolsProjectId = match.Id;
     console.log(`[dtools-lookup] Found DTools project: ${dtoolsProjectId} (${match.Name})`);
 
-    // ── Step 2a: Fetch WITH location aggregation (for qty per location) ─────
-    const detailData = await dtoolsFetch(
-      apiKey,
-      `/Subscribe/Projects?id=${encodeURIComponent(dtoolsProjectId)}&aggregateBy=Location`,
-    );
-    const project = detailData?.Project ?? detailData;
-    const aggItems: any[] = project?.Items ?? detailData?.Items ?? [];
-    const locations: DToolsLocation[] = project?.Locations ?? [];
-
-    // ── Step 2b: Fetch WITHOUT aggregation (for labor types + rates) ────────
+    // ── Step 2: Fetch the project, unaggregated ─────────────────────────────
+    // The unaggregated payload is the only shape that populates ItemLaborTypes
+    // (aggregateBy=Location/Item return them empty), and its rows carry
+    // LocationId, so per-location quantities come along for free.
     const fullData = await dtoolsFetch(
       apiKey,
       `/Subscribe/Projects?id=${encodeURIComponent(dtoolsProjectId)}`,
     );
     const fullProject = fullData?.Project ?? fullData;
-    const fullItems: any[] = fullProject?.Items ?? fullData?.Items ?? [];
 
-    // ── Step 3: Build labor rate map from TypeId=2 items ────────────────────
-    // TypeId=2 items carry: Model = labor type name, UnitCost = cost/hr, UnitPrice = price/hr
-    const laborRateMap = new Map<string, { costPerHour: number; pricePerHour: number }>();
-    for (const item of fullItems) {
-      if (item.TypeId != 2) continue;
-      const typeName = (item.Model || '').trim();
-      if (!typeName) continue;
-      const cost = num(item.UnitCost);
-      const price = num(item.UnitPrice);
-      // Only store if it has actual rates (skip unpopulated travel items)
-      if ((cost > 0 || price > 0) && !laborRateMap.has(typeName)) {
-        laborRateMap.set(typeName, { costPerHour: cost, pricePerHour: price });
-      }
-    }
-    console.log(`[dtools-lookup] Labor rate map: ${laborRateMap.size} types — ${Array.from(laborRateMap.entries()).map(([k, v]) => `${k}=$${v.costPerHour}/$${v.pricePerHour}`).join(', ')}`);
+    // ── Step 3: Transform (pure, offline-verified — see transform.ts and
+    // scripts/verify-dtools-sync.mts) ────────────────────────────────────────
+    // Post-approval payloads zero out the phase-row labor rates, so we feed
+    // the transform the LaborMeta persisted from the last priced payload.
+    const { data: projectRow } = await supabase
+      .from('projects')
+      .select('dtools_labor_meta')
+      .eq('id', projectId)
+      .maybeSingle();
+    const priorMeta: LaborMeta | null = projectRow?.dtools_labor_meta ?? null;
 
-    // ── Step 4: Build per-item labor lookup from non-aggregated items ──────
-    // Each non-aggregated item has its own ItemLaborTypes (labor type + hours breakdown).
-    // Key by Manufacturer||Model since Ids may differ between agg and non-agg fetches.
-    // If same product has different labor at different locations, we take the first occurrence
-    // (this is rare — most products have the same labor config everywhere).
-    const itemLaborByKey = new Map<string, any[]>();
-    for (const fi of fullItems) {
-      if (fi.TypeId != 1) continue;
-      const ilt = fi.ItemLaborTypes ?? [];
-      if (ilt.length > 0) {
-        const key = `${fi.Manufacturer}||${fi.Model}`;
-        if (!itemLaborByKey.has(key)) {
-          itemLaborByKey.set(key, ilt);
-        }
-      }
-    }
-    console.log(`[dtools-lookup] Products with ItemLaborTypes: ${itemLaborByKey.size}`);
+    const { bomRows, totals, log, payloadFlavor, laborMeta } = buildBomFromDtools(fullProject, priorMeta);
+    for (const line of log) console.log(`[dtools-lookup] ${line}`);
 
-    // Default Install rate for items without specific labor type info
-    const installRate = laborRateMap.get('Install');
-
-    // ── Step 5: Build location map and enrich aggregated items ───────────────
-    const locationMap = new Map<string, string>();
-    for (const loc of locations) {
-      locationMap.set(loc.Id, loc.FullName || loc.Name);
-    }
-    for (const item of aggItems) {
-      if (item.LocationId && !item.LocationName) {
-        item.LocationName = locationMap.get(item.LocationId) ?? item.LocationId;
-      }
-    }
-
-    // ── Step 6: Process each item individually ──────────────────────────────
-    // Include products (1, 3, 4) and location-specific labor (2 with LocationId)
-    const billableItems = aggItems.filter((i: any) =>
-      i.TypeId == 1 || i.TypeId == 3 || i.TypeId == 4 ||
-      (i.TypeId == 2 && i.LocationId)
-    );
-    console.log(`[dtools-lookup] ${aggItems.length} total agg items, ${billableItems.length} billable`);
-
-    const grouped = new Map<string, GroupedItem>();
-    let pathILT = 0, pathInstallRate = 0, pathNoLabor = 0, pathLabor = 0;
-
-    for (const item of billableItems) {
-      const isLabor = item.TypeId == 2;
-      const itemQty = num(item.Quantity) || 1;
-      const locName = item.LocationName || '';
-
-      // Products: group by manufacturer+model+unitCost (same product, same price = merge)
-      // Labor: unique per type+location
-      const key = isLabor
-        ? `Labor||${item.Model || item.Description || 'Unknown'}||${locName}`
-        : `${item.Manufacturer}||${item.Model}||${num(item.UnitCost)}`;
-
-      let unitCost = 0;
-      let unitPrice = 0;
-      let laborHours = 0;
-      let laborUnitCost = 0;
-      let laborUnitPrice = 0;
-      let fixedLaborCost = 0;
-      let fixedLaborPrice = 0;
-      let itemType = 'Product';
-
-      if (isLabor) {
-        // TypeId=2 with location: standalone labor item
-        itemType = 'Labor';
-        laborHours = itemQty;
-        laborUnitCost = num(item.UnitCost);
-        laborUnitPrice = num(item.UnitPrice);
-        pathLabor++;
-      } else {
-        // Product — equipment pricing
-        unitCost = num(item.UnitCost);
-        unitPrice = num(item.UnitPrice);
-
-        // Compute labor: look up this product's ItemLaborTypes, then hours × rate
-        const iltKey = `${item.Manufacturer}||${item.Model}`;
-        const ilt = itemLaborByKey.get(iltKey) ?? [];
-        if (ilt.length > 0) {
-          let totalCost = 0, totalPrice = 0, totalHours = 0;
-          for (const lt of ilt) {
-            const typeName = (lt.Name || '').trim();
-            const hours = num(lt.Hours);
-            const rate = laborRateMap.get(typeName);
-            if (rate && hours > 0) {
-              totalCost += hours * rate.costPerHour;
-              totalPrice += hours * rate.pricePerHour;
-              totalHours += hours;
-            }
-          }
-          if (totalHours > 0) {
-            laborHours = totalHours;
-            laborUnitCost = totalCost / totalHours;
-            laborUnitPrice = totalPrice / totalHours;
-          }
-          pathILT++;
-        } else if (num(item.LaborHours) > 0 && installRate) {
-          laborHours = num(item.LaborHours);
-          laborUnitCost = installRate.costPerHour;
-          laborUnitPrice = installRate.pricePerHour;
-          pathInstallRate++;
-        } else {
-          pathNoLabor++;
-        }
-      }
-
-      const margin = num(item.Margin);
-      const ownerFurnished = item.IsOfe === true;
-      const isOptional = item.IsOptional === true;
-      const pricedFrom = extractPricedFrom(item);
-
-      const existing = grouped.get(key);
-
-      if (existing) {
-        existing.qty += itemQty;
-        if (locName) {
-          existing.locations.set(locName, (existing.locations.get(locName) ?? 0) + itemQty);
-        }
-        // Prefer the most recent non-empty priced_from we see across merged
-        // dupes — surfacing a vendor string is better than dropping it.
-        if (pricedFrom && !existing.pricedFrom) existing.pricedFrom = pricedFrom;
-      } else {
-        const locs = new Map<string, number>();
-        if (locName) locs.set(locName, itemQty);
-        grouped.set(key, {
-          manufacturer: item.Manufacturer || '',
-          model: item.Model || '',
-          description: item.Description || '',
-          category: mapCategory(item.Category),
-          qty: itemQty,
-          notes: item.Phase ? `Phase: ${item.Phase}` : '',
-          locations: locs,
-          itemType,
-          unitCost,
-          unitPrice,
-          laborHours,
-          laborUnitCost,
-          laborUnitPrice,
-          fixedLaborCost,
-          fixedLaborPrice,
-          marginPct: margin > 0 && margin <= 1 ? margin * 100 : margin,
-          ownerFurnished,
-          optional: isOptional,
-          pricedFrom,
-        });
-      }
-    }
-
-    console.log(`[dtools-lookup] Labor paths: ${pathILT} via ItemLaborTypes, ${pathInstallRate} via Install rate fallback, ${pathNoLabor} no labor, ${pathLabor} standalone labor items`);
-
-    // ── Step 7: Insert BoM items ─────────────────────────────────────────────
-    const bomRows = Array.from(grouped.values()).map((g, idx) => ({
-      project_id: projectId,
-      manufacturer: g.manufacturer,
-      model: g.model,
-      description: g.description,
-      category: g.category,
-      qty: g.qty,
-      notes: g.notes,
-      locations: Array.from(g.locations.entries()).map(([room, qty]) => ({ room, qty })),
-      sort_order: idx,
-      item_type: g.itemType,
-      unit_cost: g.unitCost,
-      unit_price: g.unitPrice,
-      labor_hours: g.laborHours,
-      labor_unit_cost: g.laborUnitCost,
-      labor_unit_price: g.laborUnitPrice,
-      fixed_labor_cost: g.fixedLaborCost,
-      fixed_labor_price: g.fixedLaborPrice,
-      margin_pct: g.marginPct,
-      owner_furnished: g.ownerFurnished,
-      optional: g.optional,
-      priced_from: g.pricedFrom || null,
-    }));
-
-    if (bomRows.length > 0) {
+    // ── Step 4: Insert BoM items ─────────────────────────────────────────────
+    const insertRows = bomRows.map((r) => ({ ...r, project_id: projectId }));
+    if (insertRows.length > 0) {
       await supabase.from('project_bom_items').delete().eq('project_id', projectId);
 
-      for (let i = 0; i < bomRows.length; i += 100) {
-        const batch = bomRows.slice(i, i + 100);
+      for (let i = 0; i < insertRows.length; i += 100) {
+        const batch = insertRows.slice(i, i + 100);
         const { error } = await supabase.from('project_bom_items').insert(batch);
         if (error) {
           console.error(`[dtools-lookup] Insert batch error:`, error);
@@ -416,40 +174,66 @@ serve(async (req) => {
       }
     }
 
-    // ── Step 8: Update project status + value ──────────────────────────────
-    // DTools exposes the authoritative project total as `Price` on both list
-    // and detail endpoints. Format to match our stored `value` convention
-    // ("$XXXk" / "$X.XM" / etc.).
-    // Full precision with grouping + cents — matches dtools-import-project
-    // so a re-sync can't change the formatting style of an existing project.
-    const dtoolsPrice = num(fullProject?.Price ?? fullProject?.ProjectTotal ?? fullProject?.Total);
-    const formattedValue = dtoolsPrice > 0
-      ? '$' + dtoolsPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    // ── Step 5: Update project status + authoritative DTools totals ─────────
+    // Headline `value` keeps the root Price (what the customer sees). The
+    // dtools_* columns carry the full root snapshot; dtools_sync_delta records
+    // the reconciliation between our line math and DTools' roots.
+    const formattedValue = totals.rootPrice > 0
+      ? '$' + totals.rootPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       : '';
 
     const projectUpdate: Record<string, any> = {
       dtools_project_id: dtoolsProjectId,
       dtools_bom_status: 'found',
+      dtools_cost: totals.rootCost,
+      dtools_price_without_tax: totals.rootPriceWithoutTax,
+      dtools_tax: totals.rootTax,
+      dtools_price: totals.rootPrice,
+      dtools_hours: totals.rootHours,
+      dtools_synced_at: new Date().toISOString(),
+      dtools_sync_delta: {
+        equipmentCost: totals.equipmentCost,
+        equipmentPrice: totals.equipmentPrice,
+        laborCost: totals.laborCost,
+        laborPrice: totals.laborPrice,
+        costDelta: totals.costDelta,
+        priceDelta: totals.priceDelta,
+        rowCostDelta: totals.rowCostDelta,
+        rowPriceDelta: totals.rowPriceDelta,
+        echoModels: totals.echoModels,
+        verified: totals.verified,
+        payloadFlavor,
+        unattributedLaborCost: totals.unattributedLaborCost,
+        unattributedLaborPrice: totals.unattributedLaborPrice,
+      },
       updated_at: new Date().toISOString(),
     };
     if (formattedValue) projectUpdate.value = formattedValue;
+    // Persist fresh labor knowledge from priced payloads; keep the existing
+    // snapshot when DTools sends a zero-priced one.
+    if (payloadFlavor === 'priced' && laborMeta) projectUpdate.dtools_labor_meta = laborMeta;
 
     await supabase.from('projects').update(projectUpdate).eq('id', projectId);
 
-    // ── Step 9: Fetch + upsert change orders ───────────────────────────────
-    // Per the DTools SI API docs, /Subscribe/Projects returns "projects and
-    // change orders published by a SI user". A CO surfaces here as its own
-    // Project record with IsChangeOrder=true and the CO metadata flat on
-    // the row (CONumber, COName, CONotes, COType, COStatus, COCreatedOn,
-    // COAcceptedOn, CORejectedOn, Price). We list by project number with a
-    // generous pageSize, filter for IsChangeOrder, fetch detail, and map.
+    if (!totals.verified) {
+      console.error(`[dtools-lookup] VERIFICATION MISMATCH: Δcost ${totals.costDelta}, Δprice ${totals.priceDelta}, rows Δ ${totals.rowCostDelta}/${totals.rowPriceDelta}`);
+    }
+
+    // ── Step 6: Fetch + upsert change orders ───────────────────────────────
+    // A published CO appears in the project-number list as a row with the
+    // SAME Id as the parent project and a non-empty CONumber (verified on
+    // Maricopa Dunlap 2026-06-11 — list rows carry NO IsChangeOrder field).
+    // Full CO detail comes from ?id={parentId}&coNumber={CONumber}: a small
+    // project payload whose items carry COChangeTypeId (1=Added, 2=Removed
+    // with negated prices/hours) and whose root Price/Cost are the CO's net
+    // signed delta.
     //
-    // GOTCHA: DTools' API is pure publish/subscribe. A CO only enters our
-    // subscription when a SI user explicitly publishes it
-    // (POST /Publish/Projects/NewChangeOrder). If a CO exists in DTools
-    // desktop but was never published to the API integration, the cloud
-    // API has no record of it and this loop returns 0 — that's expected,
-    // not a bug. Fix is on the SI user's side: publish the CO, then re-sync.
+    // GOTCHA: DTools' API is pure publish/subscribe. A CO only enters the
+    // subscription when its status transition fires the SI tenant's
+    // "send CO to API" setting (or it's explicitly published). Unpublished
+    // COs are invisible here — ?coNumber returns 404 — even if they're
+    // merged into the approved project's payload as placeholder items.
+    // Fix is on the SI side: toggle the CO's status, then re-sync.
     let coCount = 0;
     try {
       const siblingSearch = await dtoolsFetch(
@@ -459,91 +243,107 @@ serve(async (req) => {
       const siblings = Array.isArray(siblingSearch)
         ? siblingSearch
         : (siblingSearch?.Projects ?? siblingSearch?.projects ?? []);
-      let rawCOs: any[] = siblings.filter((p: any) => p?.IsChangeOrder === true);
+      const coListRows: any[] = siblings.filter((p: any) =>
+        String(p?.CONumber ?? '').trim() !== '' || p?.IsChangeOrder === true,
+      );
 
-      // List rows are usually summaries — fetch each CO's full detail by Id
-      // so CONumber/COStatus/COType are populated for the mapper.
-      if (rawCOs.length > 0 && rawCOs.some((p: any) => !p?.COStatus && !p?.COType)) {
-        const detailed: any[] = [];
-        for (const summary of rawCOs) {
-          const coId = summary?.Id;
-          if (!coId) { detailed.push(summary); continue; }
-          try {
-            const detail = await dtoolsFetch(apiKey, `/Subscribe/Projects?id=${encodeURIComponent(coId)}`);
-            detailed.push(detail?.Project ?? detail ?? summary);
-          } catch (detailErr) {
-            console.warn(`[dtools-lookup] CO detail fetch failed for ${coId}, using summary:`, detailErr instanceof Error ? detailErr.message : detailErr);
-            detailed.push(summary);
-          }
+      // Fetch each CO's full payload by parent id + CO number.
+      const fetched: { listRow: any; detail: any | null }[] = [];
+      for (const listRow of coListRows) {
+        const coNumber = String(listRow?.CONumber ?? '').trim();
+        const parentId = String(listRow?.Id ?? dtoolsProjectId);
+        if (!coNumber) { fetched.push({ listRow, detail: null }); continue; }
+        try {
+          const detail = await dtoolsFetch(
+            apiKey,
+            `/Subscribe/Projects?id=${encodeURIComponent(parentId)}&coNumber=${encodeURIComponent(coNumber)}`,
+          );
+          fetched.push({ listRow, detail: detail?.Project ?? detail });
+        } catch (detailErr) {
+          console.warn(`[dtools-lookup] CO detail fetch failed for ${coNumber}, using list row:`, detailErr instanceof Error ? detailErr.message : detailErr);
+          fetched.push({ listRow, detail: null });
         }
-        rawCOs = detailed;
       }
 
-      const coRows = rawCOs.map((co: any) => {
-        // Canonical fields in our DTools tenant: COId / CONumber / COName /
-        // CONotes / COType / COStatus / COCreatedOn / COAcceptedOn /
-        // CORejectedOn. We keep generic fallbacks so older rows (or another
-        // tenant on the same code path) still map cleanly.
-        // We prefer the CO record's own Id over COId — Id is what
-        // /Subscribe/Projects?id=... will resolve, which keeps re-syncs
-        // idempotent against the (project_id, dtools_id) unique index.
-        const dtoolsCoId = String(co.Id ?? co.COId ?? co.id ?? '');
-        const number = String(co.CONumber ?? co.Number ?? co.Code ?? '').trim();
-        const title  = String(co.COName ?? co.Name ?? co.Title ?? '').trim();
-        const desc   = String(co.CONotes ?? co.ScopeOfWork ?? co.Description ?? co.Notes ?? '').trim();
-        // CO Price is the dollar delta of the CO's items — positive for
-        // adds, negative for credits.
-        const amount = num(co.Price ?? co.TotalPrice ?? co.Total ?? co.Amount ?? 0);
-        const requestedAt = toDate(co.COCreatedOn ?? co.RequestedDate ?? co.RequestedOn ?? co.CreatedOn);
+      // Wipe + re-insert (items cascade with their CO rows): prunes COs
+      // DTools removed and keeps re-syncs idempotent.
+      await supabase.from('change_orders').delete().eq('project_id', projectId);
+
+      for (const { listRow, detail } of fetched) {
+        const co = detail ?? listRow;
+        const number = String(co.CONumber ?? listRow.CONumber ?? '').trim();
+        if (!number) continue;
         const status = mapCOStatus(co.COStatus ?? co.Status);
         const resolvedAt = status === 'Approved'
-          ? toDate(co.COAcceptedOn ?? co.ApprovedOn ?? co.ApprovedDate ?? co.ResolvedOn)
+          ? toDate(co.COAcceptedOn ?? co.ApprovedOn ?? co.ResolvedOn)
           : status === 'Rejected'
-            ? toDate(co.CORejectedOn ?? co.RejectedOn ?? co.RejectedDate ?? co.ResolvedOn)
+            ? toDate(co.CORejectedOn ?? co.RejectedOn ?? co.ResolvedOn)
             : null;
 
-        return {
-          project_id: projectId,
-          number,
-          title,
-          description: desc,
-          amount,
-          status,
-          category: mapCOCategory(co),
-          requested_at: requestedAt,
-          resolved_at: resolvedAt,
-          dtools_id: dtoolsCoId,
-          updated_at: new Date().toISOString(),
-        };
-      }).filter((r: any) => r.dtools_id); // drop rows without a stable id
+        // Signed delta lines, priced with the parent project's labor rates
+        // (the CO's own phase rows are zero-priced).
+        const coResult = detail ? buildChangeOrderItems(detail, fullProject, laborMeta ?? priorMeta) : null;
+        if (coResult) for (const line of coResult.log) console.log(`[dtools-lookup] ${line}`);
 
-      // Wipe + re-insert: COs are read-only and (project_id, dtools_id)
-      // uniqueness keeps re-syncs idempotent — but a delete-first approach
-      // also prunes any CO that DTools removed since the last sync.
-      await supabase.from('change_orders').delete().eq('project_id', projectId);
-      if (coRows.length > 0) {
-        for (let i = 0; i < coRows.length; i += 100) {
-          const batch = coRows.slice(i, i + 100);
-          const { error: coErr } = await supabase.from('change_orders').insert(batch);
-          if (coErr) console.error('[dtools-lookup] CO insert batch error:', coErr);
+        const { data: coInserted, error: coErr } = await supabase
+          .from('change_orders')
+          .insert({
+            project_id: projectId,
+            number,
+            title: String(co.COName ?? '').trim(),
+            description: String(co.CONotes ?? '').trim(),
+            amount: num(co.Price ?? listRow.Price ?? 0),
+            cost: detail ? num(co.Cost) : null,
+            labor_hours: coResult ? coResult.hoursDelta : null,
+            dtools_verified: coResult ? coResult.verified : null,
+            items_synced: !!coResult,
+            status,
+            category: mapCOCategory(co),
+            requested_at: toDate(co.COCreatedOn ?? co.CreatedOn),
+            resolved_at: resolvedAt,
+            // CO list rows reuse the parent project's Id, so the stable
+            // per-project identity is the CO number itself.
+            dtools_id: number,
+            updated_at: new Date().toISOString(),
+          })
+          .select('id')
+          .single();
+
+        if (coErr || !coInserted) {
+          console.error(`[dtools-lookup] CO insert error for ${number}:`, coErr);
+          continue;
         }
+        if (coResult && coResult.items.length > 0) {
+          const itemRows = coResult.items.map((it) => ({ ...it, change_order_id: coInserted.id }));
+          const { error: itemErr } = await supabase.from('change_order_items').insert(itemRows);
+          if (itemErr) console.error(`[dtools-lookup] CO items insert error for ${number}:`, itemErr);
+        }
+        coCount++;
       }
-      coCount = coRows.length;
     } catch (coErr) {
       // Don't fail the whole sync over COs — the BoM is the user's primary
       // ask. Surface the issue in logs so we can diagnose it later.
       console.error('[dtools-lookup] CO sync failed (BoM still imported):', coErr);
     }
 
-    console.log(`[dtools-lookup] Imported ${bomRows.length} line items, ${coCount} change orders for project ${projectId}${formattedValue ? ` (value=${formattedValue})` : ''}`);
+    console.log(`[dtools-lookup] Imported ${insertRows.length} line items, ${coCount} change orders for project ${projectId}${formattedValue ? ` (value=${formattedValue})` : ''}`);
 
     return new Response(JSON.stringify({
       status: 'found',
       dtoolsProjectId,
       dtoolsProjectName: match.Name,
-      itemsImported: bomRows.length,
+      itemsImported: insertRows.length,
       changeOrdersImported: coCount,
       value: formattedValue,
+      totals: {
+        equipmentCost: totals.equipmentCost,
+        equipmentPrice: totals.equipmentPrice,
+        laborCost: totals.laborCost,
+        laborPrice: totals.laborPrice,
+        totalCost: totals.totalCost,
+        totalPrice: totals.totalPrice,
+        verified: totals.verified,
+      },
     }), {
       headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
     });

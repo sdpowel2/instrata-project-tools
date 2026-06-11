@@ -8,3 +8,10 @@ local.env
 
 # One-off import sources kept locally, not part of the app
 Vendor Contacts/
+
+# DTools payload fixtures + API research — real customer pricing, local only.
+# scripts/verify-dtools-sync.mts needs these to run.
+Reference/
+
+# Visual Studio cruft
+.vs/

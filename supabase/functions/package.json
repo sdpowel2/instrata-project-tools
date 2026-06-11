@@ -1,0 +1,4 @@
+{
+  "type": "module",
+  "//": "Node ESM marker so scripts/verify-dtools-sync.mts can import transform.ts for offline verification. Deno (Supabase Edge runtime) ignores this file."
+}

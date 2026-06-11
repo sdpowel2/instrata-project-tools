@@ -65,6 +65,13 @@ function rowToProject(r: any): Project {
     mondayItemId: r.monday_item_id ?? undefined,
     dtoolsProjectId: r.dtools_project_id ?? undefined,
     dtoolsBomStatus: r.dtools_bom_status ?? '',
+    dtoolsCost: r.dtools_cost != null ? Number(r.dtools_cost) : undefined,
+    dtoolsPriceWithoutTax: r.dtools_price_without_tax != null ? Number(r.dtools_price_without_tax) : undefined,
+    dtoolsTax: r.dtools_tax != null ? Number(r.dtools_tax) : undefined,
+    dtoolsPrice: r.dtools_price != null ? Number(r.dtools_price) : undefined,
+    dtoolsHours: r.dtools_hours != null ? Number(r.dtools_hours) : undefined,
+    dtoolsSyncedAt: r.dtools_synced_at ?? undefined,
+    dtoolsSyncDelta: r.dtools_sync_delta ?? undefined,
     createdAt: toDate(r.created_at),
     updatedAt: toDate(r.updated_at),
   };
@@ -113,6 +120,9 @@ function rowToBoMItem(r: any): ProjectBoMItem {
     ownerFurnished: r.owner_furnished ?? false,
     optional: r.optional ?? false,
     pricedFrom: r.priced_from ?? undefined,
+    laborType: r.labor_type ?? '',
+    laborBreakdown: r.labor_breakdown ?? [],
+    includedInPhase: r.included_in_phase ?? false,
   };
 }
 function bomItemToRow(item: Partial<ProjectBoMItem>): Record<string, any> {
@@ -141,6 +151,9 @@ function bomItemToRow(item: Partial<ProjectBoMItem>): Record<string, any> {
   if (item.ownerFurnished !== undefined) row.owner_furnished = item.ownerFurnished;
   if (item.optional !== undefined) row.optional = item.optional;
   if (item.pricedFrom !== undefined) row.priced_from = item.pricedFrom || null;
+  if (item.laborType !== undefined) row.labor_type = item.laborType;
+  if (item.laborBreakdown !== undefined) row.labor_breakdown = item.laborBreakdown;
+  if (item.includedInPhase !== undefined) row.included_in_phase = item.includedInPhase;
   return row;
 }
 
@@ -418,7 +431,7 @@ const seedProjects: Project[] = [
   { id: 'p5', name: 'WTC 3 - Executive Boardroom Suite', number: 'INS-2026-004', client: 'Silverstein Properties', address: '175 Greenwich St, New York, NY 10007', businessUnit: 'Instrata SE', status: 'Review', phase: 'Pre-Sales', value: '$612K', dtoolsBomStatus: '', createdAt: '2026-03-01', updatedAt: '2026-03-25' },
 ];
 
-const bomDefaults = { itemType: 'Product' as const, unitCost: 0, unitPrice: 0, laborHours: 0, laborUnitCost: 0, laborUnitPrice: 0, fixedLaborCost: 0, fixedLaborPrice: 0, marginPct: 0, ownerFurnished: false, optional: false };
+const bomDefaults = { itemType: 'Product' as const, unitCost: 0, unitPrice: 0, laborHours: 0, laborUnitCost: 0, laborUnitPrice: 0, fixedLaborCost: 0, fixedLaborPrice: 0, marginPct: 0, ownerFurnished: false, optional: false, laborType: '', laborBreakdown: [], includedInPhase: false };
 
 const seedProjectBoM: ProjectBoMItem[] = [
   { ...bomDefaults, id: 'bom1', projectId: 'p1', manufacturer: 'Samsung', model: 'QM85C', description: '85" QLED 4K Display', category: 'Display', qty: 4, locations: [{ room: 'Conference Room A', qty: 2 }, { room: 'Conference Room B', qty: 2 }], notes: 'Conference room primary displays', sortOrder: 0 },
@@ -654,6 +667,7 @@ function milestoneToRow(m: Partial<ProjectMilestone> & { createdBy?: string }): 
 // is the only writer. We never need a *ToRow helper; only the row → object
 // mapper used to hydrate the store from Supabase.
 function rowToChangeOrder(r: any): ProjectChangeOrder {
+  const itemRows: any[] = Array.isArray(r.change_order_items) ? r.change_order_items : [];
   return {
     id: r.id,
     projectId: r.project_id,
@@ -666,6 +680,27 @@ function rowToChangeOrder(r: any): ProjectChangeOrder {
     requestedAt: r.requested_at ? toDate(r.requested_at) : '',
     resolvedAt: r.resolved_at ? toDate(r.resolved_at) : undefined,
     dToolsId: r.dtools_id ?? '',
+    cost: r.cost != null ? Number(r.cost) : undefined,
+    laborHours: r.labor_hours != null ? Number(r.labor_hours) : undefined,
+    dtoolsVerified: r.dtools_verified ?? undefined,
+    items: itemRows.length > 0
+      ? itemRows
+          .slice()
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+          .map((it) => ({
+            id: it.id,
+            changeType: it.change_type ?? 'Other',
+            manufacturer: it.manufacturer ?? '',
+            model: it.model ?? '',
+            description: it.description ?? '',
+            qty: Number(it.qty) || 0,
+            unitCost: Number(it.unit_cost) || 0,
+            unitPrice: Number(it.unit_price) || 0,
+            laborHours: Number(it.labor_hours) || 0,
+            laborCost: Number(it.labor_cost) || 0,
+            laborPrice: Number(it.labor_price) || 0,
+          }))
+      : undefined,
   };
 }
 
@@ -1068,8 +1103,9 @@ export const useStore = create<AppState>((set, get) => ({
         // Milestones
         supabase.from('project_milestones').select('*'),
         // Change orders — read-only, populated by the dtools-project-lookup
-        // Edge Function alongside the BoM.
-        supabase.from('change_orders').select('*'),
+        // Edge Function alongside the BoM. Nested select pulls each CO's
+        // signed line-item deltas in the same round trip.
+        supabase.from('change_orders').select('*, change_order_items(*)'),
         // Warehouses (org-wide)
         supabase.from('warehouses').select('*'),
         // Purchasing
@@ -1420,7 +1456,7 @@ export const useStore = create<AppState>((set, get) => ({
         Promise.all([
           supabase.from('projects').select('*').eq('id', projectId).single(),
           supabase.from('project_bom_items').select('*').eq('project_id', projectId),
-          supabase.from('change_orders').select('*').eq('project_id', projectId),
+          supabase.from('change_orders').select('*, change_order_items(*)').eq('project_id', projectId),
         ]),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('post-sync refresh timed out')), 15000),
@@ -1515,6 +1551,9 @@ export const useStore = create<AppState>((set, get) => ({
       marginPct: item.marginPct ?? 0,
       ownerFurnished: item.ownerFurnished ?? false,
       optional: item.optional ?? false,
+      laborType: item.laborType ?? '',
+      laborBreakdown: item.laborBreakdown ?? [],
+      includedInPhase: item.includedInPhase ?? false,
     }));
     set((s) => ({ projectBoM: [...s.projectBoM, ...newItems] }));
     dbExec(() => supabase.from('project_bom_items').insert(newItems.map(bomItemToRow)));

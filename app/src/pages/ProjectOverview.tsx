@@ -20,7 +20,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import type {
   ItemCategory, SubmittalItemLocation, ProjectPhase, ProjectStatus,
-  ProjectChangeOrder, ChangeOrderStatus,
+  ProjectChangeOrder, ChangeOrderStatus, ChangeOrderItem, BomItemType, DToolsSyncDelta,
 } from '../types';
 import { PRE_SALES_STATUSES, POST_SALES_STATUSES, computeMilestoneStatus } from '../types';
 
@@ -134,6 +134,7 @@ export function ProjectOverview() {
       laborHours: 0, laborUnitCost: 0, laborUnitPrice: 0,
       fixedLaborCost: 0, fixedLaborPrice: 0,
       marginPct: 0, ownerFurnished: false, optional: false,
+      laborType: '', laborBreakdown: [], includedInPhase: false,
     });
     setShowAddItem(false);
     setItemForm({ manufacturer: '', model: '', description: '', category: 'Display', qty: 1, room: '', notes: '' });
@@ -606,11 +607,12 @@ function ToolGroupCard({ phase, description, items, onOpen }: {
 // =============================================================================
 
 interface ProjectQuoteSectionProps {
-  project: { id: string; dtoolsBomStatus: string; dtoolsProjectId?: string; updatedAt: string; value?: string };
-  bomItems: {
-    id: string; qty: number; manufacturer: string; model: string; description: string;
-    unitPrice: number; locations: SubmittalItemLocation[];
-  }[];
+  project: {
+    id: string; dtoolsBomStatus: string; dtoolsProjectId?: string; updatedAt: string; value?: string;
+    dtoolsCost?: number; dtoolsPriceWithoutTax?: number; dtoolsTax?: number;
+    dtoolsPrice?: number; dtoolsHours?: number; dtoolsSyncDelta?: DToolsSyncDelta;
+  };
+  bomItems: BoMRow[];
   changeOrders: ProjectChangeOrder[];
   onSync: () => void;
   onCsvImport: () => void;
@@ -636,7 +638,58 @@ interface LocationNode {
 
 interface BoMRow {
   id: string; qty: number; manufacturer: string; model: string;
-  description: string; unitPrice: number; locations: SubmittalItemLocation[];
+  description: string; locations: SubmittalItemLocation[];
+  itemType: BomItemType; laborType: string;
+  unitCost: number; unitPrice: number;
+  laborHours: number; laborUnitCost: number; laborUnitPrice: number;
+  fixedLaborCost: number; fixedLaborPrice: number;
+}
+
+const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const fmtMoney = (n: number) =>
+  (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Full-line equipment + labor dollars for a BoM row. Products carry labor as
+// line-total hours × blended rate; companion labor lines are fixed dollars;
+// phase-residual labor lines are hour-based.
+function lineTotals(item: BoMRow): { equip: number; labor: number; equipCost: number; laborCost: number } {
+  if (item.itemType === 'Labor') {
+    return {
+      equip: 0,
+      equipCost: 0,
+      labor: r2(item.laborHours * item.laborUnitPrice) + item.fixedLaborPrice,
+      laborCost: r2(item.laborHours * item.laborUnitCost) + item.fixedLaborCost,
+    };
+  }
+  return {
+    equip: r2(item.qty * item.unitPrice),
+    equipCost: r2(item.qty * item.unitCost),
+    labor: r2(item.laborHours * item.laborUnitPrice),
+    laborCost: r2(item.laborHours * item.laborUnitCost),
+  };
+}
+
+// Proportional share of a line's dollars for one location's quantity.
+function shareTotals(item: BoMRow, locQty: number): { equip: number; labor: number } {
+  const t = lineTotals(item);
+  const frac = item.qty > 0 ? locQty / item.qty : 1;
+  return { equip: r2(t.equip * frac), labor: r2(t.labor * frac) };
+}
+
+// Subtotal for a location node including its sub-locations.
+function nodeSubtotal(node: LocationNode): { equip: number; labor: number } {
+  let equip = 0, labor = 0;
+  for (const { item, qty } of node.items) {
+    const s = shareTotals(item, qty);
+    equip += s.equip;
+    labor += s.labor;
+  }
+  for (const child of node.children.values()) {
+    const s = nodeSubtotal(child);
+    equip += s.equip;
+    labor += s.labor;
+  }
+  return { equip: r2(equip), labor: r2(labor) };
 }
 
 function buildLocationTree(bomItems: BoMRow[]): LocationNode {
@@ -656,16 +709,17 @@ function buildLocationTree(bomItems: BoMRow[]): LocationNode {
   };
 
   for (const item of bomItems) {
+    // Locationless labor (phase rollup residuals — project-wide hours) gets
+    // its own bucket so it reads as labor, not as a data problem.
+    const fallback = item.itemType === 'Labor' ? 'Project Labor' : 'Unassigned';
     if (item.locations.length === 0) {
-      const unassigned = ensureNode(['Unassigned']);
-      unassigned.items.push({ item, qty: item.qty });
+      ensureNode([fallback]).items.push({ item, qty: item.qty });
       continue;
     }
     for (const loc of item.locations) {
       const segs = locationPath(loc.room);
       if (segs.length === 0) {
-        const unassigned = ensureNode(['Unassigned']);
-        unassigned.items.push({ item, qty: loc.qty });
+        ensureNode([fallback]).items.push({ item, qty: loc.qty });
       } else {
         ensureNode(segs).items.push({ item, qty: loc.qty });
       }
@@ -755,12 +809,7 @@ function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImp
       ) : (
         <div>
           <BoMLocationTree bomItems={bomItems} />
-          {project.value && (
-            <div className="px-5.5 py-3 border-t-2 border-border bg-navy/[0.03] flex items-center justify-end gap-3 text-[13px]" style={{ paddingLeft: 22, paddingRight: 22 }}>
-              <span className="font-semibold text-fg-2">DTools Project Total</span>
-              <span className="font-mono font-bold text-navy text-base">{project.value}</span>
-            </div>
-          )}
+          <QuoteTotalsFooter project={project} bomItems={bomItems} />
           <div className="px-5.5 py-2.5 border-t border-border text-xs text-fg-2" style={{ paddingLeft: 22, paddingRight: 22 }}>
             {bomItems.length} line items{synced ? ' · pulled from DTools' : ''}
           </div>
@@ -791,6 +840,102 @@ function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImp
 }
 
 // =============================================================================
+// QuoteTotalsFooter — Equipment / Labor / Total rollup at the bottom of the
+// BoM. Prefers the sync's reconciled split (computed with DTools' own row
+// convention, so it matches the DTools quote to the penny); falls back to
+// summing the visible lines for CSV-imported projects.
+// =============================================================================
+
+function QuoteTotalsFooter({ project, bomItems }: {
+  project: ProjectQuoteSectionProps['project'];
+  bomItems: BoMRow[];
+}) {
+  const delta = project.dtoolsSyncDelta;
+
+  const computed = useMemo(() => {
+    let equip = 0, equipCost = 0, labor = 0, laborCost = 0;
+    for (const item of bomItems) {
+      const t = lineTotals(item);
+      equip += t.equip; equipCost += t.equipCost;
+      labor += t.labor; laborCost += t.laborCost;
+    }
+    return { equip: r2(equip), equipCost: r2(equipCost), labor: r2(labor), laborCost: r2(laborCost) };
+  }, [bomItems]);
+
+  const equipPrice = delta?.equipmentPrice ?? computed.equip;
+  const equipCost = delta?.equipmentCost ?? computed.equipCost;
+  const laborPrice = delta?.laborPrice ?? computed.labor;
+  const laborCost = delta?.laborCost ?? computed.laborCost;
+  const subtotalPrice = r2(equipPrice + laborPrice);
+  const subtotalCost = r2(equipCost + laborCost);
+  const tax = project.dtoolsTax ?? 0;
+  const grandTotal = project.dtoolsPrice ?? r2(subtotalPrice + tax);
+  const gp = (cost: number, price: number) =>
+    price > 0 ? `${(((price - cost) / price) * 100).toFixed(1)}%` : '—';
+
+  const hasCost = equipCost > 0 || laborCost > 0;
+
+  return (
+    <div className="border-t-2 border-border bg-navy/[0.03]" style={{ paddingLeft: 22, paddingRight: 22 }}>
+      <table className="border-collapse ml-auto my-3" style={{ minWidth: 420 }}>
+        <thead>
+          <tr className="text-fg-2 text-[10px] font-semibold uppercase tracking-[0.05em]">
+            <th className="text-left py-1 pr-6"></th>
+            {hasCost && <th className="text-right py-1 pr-6">Cost</th>}
+            <th className="text-right py-1 pr-6">Price</th>
+            {hasCost && <th className="text-right py-1">GP%</th>}
+          </tr>
+        </thead>
+        <tbody className="text-[13px]">
+          <tr>
+            <td className="py-1 pr-6 font-semibold text-fg-2">Equipment</td>
+            {hasCost && <td className="py-1 pr-6 text-right font-mono">{fmtMoney(equipCost)}</td>}
+            <td className="py-1 pr-6 text-right font-mono">{fmtMoney(equipPrice)}</td>
+            {hasCost && <td className="py-1 text-right font-mono text-fg-2">{gp(equipCost, equipPrice)}</td>}
+          </tr>
+          <tr>
+            <td className="py-1 pr-6 font-semibold text-fg-2">Labor</td>
+            {hasCost && <td className="py-1 pr-6 text-right font-mono">{fmtMoney(laborCost)}</td>}
+            <td className="py-1 pr-6 text-right font-mono">{fmtMoney(laborPrice)}</td>
+            {hasCost && <td className="py-1 text-right font-mono text-fg-2">{gp(laborCost, laborPrice)}</td>}
+          </tr>
+          {tax > 0 && (
+            <tr>
+              <td className="py-1 pr-6 font-semibold text-fg-2">Tax</td>
+              {hasCost && <td className="py-1 pr-6" />}
+              <td className="py-1 pr-6 text-right font-mono">{fmtMoney(tax)}</td>
+              {hasCost && <td className="py-1" />}
+            </tr>
+          )}
+          <tr className="border-t border-border">
+            <td className="py-1.5 pr-6 font-bold text-navy">DTools Project Total</td>
+            {hasCost && <td className="py-1.5 pr-6 text-right font-mono font-bold text-navy">{fmtMoney(subtotalCost)}</td>}
+            <td className="py-1.5 pr-6 text-right font-mono font-bold text-navy text-base">{fmtMoney(grandTotal)}</td>
+            {hasCost && <td className="py-1.5 text-right font-mono font-bold text-navy">{gp(subtotalCost, subtotalPrice)}</td>}
+          </tr>
+        </tbody>
+      </table>
+      {delta && (
+        <div className="pb-2.5 text-right text-[11px]">
+          {delta.verified ? (
+            <span className="text-green-700 inline-flex items-center gap-1">
+              <ShieldCheck size={11} /> Reconciled with DTools quote (drift ≤ $1)
+            </span>
+          ) : (
+            <span className="text-orange-600">
+              ⚠ Does not reconcile with DTools (Δ cost {fmtMoney(delta.costDelta)}, Δ price {fmtMoney(delta.priceDelta)}) — check the sync log
+            </span>
+          )}
+          {delta.echoModels.length > 0 && (
+            <span className="text-fg-2"> · DTools rolls {delta.echoModels.join(', ')} into phase labor; shown here as its own line</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // Change Orders — read-only blocks rendered inside the Project Quote card.
 // =============================================================================
 
@@ -806,6 +951,8 @@ function parseProjectValue(s: string | undefined): number {
 
 const fmtUSD = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US');
 const fmtSigned = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US');
+const fmtSignedCents = (n: number) =>
+  (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 interface ChangeOrderGroupsProps {
   changeOrders: ProjectChangeOrder[];
@@ -896,6 +1043,7 @@ interface CORowProps {
 
 function CORow({ co, status }: CORowProps) {
   const muted = status === 'Rejected';
+  const [showItems, setShowItems] = useState(false);
   const amountColor =
     status === 'Approved' ? '#15803D' : status === 'Pending' ? 'var(--color-orange)' : 'var(--color-fg-2)';
 
@@ -957,7 +1105,19 @@ function CORow({ co, status }: CORowProps) {
             <span>· {status === 'Rejected' ? 'Rejected' : 'Approved'} {co.resolvedAt}</span>
           )}
           <span className="font-mono">· {co.dToolsId}</span>
+          {co.items && co.items.length > 0 && (
+            <button
+              onClick={() => setShowItems((v) => !v)}
+              className="text-navy font-semibold hover:underline"
+            >
+              {showItems ? 'Hide' : 'Show'} {co.items.length} line item{co.items.length === 1 ? '' : 's'}
+            </button>
+          )}
+          {co.dtoolsVerified === false && (
+            <span className="text-orange-600 font-semibold">⚠ lines don't reconcile with CO total</span>
+          )}
         </div>
+        {showItems && co.items && <COItemsTable items={co.items} />}
       </div>
       <div
         className="flex-shrink-0 text-right font-mono text-[15px] font-bold"
@@ -968,6 +1128,65 @@ function CORow({ co, status }: CORowProps) {
       >
         {fmtSigned(co.amount)}
       </div>
+    </div>
+  );
+}
+
+// Signed delta lines inside a published CO. Removals arrive from DTools with
+// negated unit prices/hours, so the line totals are already signed — we just
+// color-code by change type.
+function COItemsTable({ items }: { items: ChangeOrderItem[] }) {
+  const typeStyle = (t: ChangeOrderItem['changeType']) => {
+    if (t === 'Added') return { color: '#15803D', bg: 'rgba(21,128,61,0.08)', label: 'Added' };
+    if (t === 'Removed') return { color: '#B91C1C', bg: 'rgba(185,28,28,0.08)', label: 'Removed' };
+    if (t === 'Adjusted') return { color: '#B45309', bg: 'rgba(180,83,9,0.08)', label: 'Adjusted' };
+    return { color: 'var(--color-fg-2)', bg: 'rgba(0,0,0,0.04)', label: t };
+  };
+
+  return (
+    <div className="mt-2.5 border border-border rounded-lg overflow-hidden">
+      <table className="w-full border-collapse text-[12.5px]">
+        <thead>
+          <tr className="bg-navy/[0.04] text-fg-2 text-left">
+            <th className="py-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.05em]" style={{ width: 80 }}></th>
+            <th className="py-1.5 pr-3 text-[10px] font-semibold uppercase tracking-[0.05em]" style={{ width: 40 }}>Qty</th>
+            <th className="py-1.5 pr-3 text-[10px] font-semibold uppercase tracking-[0.05em]">Item</th>
+            <th className="py-1.5 pr-3 text-[10px] font-semibold uppercase tracking-[0.05em] text-right" style={{ width: 95 }}>Equipment</th>
+            <th className="py-1.5 pr-3 text-[10px] font-semibold uppercase tracking-[0.05em] text-right" style={{ width: 85 }}>Labor</th>
+            <th className="py-1.5 pr-3 text-[10px] font-semibold uppercase tracking-[0.05em] text-right" style={{ width: 95 }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it) => {
+            const s = typeStyle(it.changeType);
+            const equip = r2(it.qty * it.unitPrice);
+            const total = r2(equip + it.laborPrice);
+            return (
+              <tr key={it.id} className="border-t border-border-soft">
+                <td className="py-1.5 px-3">
+                  <span
+                    className="text-[10px] font-bold tracking-[0.08em] uppercase"
+                    style={{ padding: '1px 6px', borderRadius: 4, color: s.color, background: s.bg }}
+                  >
+                    {s.label}
+                  </span>
+                </td>
+                <td className="py-1.5 pr-3 font-mono">{it.qty}</td>
+                <td className="py-1.5 pr-3">
+                  <span className="font-mono font-semibold">{it.model}</span>
+                  {it.manufacturer && <span className="text-fg-2"> · {it.manufacturer}</span>}
+                  {it.description && <span className="text-fg-2"> — {it.description}</span>}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>{fmtSignedCents(equip)}</td>
+                <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>
+                  {it.laborPrice !== 0 ? fmtSignedCents(it.laborPrice) : '—'}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono font-bold" style={{ color: s.color }}>{fmtSignedCents(total)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1170,6 +1389,8 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
   const isOpen = expanded.has(node.fullPath);
   const childCount = node.children.size;
   const itemCount = countNode(node);
+  const subtotal = useMemo(() => nodeSubtotal(node), [node]);
+  const hasMoney = subtotal.equip > 0 || subtotal.labor > 0;
   // Indent each level by ~20px so deep hierarchies stay scannable.
   const indent = 22 + depth * 20;
 
@@ -1189,6 +1410,11 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
         <span className="text-[11px] text-fg-2 flex items-center gap-3 flex-shrink-0">
           {childCount > 0 && <span>{childCount} sub-location{childCount === 1 ? '' : 's'}</span>}
           <span>{itemCount} item{itemCount === 1 ? '' : 's'}</span>
+          {hasMoney && (
+            <span className="font-mono font-semibold text-navy">
+              {fmtMoney(subtotal.equip + subtotal.labor)}
+            </span>
+          )}
         </span>
       </button>
 
@@ -1204,17 +1430,38 @@ function LocationBranch({ node, depth, expanded, onToggle }: LocationBranchProps
                     <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5" style={{ width: 170 }}>Part #</th>
                     <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5" style={{ width: 140 }}>Manufacturer</th>
                     <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5">Description</th>
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5 text-right" style={{ width: 95 }}>Unit Price</th>
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] pr-5 text-right" style={{ width: 100 }}>Ext. Price</th>
+                    <th className="py-1.5 text-[10px] font-semibold uppercase tracking-[0.05em] text-right" style={{ width: 100, paddingRight: 22 }}>Labor</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {node.items.map(({ item, qty }, i) => (
-                    <tr key={`${item.id}-${i}`} className="border-t border-border-soft">
-                      <td className="py-2 text-[13px] font-semibold font-mono align-top" style={{ paddingLeft: indent + 24, paddingRight: 22 }}>{qty}</td>
-                      <td className="py-2 text-[13px] font-mono align-top pr-5">{item.model}</td>
-                      <td className="py-2 text-[13px] text-fg-2 align-top pr-5">{item.manufacturer}</td>
-                      <td className="py-2 text-[13px] align-top pr-5">{item.description}</td>
-                    </tr>
-                  ))}
+                  {node.items.map(({ item, qty }, i) => {
+                    const share = shareTotals(item, qty);
+                    const isLabor = item.itemType === 'Labor';
+                    const isHourly = isLabor && item.laborHours > 0;
+                    return (
+                      <tr key={`${item.id}-${i}`} className="border-t border-border-soft">
+                        <td className="py-2 text-[13px] font-semibold font-mono align-top" style={{ paddingLeft: indent + 24, paddingRight: 22 }}>
+                          {isHourly ? `${Number(qty.toFixed(2))} hr` : qty}
+                        </td>
+                        <td className="py-2 text-[13px] font-mono align-top pr-5">{item.model}</td>
+                        <td className="py-2 text-[13px] text-fg-2 align-top pr-5">{item.manufacturer || (isLabor ? item.laborType : '')}</td>
+                        <td className="py-2 text-[13px] align-top pr-5">{item.description}</td>
+                        <td className="py-2 text-[13px] font-mono align-top pr-5 text-right">
+                          {isLabor
+                            ? (isHourly ? `${fmtMoney(item.laborUnitPrice)}/hr` : fmtMoney(item.unitPrice))
+                            : fmtMoney(item.unitPrice)}
+                        </td>
+                        <td className="py-2 text-[13px] font-mono align-top pr-5 text-right">
+                          {isLabor ? '—' : fmtMoney(share.equip)}
+                        </td>
+                        <td className="py-2 text-[13px] font-mono align-top text-right" style={{ paddingRight: 22 }}>
+                          {share.labor > 0 ? fmtMoney(share.labor) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
