@@ -229,6 +229,9 @@ export interface ChangeOrderItem {
   qty: number;
   unitCost: number;
   unitPrice: number;
+  /** 'Labor' for located labor items and phase residuals — their dollars
+   *  display in the Labor column even when carried in unitPrice. */
+  itemType: 'Product' | 'Labor';
   laborHours: number;
   laborCost: number;
   laborPrice: number;

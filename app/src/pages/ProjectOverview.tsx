@@ -1160,10 +1160,12 @@ function COItemsTable({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: 
         <tbody>
           {items.map((it) => {
             const s = typeStyle(it.changeType);
-            // Labor-only lines (phase residuals) carry their dollars in
-            // laborPrice with zero unit price — qty is hours.
-            const laborOnly = it.unitPrice === 0 && it.laborHours !== 0;
+            // Labor rows carry dollars either on the line itself (located
+            // labor items: qty × unitPrice) or in laborPrice (phase
+            // residuals) — either way they belong in the Labor column.
+            const isLabor = it.itemType === 'Labor';
             const equip = r2(it.qty * it.unitPrice);
+            const laborDollars = isLabor ? r2(equip + it.laborPrice) : it.laborPrice;
             const total = r2(equip + it.laborPrice);
             return (
               <tr key={it.id} className="border-t border-border-soft">
@@ -1175,17 +1177,19 @@ function COItemsTable({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: 
                     {s.label}
                   </span>
                 </td>
-                <td className="py-1.5 pr-3 font-mono">{laborOnly ? `${Number(it.qty.toFixed(2))} hr` : it.qty}</td>
+                <td className="py-1.5 pr-3 font-mono">
+                  {isLabor && it.laborHours !== 0 ? `${Number(Math.abs(it.laborHours).toFixed(2))} hr` : it.qty}
+                </td>
                 <td className="py-1.5 pr-3">
                   <span className="font-mono font-semibold">{it.model}</span>
                   {it.manufacturer && <span className="text-fg-2"> · {it.manufacturer}</span>}
                   {it.description && <span className="text-fg-2"> — {it.description}</span>}
                 </td>
                 <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>
-                  {laborOnly ? '—' : fmtSignedCents(equip)}
+                  {isLabor ? '—' : fmtSignedCents(equip)}
                 </td>
                 <td className="py-1.5 pr-3 text-right font-mono" style={{ color: s.color }}>
-                  {it.laborPrice !== 0 ? fmtSignedCents(it.laborPrice) : '—'}
+                  {laborDollars !== 0 ? fmtSignedCents(laborDollars) : '—'}
                 </td>
                 <td className="py-1.5 pr-3 text-right font-mono font-bold" style={{ color: s.color }}>{fmtSignedCents(total)}</td>
               </tr>
@@ -1203,8 +1207,10 @@ function COItemsTable({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: 
 function COItemsFooter({ items, tax, amount }: { items: ChangeOrderItem[]; tax?: number; amount?: number }) {
   let equip = 0, labor = 0;
   for (const it of items) {
-    equip += r2(it.qty * it.unitPrice);
-    labor += it.laborPrice;
+    // Labor rows' line dollars count as labor (matches the row rendering).
+    const line = r2(it.qty * it.unitPrice);
+    if (it.itemType === 'Labor') labor += line + it.laborPrice;
+    else { equip += line; labor += it.laborPrice; }
   }
   equip = r2(equip);
   labor = r2(labor);

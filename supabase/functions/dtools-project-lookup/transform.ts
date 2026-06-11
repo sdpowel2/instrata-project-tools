@@ -309,6 +309,9 @@ export interface CoItemRow {
   qty: number;
   unit_cost: number;   // signed, as DTools publishes them
   unit_price: number;
+  /** 'Labor' for located labor items and phase residuals — their dollars
+   *  belong in the Labor column even when carried in unit_price. */
+  item_type: 'Product' | 'Labor';
   labor_hours: number; // signed line-total raw hours
   labor_cost: number;  // signed line dollars at parent rates
   labor_price: number;
@@ -388,18 +391,37 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
     const lineCost = round2(qty * unitCost);
     const linePrice = round2(qty * unitPrice);
 
+    // Located labor items (TypeId 2 — SI's "send labor items as individual"
+    // setting) carry their dollars on the line itself (qty × unit price);
+    // their ItemLaborTypes hours are the same labor, NOT extra — count the
+    // hours, never price them, or the CO double-counts.
+    const isLaborItem = it.TypeId == 2;
+
     let laborHours = 0, laborCost = 0, laborPrice = 0;
     const breakdown: LaborBreakdownEntry[] = [];
     for (const lt of it.ItemLaborTypes ?? []) {
       const typeName = String(lt.Name ?? '').trim();
       const hours = num(lt.Hours); // signed on removals
-      const rate = rates.get(typeName);
       if (!typeName || hours === 0) continue;
+      if (isLaborItem) {
+        // Labor items publish Hours as the LINE-total raw hours (qty is the
+        // adjusted hours) — no qty multiplication.
+        laborHours += hours;
+        breakdown.push({
+          type: typeName,
+          hours: round6(hours),
+          totalHours: round6(num(lt.TotalHours)),
+          costRate: round6(hours !== 0 ? lineCost / hours : 0),
+          priceRate: round6(hours !== 0 ? linePrice / hours : 0),
+        });
+        continue;
+      }
+      const lineHours = qty * hours;
+      const rate = rates.get(typeName);
       if (!rate) {
         log.push(`[transform] WARNING: CO ${coNumber} item "${it.Model}" has labor type "${typeName}" with no known rate — labor unpriced`);
         continue;
       }
-      const lineHours = qty * hours;
       laborHours += lineHours;
       laborCost += lineHours * rate.costPerHour;
       laborPrice += lineHours * rate.pricePerHour;
@@ -413,13 +435,14 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
     }
 
     items.push({
-      change_type: it.TypeId == 2 ? 'Other' : mapCoChangeType(it.COChangeTypeId),
+      change_type: mapCoChangeType(it.COChangeTypeId),
       manufacturer: it.Manufacturer || '',
       model: it.Model || '',
       description: it.Description || '',
       qty,
       unit_cost: unitCost,
       unit_price: unitPrice,
+      item_type: isLaborItem ? 'Labor' : 'Product',
       labor_hours: round6(laborHours),
       labor_cost: round2(laborCost),
       labor_price: round2(laborPrice),
@@ -467,6 +490,7 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
       qty: Math.abs(residual),
       unit_cost: 0,
       unit_price: 0,
+      item_type: 'Labor',
       labor_hours: residual,
       labor_cost: laborCost,
       labor_price: laborPrice,
@@ -700,6 +724,13 @@ export function buildBomFromDtools(fullProject: any, priorMeta: LaborMeta | null
   }
 
   // ── Companion labor rows (REAL cost/price, echo or not) ───────────────────
+  // With SI's "send labor items as individual" integration setting on,
+  // located labor items arrive here carrying ItemLaborTypes (and their own
+  // LocationId) instead of being flattened into location-less phase rollups.
+  // For these rows Quantity IS the (adjusted) hours and UnitPrice the $/hr —
+  // unlike products, ItemLaborTypes.Hours is the LINE-total raw hours, not
+  // per-unit. Dollars stay qty × unit price either way; the hour fields just
+  // let the row display as "N hr @ $X/hr" in its room.
   const laborRows: BomRow[] = [];
   companionRows.forEach((c, idx) => {
     const qty = num(c.Quantity);
@@ -707,6 +738,8 @@ export function buildBomFromDtools(fullProject: any, priorMeta: LaborMeta | null
     const lineCost = round2(qty * num(c.UnitCost));
     if (qty === 0 && lineTotal === 0 && lineCost === 0) return; // empty placeholder
     const room = locName(c);
+    const rawHours = round6((c.ItemLaborTypes ?? []).reduce((s: number, lt: any) => s + num(lt.Hours), 0));
+    const hourly = rawHours > 0;
     laborRows.push({
       manufacturer: c.Manufacturer || '',
       model: c.Model || '',
@@ -719,17 +752,27 @@ export function buildBomFromDtools(fullProject: any, priorMeta: LaborMeta | null
       item_type: 'Labor',
       unit_cost: num(c.UnitCost),
       unit_price: num(c.UnitPrice),
-      labor_hours: 0, // fixed-dollar labor line, not hour-based
-      labor_unit_cost: 0,
-      labor_unit_price: 0,
-      fixed_labor_cost: lineCost,
-      fixed_labor_price: lineTotal,
+      labor_hours: hourly ? qty : 0, // qty = adjusted hours at unit $/hr
+      labor_unit_cost: hourly ? num(c.UnitCost) : 0,
+      labor_unit_price: hourly ? num(c.UnitPrice) : 0,
+      fixed_labor_cost: hourly ? 0 : lineCost,
+      fixed_labor_price: hourly ? 0 : lineTotal,
       margin_pct: 0,
       owner_furnished: false,
       optional: c.IsOptional === true,
       priced_from: null,
       labor_type: String(c.LaborTypes ?? '').trim(),
-      labor_breakdown: [],
+      labor_breakdown: hourly
+        ? (c.ItemLaborTypes ?? [])
+            .filter((lt: any) => num(lt.Hours) !== 0)
+            .map((lt: any) => ({
+              type: String(lt.Name ?? '').trim(),
+              hours: round6(num(lt.Hours)), // line-total raw hours
+              totalHours: round6(num(lt.TotalHours)),
+              costRate: round6(lineCost / rawHours),
+              priceRate: round6(lineTotal / rawHours),
+            }))
+        : [],
       included_in_phase: echoIdx.has(idx), // informational (priced payloads)
     });
   });
