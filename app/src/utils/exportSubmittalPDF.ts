@@ -81,6 +81,25 @@ function drawTableRow(
   }
 }
 
+/** Word-wrap sanitized text to a max width, returning one string per line.
+ *  A single token longer than maxW is left intact (drawn slightly over). */
+function wrapText(text: string, font: PDFFont, size: number, maxW: number): string[] {
+  const words = sanitize(text).split(' ').filter(Boolean);
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const trial = cur ? `${cur} ${w}` : w;
+    if (cur && font.widthOfTextAtSize(trial, size) > maxW) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = trial;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
 export async function exportSubmittalPDF(
   submittal: Submittal,
   project: Project,
@@ -275,7 +294,7 @@ export async function exportSubmittalPDF(
   const bomStartPage = currentPageNum + 1;
 
   // Gather all rooms from items
-  const roomMap = new Map<string, { manufacturer: string; model: string; description: string; qty: number }[]>();
+  const roomMap = new Map<string, { manufacturer: string; model: string; description: string; qty: number; notes: string }[]>();
   for (const item of sortedItems) {
     if (item.locations && item.locations.length > 0) {
       for (const loc of item.locations) {
@@ -285,6 +304,7 @@ export async function exportSubmittalPDF(
           model: item.model,
           description: item.description,
           qty: loc.qty,
+          notes: item.notes,
         });
       }
     }
@@ -298,6 +318,7 @@ export async function exportSubmittalPDF(
       model: i.model,
       description: i.description,
       qty: i.qty,
+      notes: i.notes,
     })));
   }
 
@@ -365,6 +386,24 @@ export async function exportSubmittalPDF(
         { text: String(item.qty), x: bomCols[3].x + 4, w: bomCols[3].w },
       ], fontRegular, 9, BLACK, bg);
       bomY -= 18;
+
+      // Item notes, wrapped, indented beneath the row. Each wrapped line gets
+      // its own page-break check so long notes can spill to the next page.
+      const noteText = sanitize(item.notes);
+      if (noteText) {
+        const noteLines = wrapText(`Note: ${noteText}`, fontItalic, 8, CONTENT_W - 24);
+        for (const nl of noteLines) {
+          if (bomY < MARGIN + 40) {
+            addFooter(bomPage, fontRegular, currentPageNum, 'Bill of Materials by Room');
+            bomPage = pdfDoc.addPage(PageSizes.Letter);
+            currentPageNum++;
+            bomY = PAGE_H - MARGIN;
+          }
+          bomPage.drawText(nl, { x: MARGIN + 12, y: bomY + 5, size: 8, font: fontItalic, color: MID_GRAY });
+          bomY -= 11;
+        }
+        bomY -= 4;
+      }
     }
 
     // Room subtotal

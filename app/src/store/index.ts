@@ -1688,14 +1688,14 @@ export const useStore = create<AppState>((set, get) => ({
     const bomItems = get().projectBoM
       .filter((b) => b.projectId === projectId)
       .filter((b) => !isExcludedFromSubmittal(b));
-    const map = new Map<string, { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; notes: string; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string }>();
+    const map = new Map<string, { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string }>();
     for (const item of bomItems) {
       const key = `${item.manufacturer.toLowerCase()}|||${item.model.toLowerCase()}`;
       const existing = map.get(key);
       if (existing) {
         existing.qty += item.qty;
       } else {
-        map.set(key, { manufacturer: item.manufacturer, model: item.model, description: item.description, category: item.category, qty: item.qty, notes: item.notes, locations: [...item.locations], cutSheetData: item.cutSheetData, cutSheetName: item.cutSheetName });
+        map.set(key, { manufacturer: item.manufacturer, model: item.model, description: item.description, category: item.category, qty: item.qty, locations: [...item.locations], cutSheetData: item.cutSheetData, cutSheetName: item.cutSheetName });
       }
     }
     const consolidated = Array.from(map.values());
@@ -1707,7 +1707,11 @@ export const useStore = create<AppState>((set, get) => ({
       description: c.description,
       category: c.category,
       qty: c.qty,
-      notes: c.notes,
+      // Notes start blank. The project BoM's notes field is populated by the
+      // DTools sync (e.g. "Phase: Install"), which is internal estimating
+      // metadata — not something that belongs on a client-facing submittal.
+      // Users add their own notes per item after the BoM is pulled in.
+      notes: '',
       locations: c.locations,
       cutSheetData: c.cutSheetData,
       cutSheetName: c.cutSheetName,
