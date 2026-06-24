@@ -12,6 +12,7 @@ import type { PunchStatus, PunchPriority, SignOffStatus, Warranty, ManualBookmar
 import { exportSignOffPDF } from '../utils/exportSignOffPDF';
 import { exportCloseoutPDF } from '../utils/exportCloseoutPDF';
 import { exportPunchListPDF } from '../utils/exportPunchListPDF';
+import { exportWarrantyPDF } from '../utils/exportWarrantyPDF';
 import { exportManualsPDF } from '../utils/exportManualsPDF';
 import { extractBookmarks } from '../utils/extractBookmarks';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -394,6 +395,18 @@ export function CloseoutDashboard() {
       {activeTab === 'warranties' && (
         <>
           <div className="flex justify-end gap-3 mb-4">
+            <button
+              onClick={() => {
+                if (project) {
+                  exportWarrantyPDF(project, closeout.warranties)
+                    .catch((err) => { console.error('[Warranty PDF]', err); alert('PDF export failed: ' + err.message); });
+                }
+              }}
+              disabled={closeout.warranties.length === 0}
+              className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download size={14} /> Export Warranty PDF
+            </button>
             <button
               onClick={() => populateWarranties(closeoutId, projectId!)}
               className="btn-secondary text-sm"
