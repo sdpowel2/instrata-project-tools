@@ -56,10 +56,36 @@ function drawTocHeader(page: PDFPage, fontBold: PDFFont, continued = false) {
   });
 }
 
-/** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
+// pdf-lib's StandardFonts use WinAnsi (CP1252) encoding, which can't encode
+// many common typographic Unicode chars — smart quotes, en/em dashes, primes,
+// the multiplication sign, ellipsis, and the non-breaking hyphen (U+2011) that
+// sneaks in via copy-paste from Word/web. drawText/widthOfTextAtSize throw on
+// the first such glyph, aborting the whole export. Map the frequent offenders
+// to ASCII look-alikes; the catch-all in sanitize() drops anything still
+// unencodable (a dropped glyph beats a crashed export). This file must stay
+// UTF-8 for the character classes below to match the intended code points.
+const WINANSI_REPLACEMENTS: [RegExp, string][] = [
+  [/[‐-―−]/g, '-'],                       // hyphens, dashes, minus sign
+  [/[‘’‚‛′]/g, "'"],            // single quotes, prime (feet)
+  [/[“”„‟″]/g, '"'],            // double quotes, double prime (inches)
+  [/…/g, '...'],                                    // ellipsis
+  [/[•·]/g, '-'],                              // bullet, middle dot
+  [/×/g, 'x'],                                      // multiplication sign (dimensions)
+  [/[  -   　]/g, ' '],     // non-breaking / thin spaces
+  [/[​-‍﻿]/g, ''],                        // zero-width spaces / BOM
+];
+
+/** Make a string safe to draw with pdf-lib's WinAnsi fonts: map common
+ *  typographic chars to ASCII, strip control codes, and drop anything still
+ *  outside the WinAnsi-safe band (a dropped glyph beats a crashed export). */
 function sanitize(s: string | null | undefined): string {
   if (!s) return '';
-  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
+  let out = String(s);
+  for (const [re, rep] of WINANSI_REPLACEMENTS) out = out.replace(re, rep);
+  // C0/C1 control chars -> space, then remove any remaining char outside
+  // printable ASCII + the Latin-1 supplement (all of which WinAnsi encodes).
+  out = out.replace(/[\x00-\x1F\x7F-\x9F]+/g, ' ').replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 function drawTableRow(
@@ -81,7 +107,7 @@ function drawTableRow(
     while (font.widthOfTextAtSize(text, size) > col.w - 4 && text.length > 0) {
       text = text.slice(0, -1);
     }
-    if (text !== original && text.length > 0) text = text.slice(0, -1) + '…';
+    if (text !== original && text.length > 0) text = text.slice(0, -1) + '...';
     page.drawText(text, { x: col.x, y, size, font, color });
   }
 }
@@ -194,7 +220,7 @@ export async function exportSubmittalPDF(
   coverPage.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: 6, color: ORANGE });
 
   // Footer text above bottom bar
-  const footerText = 'Instrata Project Tools — Submittal Package';
+  const footerText = sanitize('Instrata Project Tools — Submittal Package');
   const ftW = fontItalic.widthOfTextAtSize(footerText, 8);
   coverPage.drawText(footerText, { x: (PAGE_W - ftW) / 2, y: 16, size: 8, font: fontItalic, color: MID_GRAY });
 
@@ -380,7 +406,7 @@ export async function exportSubmittalPDF(
       thickness: 0.5,
       color: MID_GRAY,
     });
-    const subtotalText = `${items.length} items · ${roomTotal} total qty`;
+    const subtotalText = sanitize(`${items.length} items - ${roomTotal} total qty`);
     bomPage.drawText(subtotalText, {
       x: PAGE_W - MARGIN - fontItalic.widthOfTextAtSize(subtotalText, 8),
       y: bomY - 8,
