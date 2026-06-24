@@ -241,8 +241,8 @@ export async function exportWarrantyPDF(
   y -= 60;
 
   const wCols = [
-    { label: 'System', x: MARGIN, w: 70 },
-    { label: 'Mfr / Model', x: MARGIN + 70, w: 95 },
+    { label: 'Manufacturer', x: MARGIN, w: 80 },
+    { label: 'Model', x: MARGIN + 80, w: 85 },
     { label: 'Vendor', x: MARGIN + 165, w: 70 },
     { label: 'Start', x: MARGIN + 235, w: 60 },
     { label: 'Dur.', x: MARGIN + 295, w: 35 },
@@ -287,8 +287,8 @@ export async function exportWarrantyPDF(
 
       const bg = i % 2 === 0 ? undefined : LIGHT_GRAY;
       drawTableRow(page, y, [
-        { text: w.system || '—', x: wCols[0].x + 4, w: wCols[0].w },
-        { text: `${w.manufacturer} ${w.model}`, x: wCols[1].x + 4, w: wCols[1].w },
+        { text: w.manufacturer || '—', x: wCols[0].x + 4, w: wCols[0].w },
+        { text: w.model || '—', x: wCols[1].x + 4, w: wCols[1].w },
         { text: w.vendor || '—', x: wCols[2].x + 4, w: wCols[2].w },
         { text: startDate, x: wCols[3].x + 4, w: wCols[3].w },
         { text: dur, x: wCols[4].x + 4, w: wCols[4].w },
