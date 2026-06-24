@@ -95,6 +95,24 @@ function drawTableRow(
   }
 }
 
+/** Parse a date value as a *local* date. A bare `YYYY-MM-DD` is split by hand
+ *  so it doesn't shift a day in timezones behind UTC (`new Date('2026-02-26')`
+ *  is UTC midnight, which renders as the 25th in US zones). Returns null if
+ *  unparseable. */
+function parseLocalDate(value: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Format a warranty date as "Feb 25, 2036". Falls back to the raw string if
+ *  it can't be parsed, and to an em-dash when empty. */
+function formatWarrantyDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  const d = parseLocalDate(value);
+  return d ? d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : value;
+}
+
 /**
  * Standalone Warranties PDF — branded cover (matches the punch-list / sign-off
  * exports) followed by the same warranty table used in the full Closeout
@@ -275,13 +293,15 @@ export async function exportWarrantyPDF(
       }
 
       const w = warranties[i];
-      const startDate = w.startDate || '—';
+      const startDate = formatWarrantyDate(w.startDate);
       const dur = w.durationMonths ? `${w.durationMonths}mo` : '—';
       let expiry = '—';
       if (w.startDate && w.durationMonths) {
-        const d = new Date(w.startDate);
-        d.setMonth(d.getMonth() + w.durationMonths);
-        expiry = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        const d = parseLocalDate(w.startDate);
+        if (d) {
+          d.setMonth(d.getMonth() + w.durationMonths);
+          expiry = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
       }
       const contact = [w.contactName, w.contactEmail, w.contactPhone].filter(Boolean).join(', ');
 
