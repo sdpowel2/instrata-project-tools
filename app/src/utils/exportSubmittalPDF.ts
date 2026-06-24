@@ -2,6 +2,7 @@ import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pd
 import type { Submittal, SubmittalItem, Project } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
 import { fetchCutsheetBytes, hasCutsheet } from './cutsheetSource';
+import { sanitizePdfText as sanitize } from './pdfText';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431); // #22326E
@@ -54,38 +55,6 @@ function drawTocHeader(page: PDFPage, fontBold: PDFFont, continued = false) {
     font: fontBold,
     color: WHITE,
   });
-}
-
-// pdf-lib's StandardFonts use WinAnsi (CP1252) encoding, which can't encode
-// many common typographic Unicode chars — smart quotes, en/em dashes, primes,
-// the multiplication sign, ellipsis, and the non-breaking hyphen (U+2011) that
-// sneaks in via copy-paste from Word/web. drawText/widthOfTextAtSize throw on
-// the first such glyph, aborting the whole export. Map the frequent offenders
-// to ASCII look-alikes; the catch-all in sanitize() drops anything still
-// unencodable (a dropped glyph beats a crashed export). This file must stay
-// UTF-8 for the character classes below to match the intended code points.
-const WINANSI_REPLACEMENTS: [RegExp, string][] = [
-  [/[‐-―−]/g, '-'],                       // hyphens, dashes, minus sign
-  [/[‘’‚‛′]/g, "'"],            // single quotes, prime (feet)
-  [/[“”„‟″]/g, '"'],            // double quotes, double prime (inches)
-  [/…/g, '...'],                                    // ellipsis
-  [/[•·]/g, '-'],                              // bullet, middle dot
-  [/×/g, 'x'],                                      // multiplication sign (dimensions)
-  [/[  -   　]/g, ' '],     // non-breaking / thin spaces
-  [/[​-‍﻿]/g, ''],                        // zero-width spaces / BOM
-];
-
-/** Make a string safe to draw with pdf-lib's WinAnsi fonts: map common
- *  typographic chars to ASCII, strip control codes, and drop anything still
- *  outside the WinAnsi-safe band (a dropped glyph beats a crashed export). */
-function sanitize(s: string | null | undefined): string {
-  if (!s) return '';
-  let out = String(s);
-  for (const [re, rep] of WINANSI_REPLACEMENTS) out = out.replace(re, rep);
-  // C0/C1 control chars -> space, then remove any remaining char outside
-  // printable ASCII + the Latin-1 supplement (all of which WinAnsi encodes).
-  out = out.replace(/[\x00-\x1F\x7F-\x9F]+/g, ' ').replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
-  return out.replace(/\s+/g, ' ').trim();
 }
 
 function drawTableRow(

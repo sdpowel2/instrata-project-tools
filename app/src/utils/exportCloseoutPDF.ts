@@ -1,4 +1,5 @@
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pdf-lib';
+import { sanitizePdfText as sanitize } from './pdfText';
 import type { Project, ProjectBoMItem, CloseoutPackage } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
 import { isUrl, fetchFileBytes } from '../lib/storage';
@@ -44,12 +45,6 @@ function addFooter(page: PDFPage, font: PDFFont, pageNum: number, label?: string
   if (label) {
     page.drawText(label, { x: MARGIN, y, size: 8, font, color: MID_GRAY });
   }
-}
-
-/** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
-function sanitize(s: string | null | undefined): string {
-  if (!s) return '';
-  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function truncateText(text: string, font: PDFFont, size: number, maxW: number): string {

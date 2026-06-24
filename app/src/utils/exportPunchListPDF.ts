@@ -1,4 +1,5 @@
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pdf-lib';
+import { sanitizePdfText as sanitize } from './pdfText';
 import type { Project, PunchItem, ProjectBoMItem } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
 
@@ -53,13 +54,6 @@ function drawCheckbox(page: PDFPage, x: number, y: number, size = 11): number {
     borderWidth: 1,
   });
   return x + size;
-}
-
-/** Strip characters that pdf-lib's Helvetica (WinAnsi) can't encode — e.g.
- *  embedded newlines from CSV/DTools imports that crash drawText. */
-function sanitize(s: string | null | undefined): string {
-  if (!s) return '';
-  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** Wrap text to a max width, returning lines that fit. */

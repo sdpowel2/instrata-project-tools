@@ -1,6 +1,7 @@
 import { PDFDocument, StandardFonts, rgb, PageSizes } from 'pdf-lib';
 import type { Project, ManualBookmark } from '../types';
 import letterheadUrl from '../assets/letterhead.pdf?url';
+import { sanitizePdfText as sanitize } from './pdfText';
 
 const NAVY      = rgb(0.133, 0.196, 0.431);
 const ORANGE    = rgb(0.965, 0.553, 0.180);
@@ -63,7 +64,7 @@ export async function appendManualSection(
   });
 
   // Project name
-  coverPage.drawText(project.name, { x: MARGIN, y, size: 15, font: fontBold, color: NAVY });
+  coverPage.drawText(sanitize(project.name), { x: MARGIN, y, size: 15, font: fontBold, color: NAVY });
   y -= 20;
 
   // Navy rule
@@ -99,13 +100,15 @@ export async function appendManualSection(
       const size   = isTop ? 10 : 9;
       const color  = isTop ? NAVY : DARK_GRAY;
 
-      // Truncate title if too wide
+      // Truncate title if too wide. Sanitize first \u2014 bookmark text comes
+      // straight from the embedded PDF and may carry non-WinAnsi glyphs.
       const maxTitleW = CONTENT_W - indent - 50;
-      let title = bm.title;
+      const rawTitle = sanitize(bm.title);
+      let title = rawTitle;
       while (font.widthOfTextAtSize(title, size) > maxTitleW && title.length > 1) {
         title = title.slice(0, -1);
       }
-      if (title !== bm.title) title = title.slice(0, -1) + '\u2026';
+      if (title !== rawTitle) title = title.slice(0, -1) + '\u2026';
 
       coverPage.drawText(title, { x: MARGIN + indent, y, size, font, color });
 

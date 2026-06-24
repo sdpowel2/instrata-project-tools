@@ -1,4 +1,5 @@
 import { PDFDocument, PDFPage, PDFFont, PDFImage, StandardFonts, rgb, PageSizes } from 'pdf-lib';
+import { sanitizePdfText as sanitize } from './pdfText';
 import type { RFI, Project } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
 
@@ -26,12 +27,6 @@ async function fetchImageBytes(url: string): Promise<Uint8Array> {
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
   return new Uint8Array(buffer);
-}
-
-/** Strip control chars that pdf-lib's Helvetica (WinAnsi) can't encode. */
-function sanitize(s: string | null | undefined): string {
-  if (!s) return '';
-  return String(s).replace(/[\x00-\x1F\x7F]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function addFooter(page: PDFPage, font: PDFFont, pageNum: number, totalLabel?: string) {

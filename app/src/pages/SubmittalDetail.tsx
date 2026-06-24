@@ -287,6 +287,7 @@ export function SubmittalDetail() {
                 await exportSubmittalPDF(submittal, project);
               } catch (err) {
                 console.error('PDF export failed:', err);
+                alert(`PDF export failed: ${err instanceof Error ? err.message : String(err)}`);
               } finally {
                 setExporting(false);
               }

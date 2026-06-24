@@ -71,8 +71,24 @@ export function RFIList() {
   // Open + Answered RFIs are client-facing; Closed/Void stay internal-only.
   const openRFIs = rfis.filter((r) => r.status !== 'Closed' && r.status !== 'Void');
 
-  const handleExportPDF = () => {
-    if (project) exportRFILogPDF(rfis, project);
+  const handleExportPDF = async () => {
+    if (!project) return;
+    try {
+      await exportRFILogPDF(rfis, project);
+    } catch (err) {
+      console.error('RFI log PDF export failed:', err);
+      alert(`PDF export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleExportRFI = async () => {
+    if (!project || !selectedRFI) return;
+    try {
+      await exportRFIPDF(selectedRFI, project);
+    } catch (err) {
+      console.error('RFI PDF export failed:', err);
+      alert(`PDF export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   const handleAnswer = () => {
@@ -281,7 +297,7 @@ export function RFIList() {
             )}
 
             <div className="flex justify-between pt-4 border-t border-border">
-              <button onClick={() => project && exportRFIPDF(selectedRFI, project)} className="btn-secondary text-sm"><Download size={14} /> Export PDF</button>
+              <button onClick={handleExportRFI} className="btn-secondary text-sm"><Download size={14} /> Export PDF</button>
               <div className="flex gap-2">
                 {selectedRFI.status !== 'Closed' && selectedRFI.status !== 'Void' && (
                   <>
