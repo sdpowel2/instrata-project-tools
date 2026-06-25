@@ -16,6 +16,7 @@ import { Eyebrow } from '../components/ui';
 import { DToolsImportPicker, type DToolsListedProject } from '../components/DToolsImportPicker';
 import { EffortSurveyPrompt, EffortSurveyFooter } from './EffortSurvey';
 import { ProjectLog } from '../components/ProjectLog';
+import { ProjectDocumentationSection } from '../components/ProjectDocumentation';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import type {
@@ -332,6 +333,11 @@ export function ProjectOverview() {
           onCsvImport={() => requireMembership(() => setShowCSVImport(true))}
           onAddItem={() => requireMembership(() => setShowAddItem(true))}
         />
+      </div>
+
+      {/* Project Documentation — reports generated from the synced BoM. */}
+      <div className="mt-5">
+        <ProjectDocumentationSection project={project} />
       </div>
 
       <EffortSurveyFooter project={project} onNavigate={(p) => navigate(p)} />

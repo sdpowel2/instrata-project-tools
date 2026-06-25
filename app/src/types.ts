@@ -279,6 +279,8 @@ export interface Project {
   dtoolsHours?: number;
   dtoolsSyncedAt?: string;
   dtoolsSyncDelta?: DToolsSyncDelta;
+  /** Project-level metadata captured at sync time for the Gross Margin Form. */
+  dtoolsGmMeta?: GmMeta;
   createdAt: string;
   updatedAt: string;
 }
@@ -361,6 +363,83 @@ export interface LaborBreakdownEntry {
   totalHours: number;
   costRate: number;
   priceRate: number;
+}
+
+// ===================== PROJECT DOCUMENTATION =====================
+
+/** Project-level metadata captured from the DTools payload at sync time
+ *  (projects.dtools_gm_meta). Mirrors GmMeta in the dtools-project-lookup
+ *  transform. Feeds the Gross Margin Form's auto-filled defaults. */
+export interface GmMeta {
+  header: {
+    quoteNumber: string;
+    poNumber: string;
+    salesRep: string;
+    engineer: string;
+    clientName: string;
+    clientEmail: string;
+    projectName: string;
+    siteAddress: string;
+    billingAddress: string;
+  };
+  custom: {
+    subsidiary: string;
+    branch: string;
+    projectType: string;
+    aiaInvoicing: string;
+    prevailingWage: string;
+    timeAndMaterials: string;
+    materialOnly: string;
+  };
+  tax: { rate: number; materialsTax: number; laborTax: number; total: number };
+}
+
+/** A generated project document. Phase 1: doc_type = 'gross_margin'.
+ *  `overrides` holds only the fields a user manually edited — defaults are
+ *  re-computed live from the BoM each render so a re-sync keeps them fresh. */
+export type ProjectDocumentType = 'gross_margin';
+
+export interface ProjectDocument {
+  id: string;
+  projectId: string;
+  docType: ProjectDocumentType;
+  overrides: Record<string, number | string>;
+  status: string;
+  editedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A cost/price (and optionally hours) triple used throughout the GM Form. */
+export interface GmAmount {
+  hours?: number;
+  cost: number;
+  price: number;
+}
+
+/** Fully-computed Gross Margin Form. Every numeric field is a candidate for a
+ *  manual override; `key` strings here match the keys stored in
+ *  ProjectDocument.overrides. */
+export interface GrossMarginForm {
+  installHours: GmAmount;
+  programmingHours: GmAmount;
+  travel: GmAmount;
+  laborTotals: GmAmount;
+  equipment: GmAmount;
+  subcontractor: GmAmount;
+  equipmentRental: GmAmount;
+  permits: GmAmount;
+  equipmentTotals: GmAmount;
+  projectTotals: GmAmount;
+  premiereProtect: GmAmount;
+  tax: { rate: number; materialsTax: number; laborTax: number };
+  header: GmMeta['header'];
+  custom: GmMeta['custom'];
+  /** True when computed project totals reconcile to (DTools root − Premiere
+   *  Protect) within $1. False surfaces a drift warning for accounting. */
+  verified: boolean;
+  /** Signed cost/price drift vs the penny-anchor (0 when verified). */
+  drift: { cost: number; price: number };
 }
 
 // ===================== SUBMITTALS =====================

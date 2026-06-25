@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { buildBomFromDtools, buildChangeOrderItems, type LaborMeta } from './transform.ts';
+import { buildBomFromDtools, buildChangeOrderItems, extractGmMeta, type LaborMeta } from './transform.ts';
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 
@@ -210,6 +210,10 @@ serve(async (req) => {
         // the UI uses it to flag the drift and prompt an SI republish.
         publishedOn: String(fullProject?.PublishedOn ?? ''),
       },
+      // Project-level metadata the Gross Margin Form needs (custom fields,
+      // header fields, tax split). Refreshed every sync; the GM Form's manual
+      // overrides live separately in project_documents.
+      dtools_gm_meta: extractGmMeta(fullProject),
       updated_at: new Date().toISOString(),
     };
     if (formattedValue) projectUpdate.value = formattedValue;

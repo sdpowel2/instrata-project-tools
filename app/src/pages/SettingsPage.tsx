@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell, KeyRound, Copy, Check } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell, KeyRound, Copy, Check, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useStore } from '../store';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { Modal } from '../components/Modal';
 import type { LaborRate, ReviewConfigEntry, Warehouse } from '../types';
+import { loadSpecialModels, saveSpecialModels, clearSpecialModelsCache } from '../lib/gmSettings';
+import { DEFAULT_SPECIAL_MODELS, type SpecialModels } from '../utils/grossMargin';
 
 interface Profile {
   id: string;
@@ -109,6 +111,63 @@ function TeamMembersSection() {
 }
 
 // ─── Review Config Section ────────────────────────────────────────────────────
+
+// Gross Margin Form — the exact DTools Model strings used to reclassify the
+// special fixed-cost labor lines (Subcontractor / Equipment Rental / Permits →
+// Equipment; Premiere Protect → carved out). Seeded with the known values;
+// editable here so accounting can adjust without a code change.
+function GmFormModelsSection() {
+  const [models, setModels] = useState<SpecialModels>(DEFAULT_SPECIAL_MODELS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    loadSpecialModels().then((m) => { setModels(m); setLoading(false); });
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    clearSpecialModelsCache();
+    await saveSpecialModels(models);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const fields: { key: keyof SpecialModels; label: string }[] = [
+    { key: 'subcontractor', label: 'Subcontractor' },
+    { key: 'equipmentRental', label: 'Equipment Rental' },
+    { key: 'permits', label: 'Permits' },
+    { key: 'premiereProtect', label: 'Premiere Protect' },
+  ];
+
+  if (loading) return <div className="py-6 flex justify-center"><Loader2 size={18} className="animate-spin text-text-secondary" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-text-secondary">
+        These match the DTools line-item <strong>Model</strong> exactly. The matched lines are pulled out of
+        the labor section on the Gross Margin Form — Subcontractor, Equipment Rental and Permits are reported
+        as equipment; Premiere Protect is carved out entirely. Only change these if a quote uses a different name.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {fields.map((f) => (
+          <label key={f.key} className="block">
+            <span className="text-sm font-medium text-text-primary">{f.label}</span>
+            <input value={models[f.key]} onChange={(e) => setModels((m) => ({ ...m, [f.key]: e.target.value }))} className="input mt-1.5" />
+          </label>
+        ))}
+      </div>
+      <div className="flex justify-end items-center gap-3 pt-4 border-t border-border">
+        {saved && <span className="text-sm text-emerald-600 inline-flex items-center gap-1"><Check size={14} /> Saved</span>}
+        <button onClick={handleSave} disabled={saving} className="btn-primary disabled:opacity-60">
+          {saving ? <Loader2 size={14} className="animate-spin" /> : null} Save Changes
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ReviewConfigSection() {
   const [config, setConfig] = useState<ReviewConfigEntry[]>([]);
@@ -956,6 +1015,14 @@ export function SettingsPage() {
               warehouse as a default for a manufacturer or override at the line-item level.
             </p>
             <WarehousesSection />
+          </div>
+
+          <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <FileSpreadsheet size={18} className="text-navy" />
+              <h2 className="text-base font-semibold text-navy">Gross Margin Form — Special Lines</h2>
+            </div>
+            <GmFormModelsSection />
           </div>
         </>
       )}

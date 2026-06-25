@@ -544,6 +544,120 @@ export function buildChangeOrderItems(coProject: any, parentProject: any, priorM
   return { items, costDelta, priceDelta, hoursDelta, rootCost, rootPrice, rootPriceWithoutTax, rootTax, verified, log };
 }
 
+// ─── Gross Margin Form metadata ────────────────────────────────────────────────
+//
+// Project-level fields the GM Form needs that don't already live on the
+// projects row / project_bom_items. Pure extraction so it can be replayed
+// offline against saved payloads. Field map verified against real payloads
+// (ChathamCounty.json, TestProject.json):
+//   Subsidiary=CustomField27, Branch=CustomField28, Project Type=CustomField29,
+//   AIA Invoicing=CustomField1, Prevailing Wage=CustomField30,
+//   T&M?=CustomField23, Material Only?=CustomField24.
+//   Tax split from Taxes[]: ProductTotal→materials, LaborTotal→labor.
+//   Engineer←Designer (fallback AssignedTo). Quote#←Number, PO←ClientPONumber.
+
+export interface GmMeta {
+  header: {
+    quoteNumber: string;
+    poNumber: string;
+    salesRep: string;
+    engineer: string;
+    clientName: string;
+    clientEmail: string;
+    projectName: string;
+    siteAddress: string;
+    billingAddress: string;
+  };
+  custom: {
+    subsidiary: string;
+    branch: string;
+    projectType: string;
+    aiaInvoicing: string;       // Yes/No
+    prevailingWage: string;     // Yes/No
+    timeAndMaterials: string;   // Yes/No
+    materialOnly: string;       // Yes/No
+  };
+  tax: {
+    rate: number;          // fractional, e.g. 0.0725
+    materialsTax: number;  // Σ Taxes[].ProductTotal
+    laborTax: number;      // Σ Taxes[].LaborTotal
+    total: number;         // root Tax
+  };
+}
+
+/** Read a project-level DTools custom field by numeric id, tolerating both the
+ *  array shape ({Id,Name,Value}) and the flat-key shape (CustomField27). */
+function projectCustomField(p: any, id: number, ...names: string[]): unknown {
+  const candidates: any[] = [];
+  if (Array.isArray(p?.CustomFields)) candidates.push(...p.CustomFields);
+  if (Array.isArray(p?.ProjectCustomFields)) candidates.push(...p.ProjectCustomFields);
+  for (const cf of candidates) {
+    const cid = String(cf?.Id ?? cf?.id ?? '');
+    const nm = String(cf?.Name ?? cf?.name ?? '').toLowerCase();
+    if (cid === String(id) || names.includes(nm)) return cf?.Value ?? cf?.value;
+  }
+  return p?.[`CustomField${id}`] ?? p?.[`customField${id}`];
+}
+
+/** Normalise a DTools boolean/string custom field to a Yes/No display string. */
+function yesNo(v: unknown): string {
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  const s = String(v ?? '').trim();
+  if (s === '') return '';
+  if (/^(true|1)$/i.test(s)) return 'Yes';
+  if (/^(false|0)$/i.test(s)) return 'No';
+  return s; // already 'Yes'/'No' or other free text
+}
+
+/** Join a DTools address object into one line, including Suite (Street2). */
+function gmJoinAddress(addr: any): string {
+  if (!addr || typeof addr !== 'object') return typeof addr === 'string' ? addr.trim() : '';
+  const line1 = [addr.Street1 ?? addr.street1, addr.Street2 ?? addr.street2]
+    .filter((p) => typeof p === 'string' && p.trim()).join(' ');
+  const cityLine = [addr.City ?? addr.city, addr.State ?? addr.state, addr.PostalCode ?? addr.postalCode]
+    .filter((p) => typeof p === 'string' && p.trim()).join(', ');
+  return [line1, cityLine].filter((p) => p.trim()).join(', ');
+}
+
+function firstContactEmail(p: any): string {
+  for (const c of p?.Contacts ?? []) {
+    const e = c?.Email ?? c?.email ?? c?.EmailAddress;
+    if (e && String(e).trim()) return String(e).trim();
+  }
+  return '';
+}
+
+export function extractGmMeta(project: any): GmMeta {
+  const taxes: any[] = Array.isArray(project?.Taxes) ? project.Taxes : [];
+  const materialsTax = round2(taxes.reduce((s, t) => s + num(t?.ProductTotal), 0));
+  const laborTax = round2(taxes.reduce((s, t) => s + num(t?.LaborTotal), 0));
+  const rate = taxes.length > 0 ? num(taxes[0]?.Rate) : 0;
+
+  return {
+    header: {
+      quoteNumber: String(project?.Number ?? '').trim(),
+      poNumber: String(project?.ClientPONumber ?? '').trim(),
+      salesRep: String(project?.SalesRep ?? '').trim(),
+      engineer: String(project?.Designer ?? project?.AssignedTo ?? '').trim(),
+      clientName: String(project?.Client ?? '').trim(),
+      clientEmail: firstContactEmail(project),
+      projectName: String(project?.Name ?? '').trim(),
+      siteAddress: gmJoinAddress(project?.SiteAddress),
+      billingAddress: gmJoinAddress(project?.BillingAddress),
+    },
+    custom: {
+      subsidiary: String(projectCustomField(project, 27, 'subsidiary') ?? '').trim(),
+      branch: String(projectCustomField(project, 28, 'branch') ?? '').trim(),
+      projectType: String(projectCustomField(project, 29, 'project type', 'projecttype') ?? '').trim(),
+      aiaInvoicing: yesNo(projectCustomField(project, 1, 'aia invoicing required', 'aia')),
+      prevailingWage: yesNo(projectCustomField(project, 30, 'prevailing wage')),
+      timeAndMaterials: yesNo(projectCustomField(project, 23, 't&m?', 't&m', 'time and materials')),
+      materialOnly: yesNo(projectCustomField(project, 24, 'material only?', 'material only')),
+    },
+    tax: { rate, materialsTax, laborTax, total: round2(num(project?.Tax)) },
+  };
+}
+
 // ─── Main BoM transform ──────────────────────────────────────────────────────
 
 /** Build BoM rows + verified totals from the unaggregated DTools project.

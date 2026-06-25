@@ -15,6 +15,7 @@ import type {
   PurchaseStatus,
   ProjectComment, CommentReaction,
   ProjectChangeOrder,
+  ProjectDocument, ProjectDocumentType,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { isExcludedFromSubmittal } from '../utils/submittalExclusions';
@@ -72,6 +73,7 @@ function rowToProject(r: any): Project {
     dtoolsHours: r.dtools_hours != null ? Number(r.dtools_hours) : undefined,
     dtoolsSyncedAt: r.dtools_synced_at ?? undefined,
     dtoolsSyncDelta: r.dtools_sync_delta ?? undefined,
+    dtoolsGmMeta: r.dtools_gm_meta ?? undefined,
     createdAt: toDate(r.created_at),
     updatedAt: toDate(r.updated_at),
   };
@@ -877,6 +879,12 @@ interface AppState {
   projectComments: ProjectComment[];
   commentsLoadedFor: Set<string>;
 
+  // Project documents (Gross Margin Form, …) — lazy-loaded per project the
+  // first time the Project Documentation card is opened. Stores only manual
+  // overrides; the form's defaults are computed live from the BoM.
+  projectDocuments: ProjectDocument[];
+  documentsLoadedFor: Set<string>;
+
   // Current user's project_members rows — set of project ids the logged-in
   // user is on. Drives Dashboard "My Projects" + scoped pipeline counts.
   // In demo mode this is filled with every seed project id so the feature
@@ -1023,6 +1031,9 @@ interface AppState {
   // projectId and refreshes silently in the background.
   fetchProjectComments: (projectId: string) => Promise<void>;
   addProjectComment: (input: { projectId: string; parentId: string | null; body: string }) => Promise<string | null>;
+  // Project documents (Gross Margin Form). Lazy fetch + upsert of overrides.
+  fetchProjectDocuments: (projectId: string) => Promise<void>;
+  saveProjectDocument: (input: { projectId: string; docType: ProjectDocumentType; overrides: Record<string, number | string>; status?: string }) => Promise<void>;
   updateProjectComment: (commentId: string, body: string) => Promise<void>;
   deleteProjectComment: (commentId: string) => Promise<void>;
   toggleCommentReaction: (commentId: string, emoji: string) => Promise<void>;
@@ -1055,6 +1066,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   projectComments: [],
   commentsLoadedFor: new Set<string>(),
+
+  projectDocuments: [],
+  documentsLoadedFor: new Set<string>(),
 
   // Demo mode: pretend the demo user is on every seed project. Supabase mode
   // starts empty; fetchAllData populates it from project_members.
@@ -2948,6 +2962,73 @@ export const useStore = create<AppState>((set, get) => ({
       loaded.add(projectId);
       return { projectComments: [...others, ...mapped], commentsLoadedFor: loaded };
     });
+  },
+
+  // =========================================================================
+  // Project documents — Gross Margin Form (and future report types).
+  // Lazy-loaded per project; only manual per-field overrides are persisted,
+  // so the form keeps re-deriving fresh defaults from the BoM on every sync.
+  // =========================================================================
+  fetchProjectDocuments: async (projectId) => {
+    if (!isSupabaseConfigured()) return;
+    const { data, error } = await supabase
+      .from('project_documents')
+      .select('*')
+      .eq('project_id', projectId);
+    if (error) {
+      console.error('[fetchProjectDocuments]', error);
+      return;
+    }
+    const mapped: ProjectDocument[] = (data ?? []).map((r: any) => ({
+      id: r.id,
+      projectId: r.project_id,
+      docType: r.doc_type,
+      overrides: (r.overrides && typeof r.overrides === 'object') ? r.overrides : {},
+      status: r.status ?? 'draft',
+      editedBy: r.edited_by ?? undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+    set((s) => {
+      const others = s.projectDocuments.filter((d) => d.projectId !== projectId);
+      const loaded = new Set(s.documentsLoadedFor);
+      loaded.add(projectId);
+      return { projectDocuments: [...others, ...mapped], documentsLoadedFor: loaded };
+    });
+  },
+
+  saveProjectDocument: async ({ projectId, docType, overrides, status }) => {
+    if (!isSupabaseConfigured()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const row: Record<string, unknown> = {
+      project_id: projectId,
+      doc_type: docType,
+      overrides,
+      edited_by: user?.id ?? null,
+    };
+    if (status !== undefined) row.status = status;
+    const { data, error } = await supabase
+      .from('project_documents')
+      .upsert(row, { onConflict: 'project_id,doc_type' })
+      .select('*')
+      .single();
+    if (error || !data) {
+      console.error('[saveProjectDocument]', error);
+      return;
+    }
+    const saved: ProjectDocument = {
+      id: data.id,
+      projectId: data.project_id,
+      docType: data.doc_type,
+      overrides: (data.overrides && typeof data.overrides === 'object') ? data.overrides : {},
+      status: data.status ?? 'draft',
+      editedBy: data.edited_by ?? undefined,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
+    set((s) => ({
+      projectDocuments: [...s.projectDocuments.filter((d) => !(d.projectId === projectId && d.docType === docType)), saved],
+    }));
   },
 
   addProjectComment: async ({ projectId, parentId, body }) => {
