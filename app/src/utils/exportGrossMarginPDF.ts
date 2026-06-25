@@ -1,7 +1,9 @@
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pdf-lib';
 import { sanitizePdfText as sanitize } from './pdfText';
 import type { Project, GrossMarginForm } from '../types';
-import instrataLogoUrl from '../assets/instrata-logo-color.png';
+// White variant — the header band is navy, so the navy-text color logo would
+// disappear into it.
+import instrataLogoUrl from '../assets/instrata-logo-white.png';
 
 // Brand palette (mirrors exportWarrantyPDF.ts / exportCloseoutPDF.ts)
 const NAVY = rgb(0.133, 0.196, 0.431);
@@ -147,7 +149,6 @@ export async function exportGrossMarginPDF(project: Project, form: GrossMarginFo
 
   // ── Custom Job Information + Premiere Protect ───────────────────────────────
   section('Custom Job Information');
-  const customTop = y;
   const cu = form.custom;
   const customPairs = [
     { label: 'Subsidiary', value: cu.subsidiary },
@@ -163,13 +164,17 @@ export async function exportGrossMarginPDF(project: Project, form: GrossMarginFo
     page.drawText(sanitize(p.value || '—'), { x: MARGIN + 140, y, size: 8, font, color: DARK_GRAY });
     y -= 16;
   }
-  // Premiere Protect box on the right of the custom section.
-  const ppY = customTop;
-  drawRight(page, 'Cost', COL_COST_R, ppY, bold, 8, NAVY);
-  drawRight(page, 'Price', COL_PRICE_R, ppY, bold, 8, NAVY);
-  page.drawText('Premiere Protect', { x: MARGIN + 280, y: ppY - 16, size: 9, font: bold, color: NAVY });
-  drawRight(page, usd(form.premiereProtect.cost), COL_COST_R, ppY - 16, font, 9, BLACK);
-  drawRight(page, usd(form.premiereProtect.price), COL_PRICE_R, ppY - 16, font, 9, BLACK);
+  // Premiere Protect — its own full-width row so the dollar values have room
+  // (a right-half inline label crowded the cost column).
+  y -= 4;
+  page.drawLine({ start: { x: MARGIN, y: y + 11 }, end: { x: PAGE_W - MARGIN, y: y + 11 }, thickness: 0.5, color: LIGHT_GRAY });
+  drawRight(page, 'Cost', COL_COST_R, y, bold, 8, NAVY);
+  drawRight(page, 'Price', COL_PRICE_R, y, bold, 8, NAVY);
+  y -= 16;
+  page.drawText('Premiere Protect', { x: MARGIN, y, size: 9, font: bold, color: NAVY });
+  drawRight(page, usd(form.premiereProtect.cost), COL_COST_R, y, font, 9, BLACK);
+  drawRight(page, usd(form.premiereProtect.price), COL_PRICE_R, y, font, 9, BLACK);
+  y -= 18;
 
   // ── Footer ───────────────────────────────────────────────────────────────────
   page.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: 6, color: ORANGE });
