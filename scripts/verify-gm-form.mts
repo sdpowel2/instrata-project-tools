@@ -32,7 +32,11 @@ function check(label: string, ok: boolean, detail = '') {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
 }
 
-for (const [name, path] of [['TestProject (sub/rental/tax)', 'Reference/TestProject.json'], ['Chatham County (real)', 'Reference/ChathamCounty.json']] as const) {
+for (const [name, path] of [
+  ['TestProject (sub/rental/tax)', 'Reference/TestProject.json'],
+  ['Chatham County (real)', 'Reference/ChathamCounty.json'],
+  ['Arizona CC (hybrid rental + adjusted hrs)', 'Reference/ArizonaCountryClub.json'],
+] as const) {
   const proj = load(path);
   const { bomRows, totals } = buildBomFromDtools(proj);
 

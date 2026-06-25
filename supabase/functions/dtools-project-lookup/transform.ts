@@ -860,6 +860,14 @@ export function buildBomFromDtools(fullProject: any, priorMeta: LaborMeta | null
   // unlike products, ItemLaborTypes.Hours is the LINE-total raw hours, not
   // per-unit. Dollars stay qty × unit price either way; the hour fields just
   // let the row display as "N hr @ $X/hr" in its room.
+  //
+  // HYBRID GUARD: a line is only truly hour-priced when its Quantity equals its
+  // attached (adjusted) hours. Some lines — notably an Equipment Rental entered
+  // as 1 unit @ $1,800 that ALSO carries, say, 4 attached Install hours — price
+  // as a fixed/unit lump while still listing labor metadata. Reading their unit
+  // count (1) as "1 hour @ $1,800/hr" loses the real hours and invents a bogus
+  // rate. When Quantity != attached hours, treat the line as fixed (its hours
+  // are an echo of the companion hourly line, already counted there).
   const laborRows: BomRow[] = [];
   companionRows.forEach((c, idx) => {
     const qty = num(c.Quantity);
@@ -868,7 +876,8 @@ export function buildBomFromDtools(fullProject: any, priorMeta: LaborMeta | null
     if (qty === 0 && lineTotal === 0 && lineCost === 0) return; // empty placeholder
     const room = locName(c);
     const rawHours = round6((c.ItemLaborTypes ?? []).reduce((s: number, lt: any) => s + num(lt.Hours), 0));
-    const hourly = rawHours > 0;
+    const adjHours = round6((c.ItemLaborTypes ?? []).reduce((s: number, lt: any) => s + num(lt.TotalHours), 0));
+    const hourly = rawHours > 0 && Math.abs(qty - adjHours) < 0.01;
     laborRows.push({
       manufacturer: c.Manufacturer || '',
       model: c.Model || '',

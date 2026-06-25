@@ -109,11 +109,14 @@ export function computeGrossMarginForm(
     if (row.itemType === 'Product') {
       prodEquipCost += r2(row.qty * row.unitCost);
       prodEquipPrice += r2(row.qty * row.unitPrice);
-      // Attached labor, split by type into the display buckets.
+      // Attached labor, split by type into the display buckets. Hours mirror
+      // what DTools shows — the per-type adjusted TotalHours (e.g. Cabling
+      // 104→107.12) — while cost/price stay on the raw hours, which is the
+      // pricing basis. (Labor rows below already carry adjusted hours via qty.)
       for (const e of row.laborBreakdown ?? []) {
         const b = bucketFor(e.type);
         if (!b) continue;
-        buckets[b].hours = r2((buckets[b].hours ?? 0) + e.hours);
+        buckets[b].hours = r2((buckets[b].hours ?? 0) + (e.totalHours || e.hours));
         buckets[b].cost = r2(buckets[b].cost + r2(e.hours * e.costRate));
         buckets[b].price = r2(buckets[b].price + r2(e.hours * e.priceRate));
       }
