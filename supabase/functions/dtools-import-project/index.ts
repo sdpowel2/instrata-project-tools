@@ -94,13 +94,13 @@ serve(async (req) => {
     });
   }
 
-  let body: { dtoolsProjectId?: string; createdBy?: string };
+  let body: { dtoolsProjectId?: string };
   try { body = await req.json(); }
   catch { return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
     status: 400, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
   }); }
 
-  const { dtoolsProjectId, createdBy } = body;
+  const { dtoolsProjectId } = body;
   if (!dtoolsProjectId) {
     return new Response(JSON.stringify({ error: 'dtoolsProjectId required' }), {
       status: 400, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
@@ -117,6 +117,25 @@ serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceKey);
+
+  // Auth: require a real authenticated user (rejects the public anon key).
+  // The creator is the verified caller — never trust a body-supplied id, which
+  // would let anyone attribute projects to (and grant membership for) arbitrary
+  // users.
+  const authHeader = req.headers.get('Authorization') ?? '';
+  const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!jwt) {
+    return new Response(JSON.stringify({ error: 'Missing Authorization header' }), {
+      status: 401, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+    });
+  }
+  const { data: { user }, error: authErr } = await supabase.auth.getUser(jwt);
+  if (authErr || !user) {
+    return new Response(JSON.stringify({ error: 'Invalid or anonymous token' }), {
+      status: 401, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+    });
+  }
+  const createdBy = user.id;
 
   try {
     // ── Step 1: Pull project metadata from DTools ──────────────────────────────

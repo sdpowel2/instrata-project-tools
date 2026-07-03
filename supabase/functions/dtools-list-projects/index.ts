@@ -6,6 +6,7 @@
 // switch to server-side search via the DTools API's projectName param.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const DTOOLS_BASE = 'https://api.d-tools.com/SI';
 
@@ -103,6 +104,27 @@ serve(async (req) => {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Auth: this endpoint proxies the full DTools project catalog (names,
+  // clients, addresses, dollar totals), so it must never be reachable with
+  // just the public anon key. Require a real authenticated user.
+  const authHeader = req.headers.get('Authorization') ?? '';
+  const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!jwt) {
+    return new Response(JSON.stringify({ error: 'Missing Authorization header' }), {
+      status: 401, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+    });
+  }
+  const authClient = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  );
+  const { data: { user }, error: authErr } = await authClient.auth.getUser(jwt);
+  if (authErr || !user) {
+    return new Response(JSON.stringify({ error: 'Invalid or anonymous token' }), {
+      status: 401, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
     });
   }
 

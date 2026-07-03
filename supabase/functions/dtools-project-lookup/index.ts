@@ -99,10 +99,48 @@ serve(async (req) => {
     });
   }
 
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  );
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, serviceKey);
+
+  // Auth: this function does service-role writes (delete + re-insert) against a
+  // caller-supplied projectId, so it must be authorized. Two accepted callers:
+  //   1. Internal chain — dtools-import-project invokes us with the service-role
+  //      key as the bearer. Accept that verbatim.
+  //   2. An end user re-syncing an existing project — require a real user JWT
+  //      (not the anon key) who is a member of that project (or an admin),
+  //      matching the member-gated write model on project_bom_items.
+  const authHeader = req.headers.get('Authorization') ?? '';
+  const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const isInternal = jwt !== '' && jwt === serviceKey;
+  if (!isInternal) {
+    if (!jwt) {
+      return new Response(JSON.stringify({ error: 'Missing Authorization header' }), {
+        status: 401, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+      });
+    }
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(jwt);
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: 'Invalid or anonymous token' }), {
+        status: 401, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+      });
+    }
+    // Admin or project member only — mirrors is_project_member() in the DB.
+    const { data: profile } = await supabase
+      .from('profiles').select('role').eq('id', user.id).maybeSingle();
+    if (profile?.role !== 'admin') {
+      const { data: membership } = await supabase
+        .from('project_members')
+        .select('project_id')
+        .eq('project_id', projectId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (!membership) {
+        return new Response(JSON.stringify({ error: 'Not a member of this project' }), {
+          status: 403, headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+        });
+      }
+    }
+  }
 
   try {
     // ── Step 1: Search DTools for project by number ──────────────────────────
