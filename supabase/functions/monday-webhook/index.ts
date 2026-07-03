@@ -43,6 +43,18 @@ function normalizeStatus(raw: string | null | undefined): string {
   return s;
 }
 
+// Constant-time string comparison so the secret check doesn't leak length or
+// content via timing. Both inputs are encoded to bytes first.
+function safeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
 async function mondayQuery(token: string, query: string): Promise<any> {
   const res = await fetch(MONDAY_API, {
     method: 'POST',
@@ -300,6 +312,36 @@ async function handleStatusChange(
 serve(async (req) => {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
+  }
+
+  // ── Authenticity gate ──────────────────────────────────────────────────────
+  // This endpoint is necessarily public (Monday calls it without a Supabase
+  // JWT), and it drives service-role writes to `projects` plus write-backs to
+  // Monday. Without a check, anyone who learns the URL can forge events. We
+  // require a shared secret — configured as MONDAY_WEBHOOK_SECRET here and
+  // appended to the webhook's delivery URL in Monday as `?token=<secret>`
+  // (works for both native API webhooks and automation "send webhook" recipes;
+  // it can also be sent as an `x-webhook-secret` header). Checked before the
+  // challenge handshake so the endpoint can't even be probed without it.
+  //
+  // Fail closed: if the secret isn't configured we reject everything rather
+  // than run open. Set the env var and update the Monday URL before deploying.
+  const expectedSecret = Deno.env.get('MONDAY_WEBHOOK_SECRET');
+  if (!expectedSecret) {
+    console.error('[monday-webhook] MONDAY_WEBHOOK_SECRET not set — rejecting');
+    return new Response(JSON.stringify({ error: 'not_configured' }), {
+      status: 503, headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  const provided =
+    new URL(req.url).searchParams.get('token') ??
+    req.headers.get('x-webhook-secret') ??
+    '';
+  if (!safeEqual(provided, expectedSecret)) {
+    console.warn('[monday-webhook] Rejected request with missing/invalid secret');
+    return new Response(JSON.stringify({ error: 'unauthorized' }), {
+      status: 401, headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   let body: any;
