@@ -1,0 +1,51 @@
+# Supabase project config.
+#
+# The critical part for security is the per-function `verify_jwt` settings
+# below. Without this file, `supabase functions deploy` defaults every function
+# to verify_jwt = true, which silently breaks the two genuinely-public
+# endpoints (Monday sends no Supabase JWT; the MS Graph OAuth callback is a
+# browser redirect) on every deploy. Pinning them here makes deploys
+# repeatable and reviewable instead of relying on out-of-band dashboard toggles.
+
+project_id = "zeuceafbaufpuwpczcth"
+
+# ── Public endpoints: no Supabase JWT reaches them, so the gateway check MUST
+#    be off. Authorization is enforced in-function instead. ────────────────────
+
+# Monday calls this with no Supabase auth; guarded by the MONDAY_WEBHOOK_SECRET
+# shared-secret gate in-code.
+[functions.monday-webhook]
+verify_jwt = false
+
+# The OAuth callback is a redirect from Microsoft/the browser with no JWT. The
+# `authorize` action is admin-gated in-code; the callback validates its own state.
+[functions.ms-graph-auth]
+verify_jwt = false
+
+# ── Authenticated endpoints: called from the app with a user JWT. Keep the
+#    gateway check on (defense-in-depth); each also enforces its own
+#    user/admin/membership authorization in-code. Listed explicitly so a future
+#    deploy can never accidentally flip one to public. ─────────────────────────
+[functions.dtools-import-project]
+verify_jwt = true
+
+[functions.dtools-list-projects]
+verify_jwt = true
+
+[functions.dtools-project-lookup]
+verify_jwt = true
+
+[functions.email-triage]
+verify_jwt = true
+
+[functions.monday-backfill]
+verify_jwt = true
+
+[functions.monday-manager-dashboard]
+verify_jwt = true
+
+[functions.ms-graph-emails]
+verify_jwt = true
+
+[functions.sharepoint-cutsheet]
+verify_jwt = true
