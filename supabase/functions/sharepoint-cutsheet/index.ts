@@ -754,6 +754,38 @@ serve(async (req) => {
   const op = String(body?.op ?? '');
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
+  // ── Authorization ─────────────────────────────────────────────────────────
+  // Every op runs with the service-role key (RLS bypassed) and app-only Graph
+  // credentials, so authorization MUST be enforced in-code. Require a real
+  // authenticated user (rejects the public anon key); gate the admin-only
+  // review/setup ops on profile.role === 'admin'. The read/upload ops stay
+  // open to any authenticated user (submittal building, repository viewing),
+  // matching the org-wide cutsheet read model.
+  const authHeader = req.headers.get('Authorization') ?? '';
+  const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!jwt) return jsonResponse({ error: 'Missing Authorization header' }, 401);
+  const { data: { user }, error: authErr } = await supabase.auth.getUser(jwt);
+  if (authErr || !user) return jsonResponse({ error: 'Invalid or anonymous token' }, 401);
+
+  const { data: profile } = await supabase
+    .from('profiles').select('role').eq('id', user.id).maybeSingle();
+  const isAdmin = profile?.role === 'admin';
+
+  // bootstrap resolves tenant IDs; listStaging exposes every uploader's pending
+  // queue; approve/reject/markDuplicate move or delete SharePoint files and
+  // mutate the canonical repository — all admin-only.
+  const ADMIN_OPS = new Set([
+    'bootstrap', 'listStaging', 'approveStaging', 'rejectStaging', 'markStagingDuplicate',
+  ]);
+  if (ADMIN_OPS.has(op) && !isAdmin) {
+    return jsonResponse({ error: 'Admin role required' }, 403);
+  }
+
+  // Bind identity audit fields to the verified caller — never trust the body,
+  // which would let a caller attribute uploads/reviews to another user.
+  body.uploadedByUserId = user.id;
+  body.reviewedByUserId = user.id;
+
   try {
     switch (op) {
       case 'bootstrap': {
