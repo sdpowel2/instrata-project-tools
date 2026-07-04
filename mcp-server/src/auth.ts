@@ -21,17 +21,40 @@ import { SignJWT } from 'jose';
 import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
 
-// Anon-key client with no user context — used solely to call resolve_mcp_token.
-const anonClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
 const jwtSecret = new TextEncoder().encode(config.supabaseJwtSecret);
+
+// Placeholder subject for the resolve call: resolve_mcp_token needs the
+// `authenticated` role to execute but never reads auth.uid(), so no real user
+// is required.
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/** Mint a short-lived `authenticated` JWT bound to no real user, used only to
+ *  call resolve_mcp_token. This keeps that RPC off the public `anon` role —
+ *  only holders of the JWT secret (this server) can invoke it. */
+async function mintServiceJwt(): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return new SignJWT({ role: 'authenticated' })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setSubject(NIL_UUID)
+    .setAudience('authenticated')
+    .setIssuer(`${config.supabaseUrl}/auth/v1`)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 60)
+    .sign(jwtSecret);
+}
 
 /** Resolve a presented bearer token to a user_id, or null if invalid/revoked. */
 export async function resolveToken(token: string | undefined): Promise<string | null> {
   if (!token) return null;
-  const { data, error } = await anonClient.rpc('resolve_mcp_token', { p_token: token });
+  // Call as `authenticated` (via a minted JWT) rather than `anon`, so the RPC
+  // is not exposed to the public anon role. apikey stays the anon key for the
+  // gateway; the Authorization header sets the role.
+  const jwt = await mintServiceJwt();
+  const client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+  });
+  const { data, error } = await client.rpc('resolve_mcp_token', { p_token: token });
   if (error) {
     console.error('[auth] resolve_mcp_token error:', error.message);
     return null;
