@@ -110,6 +110,7 @@
 - `created_at` timestamptz
 - **Auto-created** by `handle_new_user()` trigger on `auth.users` insert (pulls `full_name` from `raw_user_meta_data`).
 - **RLS:** users read/update own row; admins have full access via `is_admin()`. **Note:** admin policies must use the `is_admin()` SECURITY DEFINER function — inline `EXISTS (SELECT 1 FROM profiles …)` subqueries inside a profiles policy cause infinite recursion and silently fall back to the user's own row only.
+- **Role-change guard (`fix_profile_role_escalation.sql`, 2026-07):** the self-update policy has no `WITH CHECK` and RLS can't compare OLD/NEW, so a `BEFORE UPDATE` trigger (`enforce_profile_role_immutable`) blocks a non-admin end-user session from changing its own `role`. Admins and trusted backend contexts (`auth.uid()` null — service role / SQL editor) are exempt. Closes the one-request self-promote-to-admin escalation.
 
 #### `projects`
 - `id` uuid PK
@@ -321,13 +322,13 @@ DTools pricing parity (`add_dtools_pricing_parity.sql`): `labor_type` text — f
 | Function | Type | Purpose |
 |---|---|---|
 | `is_admin() → boolean` | SECURITY DEFINER, STABLE | Returns true if `auth.uid()` has `role = 'admin'` in `profiles`. Must be SECURITY DEFINER so the internal `profiles` query bypasses RLS — inline subqueries inside profiles policies cause infinite recursion. Used by the admin SELECT/ALL policies on `profiles`. |
-| `is_project_member(_project_id uuid) → boolean` | SECURITY DEFINER, STABLE | Canonical "can modify this project" check: admin, OR `projects.created_by = auth.uid()`, OR a row in `project_members`. Gates **writes** on project child tables (reads are open org-wide — see the project access model note above). |
+| `is_project_member(_project_id uuid) → boolean` | SECURITY DEFINER, STABLE, `search_path=public` | Canonical "can modify this project" check: admin, OR `projects.created_by = auth.uid()`, OR a row in `project_members`. Gates **writes** on project child tables (reads are open org-wide — see the project access model note above). `search_path` pinned in the 2026-07 security pass. |
 | `set_updated_at()` | trigger fn | Generic — sets `NEW.updated_at = now()`. Wired to `projects` only. |
 | `handle_new_user()` | SECURITY DEFINER | After-insert trigger on `auth.users` — inserts a `profiles` row with `email` + `full_name` from `raw_user_meta_data`. |
 | `cutsheet_is_admin() → boolean` | SECURITY DEFINER | Mirrors the `profiles.role='admin'` check, used inside cutsheet RLS policies. |
 | `search_catalog(search_term, page_from, page_to)` | RPC | Paginated catalog search; each word must match mfr/model/description; mfr/model hits rank above description-only. Returns `total_count`. |
-| `generate_project_code() → text` | atomic UPSERT | Returns the next `INST-YYYY-NNNN` value. UPSERTs `project_code_counters` for the current year, returning the incremented `last_seq` in the same statement. Per-year sequence reset. Race-safe under concurrent calls (used by both `monday-backfill` parallel workers and the `monday-webhook` create handler). |
-| `seed_project_code_counter(year int, min_seq int)` | RPC | Bumps `project_code_counters.last_seq` to at least `min_seq` for the given year. Idempotent — never decreases. Used by `monday-backfill` to absorb codes already written to Monday from prior partial runs so we don't regenerate values that already exist on the Monday side. |
+| `generate_project_code() → text` | SECURITY DEFINER, `search_path=public`, atomic UPSERT | Returns the next `INST-YYYY-NNNN` value. UPSERTs `project_code_counters` for the current year, returning the incremented `last_seq` in the same statement. Per-year sequence reset. Race-safe under concurrent calls (used by both `monday-backfill` parallel workers and the `monday-webhook` create handler). Made DEFINER in the 2026-07 pass so it works under the now-RLS-enabled counter table for any caller. |
+| `seed_project_code_counter(year int, min_seq int)` | SECURITY DEFINER, `search_path=public` | Bumps `project_code_counters.last_seq` to at least `min_seq` for the given year. Idempotent — never decreases. Used by `monday-backfill` to absorb codes already written to Monday from prior partial runs so we don't regenerate values that already exist on the Monday side. Made DEFINER in the 2026-07 pass (see `generate_project_code`). |
 
 ### Triggers
 - `projects.before update` → `set_updated_at`
@@ -419,15 +420,19 @@ Helper function `cutsheet_is_admin()` (SECURITY DEFINER) replicates the `profile
 
 All under `supabase/functions/`. Deno runtime. CORS allowed from `*`.
 
+> **Gateway `verify_jwt` is pinned in `supabase/config.toml`** (added 2026-07). `monday-webhook` and `ms-graph-auth` run with `verify_jwt=false` (they receive no Supabase JWT and enforce their own auth); all others `true`. Without this file `functions deploy` defaults everything to `true`, which breaks the two public endpoints — so deploy with the config present. Note `verify_jwt=true` only means "a valid project JWT" — the public anon key qualifies, so functions still enforce their own user/admin/membership checks in code.
+
 ### `dtools-list-projects`
 - **Purpose:** Page through D-Tools Subscribe `/Projects` (200/page, 5000 cap), normalize each into `{dtoolsId, name, number, client, businessUnit, siteAddress, projectTotal, status}`. Sorted by project number desc. Optional `{debug:true}` short-circuit returns raw list+detail shape.
 - **External APIs:** D-Tools (`X-DTSI-ApiKey`)
 - **Tables touched:** none
+- **Auth:** requires a real authenticated user; rejects the public anon key (security pass 2026-07).
 
 ### `dtools-import-project`
 - **Purpose:** One-shot import. Given `dtoolsProjectId`, fetch metadata, idempotency-check on `projects.dtools_project_id`, INSERT new project (mapping subsidiary→`business_unit`, `Approved`→`phase`, `Price`→`value`), add creator as project member, then **delegate** BoM sync to `dtools-project-lookup`.
 - **External APIs:** D-Tools, calls `dtools-project-lookup` over HTTPS using service-role JWT
 - **Tables touched:** `projects` (INSERT), `project_members` (INSERT)
+- **Auth:** requires a real authenticated user; `created_by` is taken from the verified JWT (not the request body) so projects can't be attributed to arbitrary users (security pass 2026-07).
 
 ### `dtools-project-lookup`
 - **Purpose:** Search D-Tools by project number, fetch the project **unaggregated** (single fetch — `aggregateBy` variants return empty `ItemLaborTypes` and cannot price labor; unaggregated rows carry `LocationId` for per-location qty), run the pure transform, write `project_bom_items` (DELETE then 100-row batches), store the DTools root snapshot + reconciliation delta on `projects`, then pull published change orders.
@@ -442,11 +447,7 @@ All under `supabase/functions/`. Deno runtime. CORS allowed from `*`.
 - **GM metadata:** `extractGmMeta()` (in `transform.ts`) pulls the project-level fields the Gross Margin Form needs (header, custom fields, tax split) into `projects.dtools_gm_meta` on every sync. Pure + verified offline alongside the BoM transform.
 - **External APIs:** D-Tools
 - **Tables touched:** `project_bom_items` (DELETE/INSERT), `change_orders` + `change_order_items` (DELETE/INSERT), `projects` (UPDATE incl. root snapshot, sync delta, labor meta, **gm meta**)
-
-### `dtools-probe` (TEMPORARY — delete when CO work ships)
-- **Purpose:** Read-only proxy for DTools API exploration during CO development. POST `{path}` → GET `https://api.d-tools.com/SI{path}` with the API key; path must start with `/Subscribe/`, `/SubscribePartialProjects/`, or `/Message/`.
-- **External APIs:** D-Tools
-- **Tables touched:** none
+- **Auth:** accepts the internal service-role call from `dtools-import-project`; otherwise requires an authenticated user who is a member/admin of the target `projectId` — closing the arbitrary-UUID overwrite (security pass 2026-07).
 
 ### `monday-manager-dashboard`
 - **Purpose:** Pull "New Requests" group from Pre-Sales board, return two buckets: `triage` (date set, no engineer) and `review` (status="Review"). Both sorted by due date asc. Optional `debugNameQuery` dumps raw column data for matching item names.
@@ -458,6 +459,7 @@ All under `supabase/functions/`. Deno runtime. CORS allowed from `*`.
   - `create_pulse` (new item) — Pre-sales: assigns Project ID via `generate_project_code()`, writes back to Monday's Project ID column, upserts a Supabase row with `phase='Pre-Sales'`. Post-sales: looks up by `project_code` (Monday's pre-sales→post-sales duplication automation copies the Project ID along with the item), flips phase to `Post-Sales` and links the post-sales item id. Generates a fresh code if the duplicated item somehow arrives without one.
   - `change_status_column_value` on `status9` — looks up the Supabase row by the right item-id column for the firing board and updates `status`. If no row is linked yet (race between create and status events), falls through to the create handler. Idempotent.
 - Compatible with both **native API webhooks** and the **"When X happens, send a webhook"** Monday automation payload shape (sniffed via field presence; `event.type` is sometimes absent on automation payloads).
+- **Auth:** requires a `MONDAY_WEBHOOK_SECRET` shared secret (constant-time compare; `?token=` query param or `x-webhook-secret` header), checked before anything else. Fails closed (503) if unset. The secret is appended to the delivery URL configured in Monday (security pass 2026-07). Runs `verify_jwt=false` (Monday sends no Supabase JWT) per `config.toml`.
 - Echoes `{challenge}` for Monday subscription handshake.
 - **External APIs:** Monday GraphQL v2024-10
 - **Tables touched:** `projects` (UPSERT), `project_code_counters` (via `generate_project_code()` RPC)
@@ -479,8 +481,8 @@ All under `supabase/functions/`. Deno runtime. CORS allowed from `*`.
 
 ### `ms-graph-auth`
 - **Purpose:** OAuth handler with three actions:
-  - `authorize` (POST, admin-only): builds Microsoft consent URL with userId-encoded `state`. Scopes: `Mail.Read Calendars.Read User.Read offline_access`. Forces `prompt=consent`.
-  - `callback` (GET): exchanges auth code → tokens → upserts to `ms_graph_tokens`, redirects to `${APP_ORIGIN}/personal-ops?connected=true`.
+  - `authorize` (POST, admin-only): builds Microsoft consent URL with an **HMAC-SHA256-signed** `state` carrying `{userId, ts}` (key `MS_GRAPH_STATE_SECRET`, falls back to `MS_GRAPH_CLIENT_SECRET`). Scopes: `Mail.Read Calendars.Read User.Read offline_access`. Forces `prompt=consent`.
+  - `callback` (GET): **verifies the signed state** (signature + 15-min expiry) before trusting `userId` — a forged/replayed state is rejected, preventing token mis-binding — then exchanges auth code → tokens → upserts to `ms_graph_tokens`, redirects to `${APP_ORIGIN}/personal-ops?connected=true`. Runs `verify_jwt=false` per `config.toml`.
   - `disconnect`: deletes the user's token row.
 - **External APIs:** Microsoft `login.microsoftonline.com/{TENANT}/oauth2/v2.0/{authorize,token}`
 - **Tables touched:** `profiles` (admin gate), `ms_graph_tokens` (UPSERT/DELETE)
@@ -507,6 +509,7 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 
 - **External APIs:** Microsoft Graph (Sites/Drives/Items)
 - **Tables touched:** `cutsheet_repository`, `cutsheet_staging`, `submittal_items`
+- **Auth (security pass 2026-07):** every op requires a real authenticated user (rejects the anon key). `bootstrap`, `listStaging`, `approveStaging`, `rejectStaging`, `markStagingDuplicate` additionally require `role='admin'`; the read/upload ops (`lookup`, `lookupBatch`, `getDownloadUrl`, `uploadStaging`) stay open to any authenticated user. `uploadedByUserId`/`reviewedByUserId` come from the verified JWT, not the body.
 
 ---
 
@@ -625,10 +628,12 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 | `SUPABASE_SERVICE_ROLE_KEY` | every function |
 | `DTOOLS_API_KEY` | `dtools-list-projects`, `dtools-import-project`, `dtools-project-lookup` |
 | `MONDAY_API_TOKEN` | `monday-manager-dashboard`, `monday-webhook`, `monday-backfill` |
+| `MONDAY_WEBHOOK_SECRET` | `monday-webhook` — shared secret gating inbound webhook calls (added 2026-07). Must match the `?token=` on the delivery URL configured in Monday. |
 | `MONDAY_PRESALES_BOARD_ID` (optional, default `3477536693`) | `monday-manager-dashboard` |
 | `MS_GRAPH_TENANT_ID` (default in code: `d633c932-8a52-4aeb-a755-c0f1ffaf103c`) | `ms-graph-auth`, `ms-graph-emails` |
 | `MS_GRAPH_CLIENT_ID` | `ms-graph-auth`, `ms-graph-emails` |
 | `MS_GRAPH_CLIENT_SECRET` | `ms-graph-auth`, `ms-graph-emails` |
+| `MS_GRAPH_STATE_SECRET` (optional; falls back to `MS_GRAPH_CLIENT_SECRET`) | `ms-graph-auth` — HMAC key for signing the OAuth `state` (added 2026-07). |
 | `APP_ORIGIN` (default `https://instrata-project-tools.fly.dev`) | `ms-graph-auth` (callback redirect target) |
 | `GRAPH_TENANT_ID` | `sharepoint-cutsheet` |
 | `GRAPH_CLIENT_ID` | `sharepoint-cutsheet` |
@@ -696,8 +701,11 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 ## 9. Known Limitations & Tech Debt
 
 **Auth & Authorization**
-- `monday-manager-dashboard` does not enforce admin role server-side — it trusts that the UI hides it. A signed-in non-admin who knew the function name could call it.
+- `monday-manager-dashboard` does not enforce admin role server-side — it trusts that the UI hides it. A signed-in non-admin who knew the function name could call it. Also has a `debugNameQuery` path that echoes raw Monday column data. **Open** — deferred from the 2026-07 security pass.
+- `bug-screenshots` is a **public** Storage bucket — screenshots are readable by anyone with the object URL. **Open** — deferred from the 2026-07 security pass.
 - Several Bid Leveling RLS policies (`Authenticated users can update bid leveling sessions`) are intentionally permissive — any authenticated user can update any session. May tighten when concurrency matters.
+- **Design decision (intended):** every authenticated user can read all projects and self-add to any project team (see the project access model note in §3). Safe against escalation now that self-promote-to-admin is closed (2026-07), but confirm org-wide visibility is acceptable for the team.
+- *Resolved in the 2026-07 security pass:* self-promote-to-admin (profiles trigger); unauthenticated D-Tools + `sharepoint-cutsheet` functions; `monday-webhook` forgery (shared secret); `resolve_mcp_token` anon grant; OAuth state signing; `review_runs`/`review_flags` `with check(true)`. See §10.
 
 **Schema / Data Model**
 - `projects.value` is stored as a **formatted string** (`"$505,432.50"`), not a numeric. Re-formatting requires a parser. D-Tools `Price` is the source of truth.
@@ -706,7 +714,6 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - D-Tools subsidiary parsing relies on three different field shapes — robust but adds maintenance surface.
 
 **DTools sync**
-- **`dtools-probe` must be deleted** once CO work fully ships — it's a JWT-gated but otherwise open read proxy to the DTools Subscribe API (same exposure class as `dtools-list-projects`, but with arbitrary paths).
 - The offline verification harness (`scripts/verify-dtools-sync.mts`) depends on saved DTools payloads in `Reference/`, which are **intentionally untracked** (real customer pricing). Harness runs only on machines that have the fixtures.
 - Zero-priced payloads for projects never synced pre-approval can't recover per-type **cost** rates (price rates derive from item `InstallPrice` deltas; cost has no equivalent field) — labor cost lands on the unattributed anchor line. Ak Chin + Maricopa labor meta was backfilled from fixtures via `scripts/backfill-labor-meta.mts`.
 - Maricopa carries a −$391 "Labor (unattributed)" line — ~4h of hour drift between DTools' published phase rollups and Σ item hours (DTools edits after approval). Anchored to root totals, so project totals are exact; per-phase attribution is best-effort on merged-CO projects.
@@ -720,14 +727,12 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - `monday-manager-dashboard` builds GraphQL via string concatenation — safe today (board id is from env, group id is matched server-side), but adopt parameterized queries before exposing user-supplied input.
 - `monday-manager-dashboard` still returns a `review` array (items where monday `status9.text === 'review'`) but the frontend no longer renders it — the Needs Review card now runs off internal `review_runs`. Trim the function body once we're confident nothing external depends on the field.
 - Monday pagination caps at 10k items via a hard loop limit (`HARD_CAP_LOOPS=20 * 500`).
-- `monday-webhook` accepts any signed Monday payload — webhook **signature verification is not implemented**. Anyone with the function URL could POST arbitrary events. Mitigate by enabling Monday's signed-webhook feature and verifying the `Authorization` / signature header before processing.
 - `monday-backfill` `forceClear` mode is scaffolded (the body flag is parsed) but the wipe-then-regenerate behavior wasn't needed in the recovery path that shipped — kept as a safety hatch for future re-syncs.
 - Status field on `projects` is **free-text** (no DB CHECK). Status normalization is intentionally minimal — only `"ON HOLD"` gets case-corrected. New Monday status values flow through verbatim; the app falls back to default StatusBadge styling for unknown values until colors are wired in `app/src/components/StatusBadge.tsx`.
 - 7 post-sales items (per the most recent backfill) don't match any pre-sales sibling and exist as standalone Project Tools rows. If any of those should later be merged into a pre-sales project, no UI exists yet — must be done by hand in SQL by updating `project_code`.
 - `monday_item_id` (legacy single-board pointer) is retained on the `projects` row for backward compatibility but is no longer the canonical link. Drop it once we're confident nothing reads it.
 
 **SharePoint Integration**
-- `sharepoint-cutsheet` ops aren't admin-gated server-side — RLS on the Postgres tables protects writes, but the Graph operations (move, delete, upload) are gated only by whoever can reach the function.
 - Manufacturer subfolder names are sanitized with a single regex; collisions on different inputs that sanitize the same way (e.g. `AB:CD` and `AB-CD`) merge silently.
 
 **Frontend**
@@ -736,8 +741,8 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - React 19 + Vite 8 + Tailwind 4 is the bleeding edge; expect ecosystem friction (some libs still emit React 18-era warnings).
 
 **Deployment**
-- No CI/CD wiring observable in the tree — deploys are manual (`fly deploy`) per the recent fix-build commit.
-- `supabase` CLI is a root devDep; migrations are run **manually in the SQL Editor** per migration file headers — no `supabase db push` flow documented.
+- **CI deploys only the frontend.** `.github/workflows/deploy.yml` runs `flyctl deploy` (root `fly.toml` → app `instrata-project-tools`) on every push to `main`. It does **not** deploy the MCP server — `mcp-server` must be deployed manually (`cd mcp-server && fly deploy --remote-only`, its own `fly.toml` → `instrata-project-tools-mcp`). Edge functions deploy separately via `npx supabase functions deploy <name>` (config in `supabase/config.toml`); `functions deploy` never deletes server-side functions — removing one requires `functions delete`.
+- `supabase` CLI is a root devDep (run via `npx supabase`); migrations are run **manually in the SQL Editor** per migration file headers — files use non-timestamped names so `supabase db push` is a no-op.
 
 **Docs**
 - This file. Keep it honest.
@@ -750,6 +755,22 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-07-05 — Pre-rollout security hardening pass (2026-07-02 → 07-05)
+A full security audit ahead of the team-wide rollout, then fixes for every critical/high finding (all deployed + verified in production) plus low-severity cleanups. The root theme: several Edge Functions ran with the service-role key (RLS bypassed) but did **no in-code authorization**, and because the public anon key is itself a valid JWT, they were reachable by anyone on the internet.
+
+- **Privilege escalation (CRITICAL) — `fix_profile_role_escalation.sql`.** Any authenticated user could `update profiles set role='admin' where id=auth.uid()` — the self-update policy had no `WITH CHECK` and RLS can't compare OLD/NEW. Added a `BEFORE UPDATE` trigger (`enforce_profile_role_immutable`) blocking non-admin end-user sessions from changing their own `role`; admins and trusted backend contexts (`auth.uid()` null) are exempt.
+- **D-Tools functions (CRITICAL) — auth added.** `dtools-list-projects`, `dtools-import-project`, `dtools-project-lookup` now require a real authenticated user (reject the anon key). `dtools-import-project` takes `created_by` from the verified JWT instead of a spoofable body field; `dtools-project-lookup` requires project membership/admin (or the internal service-role call from the import chain), closing the arbitrary-UUID BoM/financials overwrite.
+- **`dtools-probe` DELETED (HIGH).** The temporary open D-Tools API proxy was removed entirely (both the local folder and the deployed function via `supabase functions delete`).
+- **`monday-webhook` forgery (CRITICAL) — shared secret.** The webhook did no signature verification. Added a `MONDAY_WEBHOOK_SECRET` shared-secret gate (constant-time compare, via `?token=` query param or `x-webhook-secret` header) checked before the challenge handshake; fails closed if unset. The secret is appended to the webhook URL configured in Monday.
+- **`verify_jwt` config gap (HIGH) — `supabase/config.toml` added.** Without it, `functions deploy` defaults every function to `verify_jwt=true`, which silently broke `monday-webhook` at the gateway (Monday sends no Supabase JWT) mid-pass. `config.toml` now pins `monday-webhook` + `ms-graph-auth` to `false` and the other eight to `true`, so deploys are repeatable.
+- **`sharepoint-cutsheet` (CRITICAL) — auth + admin gate.** Every op now requires an authenticated user; the destructive/review ops (`bootstrap`, `listStaging`, `approveStaging`, `rejectStaging`, `markStagingDuplicate`) require `role='admin'`; `uploadedByUserId`/`reviewedByUserId` come from the verified JWT.
+- **INSERT-side RLS gaps (MED) — `fix_rls_with_check_gaps.sql`.** `review_runs`/`review_flags` INSERT policies were `with check (true)` (any user could fabricate runs/flags) — restricted to admin (the reviewer writes via service role, which bypasses RLS). Added explicit `WITH CHECK` to the `ms_graph_tokens`/`personal_ops_email_flags` for-all policies (Postgres was reusing `USING`, but now it's unambiguous).
+- **OAuth state signing (MED) — `ms-graph-auth`.** The `state` was unsigned base64 and the callback trusted its `userId`, allowing token mis-binding. Now HMAC-SHA256 signed (key: `MS_GRAPH_STATE_SECRET`, falls back to `MS_GRAPH_CLIENT_SECRET`) with a 15-min expiry, verified on callback.
+- **`xlsx` dependency (HIGH) — patched.** Moved off the abandoned npm `xlsx@0.18.5` (unpatched Prototype Pollution + ReDoS, parses user-uploaded spreadsheets) to the official SheetJS CDN build `0.20.3`. API-identical; build passes, `npm audit` no longer flags xlsx.
+- **`resolve_mcp_token` off `anon` (HIGH) — `revoke_resolve_mcp_token_anon.sql` + `mcp-server/src/auth.ts`.** The SECURITY DEFINER RPC was executable by `anon`. The MCP server now mints a short-lived `authenticated` JWT (`mintServiceJwt`) to call it, and the grant is revoked from `PUBLIC` + `anon` (Postgres grants EXECUTE to PUBLIC by default, so revoking from anon alone wasn't enough), re-granted to `authenticated` only.
+- **Low-severity hardening — `fix_low_severity_hardening.sql`.** Enabled RLS on `project_code_counters` (no policy — functions only); made `generate_project_code` + `seed_project_code_counter` SECURITY DEFINER with pinned `search_path`; pinned `search_path` on `is_project_member`. Untracked `supabase/.temp` (CLI scratch: project ref, pooler host) and added it to `.gitignore`.
+- **Still open (deferred, non-blocking for a trusted internal team):** `monday-manager-dashboard` has no server-side role check + a `debugNameQuery` data-leak path; `bug-screenshots` is a public Storage bucket. **Design decision to confirm:** every authenticated user can read all projects and self-add to any project (the intended org-wide model — safe now that admin escalation is closed).
 
 ### 2026-06-25
 - **Project Documentation — Gross Margin Form.** New extensible "Project Documentation" card at the bottom of Project Overview (below the Project Quote). Until a project is synced with DTools it shows a "sync with DTools first" note; once synced it lists the report series — Phase 1 ships the **Gross Margin Form** that accounting uses to open a project.
