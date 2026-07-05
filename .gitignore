@@ -15,3 +15,7 @@ Reference/
 
 # Visual Studio cruft
 .vs/
+
+# Supabase CLI scratch state (project ref, pooler host, tool versions) — not
+# part of the app and shouldn't be versioned.
+supabase/.temp/
