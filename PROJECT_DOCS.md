@@ -397,6 +397,12 @@ Helper function `cutsheet_is_admin()` (SECURITY DEFINER) replicates the `profile
 | `ms_graph_tokens` | Per-user OAuth tokens. UNIQUE(`user_id`). Stores `access_token`, `refresh_token`, `expires_at`. RLS: own row + admin only. |
 | `personal_ops_email_flags` | Triage state per Graph `message_id`. `status` ∈ active/flagged/deferred/dismissed. `session_type` and `deferred_to` ∈ morning/midday/eod. `urgency_score` numeric, `urgency_reason` text. Indexed by (`user_id`, `message_id`). |
 
+### Project Files (`add_project_files.sql`)
+
+| Table | Purpose |
+|---|---|
+| `project_files` | Canonical **index** of the per-project document repository; the bytes live in the company-browsable **ProjectFiles SharePoint site** (`/sites/ProjectFiles`, library "Project Files", one folder per project `{number} - {name}/` with standard category subfolders). Columns: `category` ∈ `contracts`/`drawings`/`submittals`/`meeting_notes`/`photos`/`closeout`/`general`, `filename`, `sharepoint_item_id` (UNIQUE — the immutable Graph pointer), `sharepoint_path`, `sharepoint_web_url`, `size_bytes`, `mime_type`, `source` ∈ `upload` (through the app) / `generated` (auto-filed PDF export) / `sharepoint_sync` (discovered by reconcile), `doc_type` (for generated docs: `submittal_package`/`rfi`/`closeout`/`sign_off`/`warranty`/`punch_list`/`manuals`), `uploaded_by`, `sharepoint_modified_at`. RLS: reads open org-wide (the backing SharePoint site is company-browsable anyway); writes gated to project members. Rows are written by the `sharepoint-project-files` edge function, whose `sync` op reconciles the index against the actual folder contents on Files-tab open — so files dropped in natively via Explorer/Teams appear, and files deleted natively disappear. Also adds `projects.sharepoint_folder_id` (cached Graph folder id, set on first use; folders are created lazily). Spec: `Product Spec/04-project-files.md`. |
+
 ### Directory — Vendor Contacts (`add_vendor_contacts.sql`)
 
 | Table | Purpose |
@@ -411,6 +417,7 @@ Helper function `cutsheet_is_admin()` (SECURITY DEFINER) replicates the `profile
 | `as-builts` | private | `{project_id}/...` | Authenticated INSERT; authenticated SELECT (open view); DELETE gated by `is_project_member`. |
 | `manuals` | private | `{project_id}/...` | Authenticated INSERT; authenticated SELECT (open view); DELETE gated by `is_project_member` (added by `add_product_manuals.sql`). |
 | `bug-screenshots` | public | `{uuid}.{ext}` | Any authenticated user INSERT; public SELECT. URLs are stored verbatim on `bug_reports.image_url` and rendered directly — no signed tokens needed. 5 MB limit; PNG/JPEG/GIF/WebP only. |
+| `project-files-temp` | private | `{uuid}_{filename}` | Pass-through staging for Project Files uploads (browser → bucket → edge function → SharePoint → temp object deleted); bypasses the edge-function body-size limit. Authenticated INSERT only; the function reads/deletes with service role. 100 MB limit. Same pattern as `cutsheet-temp`. |
 
 > Note: cutsheet **PDFs** for the Cutsheet Repository feature live in **SharePoint**, not the `cutsheets` bucket. The bucket appears to predate the SharePoint repository and likely backs `project_bom_items.cut_sheet_url` for legacy / project-local uploads.
 
@@ -511,6 +518,22 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 - **Tables touched:** `cutsheet_repository`, `cutsheet_staging`, `submittal_items`
 - **Auth (security pass 2026-07):** every op requires a real authenticated user (rejects the anon key). `bootstrap`, `listStaging`, `approveStaging`, `rejectStaging`, `markStagingDuplicate` additionally require `role='admin'`; the read/upload ops (`lookup`, `lookupBatch`, `getDownloadUrl`, `uploadStaging`) stay open to any authenticated user. `uploadedByUserId`/`reviewedByUserId` come from the verified JWT, not the body.
 
+### `sharepoint-project-files`
+Single endpoint, op dispatcher (`body.op`). Same app-only Graph pattern as `sharepoint-cutsheet` (client_credentials token, module-scoped cache), pointed at the **ProjectFiles site** via its own `SHAREPOINT_PROJECTS_*` env vars. Backs the Files tab on Project Overview and the MCP file tools. Spec: `Product Spec/04-project-files.md`.
+
+| `op` | Purpose |
+|---|---|
+| `bootstrap` | One-time setup: resolve site URL + library name → `{SHAREPOINT_PROJECTS_SITE_ID, SHAREPOINT_PROJECTS_DRIVE_ID}` to set as env vars. Admin-only. |
+| `ensureProjectFolder` | Find-or-create `{number} - {name}/` (+ optional category subfolder); persists `projects.sharepoint_folder_id`; handles the create race via 409 → re-lookup. |
+| `upload` | Bytes from `project-files-temp` storage path (preferred) or base64; ensures folder chain; PUT with `conflictBehavior=rename`; INSERT `project_files` (rolls back the SharePoint upload if the insert fails); always deletes the temp object. |
+| `getDownloadUrl` | Fresh ~1h pre-authenticated Graph download URL by `project_files` id. |
+| `delete` | Deletes the SharePoint item (404 tolerated) + the index row. |
+| `sync` | Reconcile: walks the project folder root + one level of subfolders (paginated), upserts unknown items as `source='sharepoint_sync'`, updates changed ones, removes index rows whose items vanished. SharePoint wins conflicts. Find-only — never creates folders. Returns `{added, updated, removed, folderWebUrl}`. |
+
+- **External APIs:** Microsoft Graph (Sites/Drives/Items)
+- **Tables touched:** `project_files`, `projects` (`sharepoint_folder_id`), `profiles` (role check), `project_members` (membership check), Storage `project-files-temp`
+- **Auth:** every op requires a real authenticated user. `bootstrap` is admin-only; mutations (`upload`, `delete`, `ensureProjectFolder`) require project membership (mirror of `is_project_member`, enforced in code since the function runs service-role); reads (`getDownloadUrl`, `sync`) are open to any authenticated user, matching the org-wide `project_files` SELECT policy. `uploadedByUserId` comes from the verified JWT.
+
 ---
 
 ## 5. Feature Inventory
@@ -548,13 +571,13 @@ Single endpoint, op dispatcher (`body.op`). App-only Graph token (client_credent
 | Engineer Assignment Sync (Monday → DB) | Future | Today users only land on a project via: project creation (creator auto-added), DTools import (importing user auto-added), or manual self-add via the **Add me** button on the global Projects page. Monday's per-board engineer person columns are **not yet synced** to `project_members` / `projects.owner_id`. Planned: a webhook on the Pre-Sales `person` and a parallel Post-Sales person column → a receiver edge function that resolves the monday user → our `profiles` row → upserts into `project_members` and writes `projects.owner_id`. On Post-Sales rows, also write the carried-forward Pre-Sales engineer into `projects.legacy_engineer_id` (already added in `supabase/migrations/add_legacy_engineer.sql`; null until this sync ships). Backfill via a one-shot script that walks both boards and reconciles current assignments. The whole admin section (Triage, Needs Review, Team Bandwidth) is sized for what this sync will unlock — Triage stays on the monday-manager-dashboard feed in the meantime, Team Bandwidth will populate once `owner_id` is real on most rows. |
 | Effort-Weighted Team Bandwidth | Future | Today the admin Team Bandwidth card on Dashboard counts active projects per engineer (active = `Not Started`/`In Progress`/`Review`/`Follow Up` on Pre-Sales; `Won`/`Not Started`/`In Progress`/`Install`/`Close Out` on Post-Sales). Planned: layer an effort *score* from `EffortSurvey` responses on top of the count, so the bar reflects load not just headcount. Post-Sales rows would also weight the legacy Pre-Sales engineer (`projects.legacy_engineer_id`) at a reduced multiplier (TBD) since that engineer still carries some responsibility post-contract. Implementation hook: `bandwidthRows()` in `AdminDashboardSection.tsx` is already pure — the row builder just needs to consume effort scores instead of (or alongside) project counts when the data is wired in. |
 | Project Sections — Operations | Live (Schedule + Purchasing) | Sidebar group + Overview tool card render alongside Pre-Sales / Post-Sales with green accent. Schedule & Milestones and Purchasing are now live links with real counts; Inventory is still scaffolded (`SidebarDisabledLink`, dimmed in the Overview card). |
-| Project Log card (Activity, Files & History) | Live (Comments) | `ProjectLog.tsx` on the Overview between the tool grid and BoM. Three tabs (Comments / Files / Client GC Log) with full header, tab pills with live counts, and per-tab CTAs (Export PDF on Client/GC Log, Download all on Files). Comments tab is fully wired (see row below); Files and Client / GC Log render empty-state placeholders. |
+| Project Log card (Activity, Files & History) | Live (Comments + Files) | `ProjectLog.tsx` on the Overview between the tool grid and BoM. Three tabs (Comments / Files / Client GC Log) with full header, tab pills with live counts, and per-tab CTAs (Export PDF on Client/GC Log, "Open in SharePoint" on Files). Comments and Files tabs are fully wired (see rows below); Client / GC Log renders an empty-state placeholder. |
 | Schedule & Milestones | Complete | `pages/operations/ScheduleMilestones.tsx` — two-tier list (project / phase) with computed status badges (`upcoming` / `at_risk` / `overdue` / `complete`), 7-day at-risk window, mark-complete prompt with optional note, edit/delete with confirmation, read-only Timeline view toggle, "Apply Default Commercial AV Template" wizard (12 milestones, +14 to +150 day offsets defined in `utils/milestoneTemplates.ts`). Project Overview surfaces a Next-3 milestones widget below the tool group cards. Phase 1 spec at `Product Spec/milestone-tracking.md`. |
 | Purchasing | Complete | `pages/operations/PurchasingList.tsx` (modules per project) + `pages/operations/PurchasingDetail.tsx` (manufacturer-grouped table). Each module live-links one or more submittals with a persistent `+ Add Submittal` button. Detail view shows mfr/model/desc/qty/sold-in price (`unit_cost`)/vendor (`priced_from`) live-resolved, with inline-editable purchase price, ship-to (warehouse picker + custom address), need-by date, and PO number. Per-manufacturer header carries default ship-to + need-by; per-item rows inherit (greyed) unless overridden. Status advances `not_ordered → ordered → received` with auto-set dates. Always-visible freight row per manufacturer. Persistent red warning banner lists ordered items whose submittal-side approval has been reverted, until re-approved. Phase 1 spec at `Product Spec/02-purchasing-equipment-status.md`; deferred items tracked in `Product Spec/future_features.md`. |
 | Warehouses | Complete | Org-wide ship-to destinations with name + address + active flag. Settings page exposes admin-only CRUD (`SettingsPage.tsx → WarehousesSection`). Backed by `warehouses` table; consumed by Purchasing module ship-to dropdowns. |
 | Inventory | Future | `app/src/pages/operations/Inventory.tsx` exists with full styling but is not wired to a route. |
 | Comments (Project Log) | Complete | Live chat thread on every project. Composer with ⌘+Enter shortcut, deterministic colored avatar chip + name + timestamp on every post, flat replies that default collapsed behind a blue notification badge showing the reply count, edit/delete on your own (admins on any), 6-emoji reaction picker (👍 ❤️ 😂 🎉 🚀 👀) with toggle semantics. Scrollable history bounded at 480px with an Expand toggle to 820px once the thread overflows. Any authenticated user can read and post — project membership is not required. Backed by `project_comments` (`add_project_comments.sql`); demo mode renders a "requires Supabase" notice in the tab. Lazy-loaded per project on `ProjectLog` mount. |
-| Files (Project Log) | Future | Standardized project file repository (Contracts / Drawings / Submittals / Meeting Notes / Photos / Closeout). Tab placeholder lives in `ProjectLog.tsx`. |
+| Files (Project Log) | Complete | Per-project document repository backed by the company-browsable **ProjectFiles SharePoint site** (bytes) + the `project_files` Supabase index (browse/search/RLS). `FilesTab` in `ProjectLog.tsx`: category-grouped list (Contracts / Drawings / Submittals / Meeting Notes / Photos / Closeout / General), multi-file upload with category picker (staged through `project-files-temp`), download via fresh ~1h Graph URLs, per-file + header "Open in SharePoint" links, delete with confirm, live tab count badge. **Reconcile-on-open** (throttled to 5 min/project/session) picks up files added or deleted natively in SharePoint. **Auto-filing:** all non-financial PDF exports (submittal, RFI, RFI log, closeout, sign-off, warranty, punch list, manuals) also file a timestamped copy into the project folder via `fileGeneratedPdf` (`lib/projectFiles.ts`) — fire-and-forget, never blocks the download; gross margin is deliberately excluded (the site is company-browsable). MCP tools `list_project_files` / `get_project_file` expose the repo to Claude clients. Spec: `Product Spec/04-project-files.md`; migration `add_project_files.sql`; edge function `sharepoint-project-files`. |
 | Client / GC Log | Future | Auto-generated timeline of client-level changes — meetings, base-bid contracts, change-order tracking (Requested / Proposed / Rejected / On Hold / Accepted), milestone completions. Branded PDF export. Tab placeholder lives in `ProjectLog.tsx`. |
 | Monday Auto Project Creation | Replaced | Was deliberately no-op; `monday-webhook` now actively creates Project Tools rows on `create_pulse` events from either Monday board (different from the old "create on status=Review" behavior — every new Monday item lands in Project Tools). |
 | Bug Reporting & Notifications | Complete | Three-phase feature. **Phase 1 — Bug Collection:** `BugReportModal.tsx` (title + body + optional screenshot upload); "Report a Bug" button at the bottom of the sidebar in `Layout.tsx` opens the modal from any page; page URL is captured silently. `add_bug_reports.sql` migration creates the `bug_reports` table and `bug-screenshots` Storage bucket. **Phase 2 — Admin Triage Panel:** `BugReportsCard.tsx` added to the Management section of `AdminDashboardSection`; expandable rows show description, screenshot thumbnail, status dropdown (Open / In Progress / Resolved / Won't Fix / Duplicate), resolution note textarea, and Save; closed issues toggle-hidden for a tidy default view. **Phase 3 — Notifications:** `NotificationBell.tsx` in the sidebar user strip — Supabase Realtime subscription on `notifications WHERE user_id = me` drives the live unread badge; panel marks all read on open. When admin saves Resolved / Won't Fix the reporter's `notification_preferences` are checked (default enabled), then a `notifications` row is inserted for the reporter. Settings → Notifications card (all users): toggle per notification type backed by `notification_preferences`. Migrations: `add_notifications.sql`. |
@@ -635,13 +658,15 @@ Compatible with both **native API webhooks** (`webhooks` GraphQL mutation) and *
 | `MS_GRAPH_CLIENT_SECRET` | `ms-graph-auth`, `ms-graph-emails` |
 | `MS_GRAPH_STATE_SECRET` (optional; falls back to `MS_GRAPH_CLIENT_SECRET`) | `ms-graph-auth` — HMAC key for signing the OAuth `state` (added 2026-07). |
 | `APP_ORIGIN` (default `https://instrata-project-tools.fly.dev`) | `ms-graph-auth` (callback redirect target) |
-| `GRAPH_TENANT_ID` | `sharepoint-cutsheet` |
-| `GRAPH_CLIENT_ID` | `sharepoint-cutsheet` |
-| `GRAPH_CLIENT_SECRET` | `sharepoint-cutsheet` |
+| `GRAPH_TENANT_ID` | `sharepoint-cutsheet`, `sharepoint-project-files` |
+| `GRAPH_CLIENT_ID` | `sharepoint-cutsheet`, `sharepoint-project-files` |
+| `GRAPH_CLIENT_SECRET` | `sharepoint-cutsheet`, `sharepoint-project-files` |
 | `SHAREPOINT_SITE_ID` | `sharepoint-cutsheet` (resolve once via `bootstrap` op) |
 | `SHAREPOINT_DRIVE_ID` | `sharepoint-cutsheet` |
 | `SHAREPOINT_STAGING_FOLDER_ID` | `sharepoint-cutsheet` |
 | `SHAREPOINT_REPOSITORY_FOLDER_ID` | `sharepoint-cutsheet` |
+| `SHAREPOINT_PROJECTS_SITE_ID` | `sharepoint-project-files` (resolved via its `bootstrap` op 2026-07-06; ProjectFiles site) |
+| `SHAREPOINT_PROJECTS_DRIVE_ID` | `sharepoint-project-files` ("Project Files" library drive) |
 | `ANTHROPIC_API_KEY` | `email-triage` |
 
 ### Frontend (`app/.env`, build-time)
@@ -686,7 +711,7 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
                                                                   Supabase ── RLS ──▶ only that user's data
 ```
 
-**Tools (read-only):** `list_projects`, `get_project`, `get_project_bom`, `list_rfis`, `list_submittals`, `list_purchasing`, `list_milestones`, `search_catalog`, `search_vendor_contacts`. Each mirrors a query already in `app/src/store/index.ts`.
+**Tools (read-only):** `list_projects`, `get_project`, `get_project_bom`, `list_rfis`, `list_submittals`, `list_purchasing`, `list_milestones`, `search_catalog`, `search_vendor_contacts`, `list_project_files`, `get_project_file`. Most mirror queries already in `app/src/store/index.ts`; the two file tools (added 2026-07-06) read the `project_files` index and mint download URLs by invoking the `sharepoint-project-files` edge function **with the caller's minted JWT** — the server itself holds no Graph credentials, and the edge function re-verifies the user. Verified end-to-end (token → list → download URL → bytes fetched).
 
 **Transport:** stateless MCP Streamable HTTP (`POST /mcp`), `@modelcontextprotocol/sdk`. Per-token in-memory rate limit. `GET /healthz` for Fly.
 
@@ -755,6 +780,16 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-07-06 — Project Files (SharePoint-backed repository, Files tab live)
+The Files tab on the Project Log card is real: a per-project document repository where **SharePoint holds the bytes and Supabase holds the index**. Full design in `Product Spec/04-project-files.md`; commits `c9fdb50`, `97097ab`.
+
+- **Storage model.** New company-browsable SharePoint site `/sites/ProjectFiles` (library "Project Files"), one folder per project `{number} - {name}/` with standard category subfolders, created lazily on first use. Anyone at the company can work in it natively (Explorer/Teams); the app's `project_files` index (new migration `add_project_files.sql`, applied 2026-07-06) is what the UI and MCP browse. A **reconcile-on-view** `sync` op keeps the two honest — files added or deleted directly in SharePoint show up/disappear on the next Files-tab open (verified both directions in production).
+- **Edge function `sharepoint-project-files`** — cloned from the `sharepoint-cutsheet` pattern (app-only Graph, op dispatcher, in-code auth): `bootstrap` / `ensureProjectFolder` / `upload` / `getDownloadUrl` / `delete` / `sync`. Bootstrapped against the ProjectFiles site same day; `SHAREPOINT_PROJECTS_SITE_ID` + `SHAREPOINT_PROJECTS_DRIVE_ID` set as function secrets. Uploads stage through a new private `project-files-temp` bucket (100 MB) to bypass the function body-size limit.
+- **Files tab UI** (`FilesTab` in `ProjectLog.tsx` + `lib/projectFiles.ts`): category-grouped list, multi-upload with category picker, download via fresh ~1h Graph URLs, open-in-SharePoint links (per file + project folder in the card header), delete with confirm, live tab count, background reconcile throttled to 5 min/project/session.
+- **Auto-filing of generated docs.** All non-financial PDF exports (submittal package, RFI, RFI log, closeout, sign-off, warranty, punch list, manuals) now also file a timestamped copy into the project's SharePoint folder under the right category (`source='generated'`, typed `doc_type`) — fire-and-forget so a filing failure never blocks the user's download. **Gross margin is deliberately excluded**: the site is company-browsable, financials stay download-only.
+- **MCP tools `list_project_files` / `get_project_file`.** The Fly MCP server exposes the repository to Claude clients; download URLs are minted by calling the edge function with the caller's per-user JWT, so the server continues to hold no Graph credentials and no service-role key. Redeployed + verified end-to-end (token → list → URL → bytes).
+- `config.toml` pins `sharepoint-project-files` to `verify_jwt = true` alongside the other authenticated functions.
 
 ### 2026-07-05 — Pre-rollout security hardening pass (2026-07-02 → 07-05)
 A full security audit ahead of the team-wide rollout, then fixes for every critical/high finding (all deployed + verified in production) plus low-severity cleanups. The root theme: several Edge Functions ran with the service-role key (RLS bypassed) but did **no in-code authorization**, and because the public anon key is itself a valid JWT, they were reachable by anyone on the internet.

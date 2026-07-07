@@ -49,3 +49,6 @@ verify_jwt = true
 
 [functions.sharepoint-cutsheet]
 verify_jwt = true
+
+[functions.sharepoint-project-files]
+verify_jwt = true
