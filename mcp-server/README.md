@@ -89,3 +89,5 @@ the project-scoped tools take a `project_id`:
 | `list_milestones` | Schedule milestones |
 | `search_catalog` | Full-text product catalog search |
 | `search_vendor_contacts` | Vendor / distributor / rep directory |
+| `list_project_files` | Project document repository index (SharePoint-backed; filter by category / search) |
+| `get_project_file` | Fresh ~1h download URL for one file (minted by the sharepoint-project-files edge function with the caller's JWT) |
