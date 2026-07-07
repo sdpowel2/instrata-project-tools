@@ -11,12 +11,18 @@ import {
   MessageSquareWarning, Folder, ClipboardCheck, BookOpen,
   Download, Smile, Send, Reply, ChevronRight, ChevronDown,
   Pencil, Trash2, Check, X, Loader2,
+  Upload, ExternalLink, FileText, Image as ImageIcon, Sparkles,
 } from 'lucide-react';
 import type { Project, ProjectComment } from '../types';
 import { Eyebrow } from './ui';
 import { useStore } from '../store';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  PROJECT_FILE_CATEGORIES, type ProjectFile, type ProjectFileCategory,
+  fetchProjectFiles, syncProjectFiles, uploadProjectFile,
+  downloadProjectFile, deleteProjectFile, formatFileSize,
+} from '../lib/projectFiles';
 
 type TabKey = 'comments' | 'files' | 'client';
 
@@ -44,9 +50,25 @@ export function ProjectLog({ project }: { project: Project }) {
     [allComments, project.id],
   );
 
+  // Files badge — cheap head-count on mount so it's accurate before the tab
+  // opens; FilesTab keeps it fresh (and supplies the SharePoint folder link
+  // for the header CTA) once the user actually looks.
+  const [fileCount, setFileCount] = useState(0);
+  const [filesFolderUrl, setFilesFolderUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    let cancelled = false;
+    supabase
+      .from('project_files')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', project.id)
+      .then(({ count }) => { if (!cancelled) setFileCount(count ?? 0); });
+    return () => { cancelled = true; };
+  }, [project.id]);
+
   const tabs: TabDef[] = [
     { key: 'comments', label: 'Comments',          icon: MessageSquareWarning, count: projectCommentCount },
-    { key: 'files',    label: 'Files',             icon: Folder,               count: 0 },
+    { key: 'files',    label: 'Files',             icon: Folder,               count: fileCount },
     { key: 'client',   label: 'Client / GC Log',   icon: ClipboardCheck,       count: 0 },
   ];
 
@@ -74,10 +96,15 @@ export function ProjectLog({ project }: { project: Project }) {
               <Download size={14} /> Export PDF
             </button>
           )}
-          {tab === 'files' && (
-            <button className="btn-secondary text-sm" disabled>
-              <Download size={14} /> Download all (.zip)
-            </button>
+          {tab === 'files' && filesFolderUrl && (
+            <a
+              href={filesFolderUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="btn-secondary text-sm no-underline"
+            >
+              <ExternalLink size={14} /> Open in SharePoint
+            </a>
           )}
         </div>
 
@@ -115,7 +142,13 @@ export function ProjectLog({ project }: { project: Project }) {
 
       <div>
         {tab === 'comments' && <CommentsTab projectId={project.id} />}
-        {tab === 'files'    && <FilesTabPlaceholder />}
+        {tab === 'files'    && (
+          <FilesTab
+            projectId={project.id}
+            onCount={setFileCount}
+            onFolderUrl={setFilesFolderUrl}
+          />
+        )}
         {tab === 'client'   && <ClientLogTabPlaceholder />}
       </div>
     </div>
@@ -683,21 +716,278 @@ function ReplyComposer({
 }
 
 // =============================================================================
-// Files / Client Log placeholders — unchanged from the original scaffold.
-// Will be wired up in their own follow-up passes.
+// FilesTab — per-project SharePoint file repository. Reads the project_files
+// index (fast), then reconciles with SharePoint in the background so files
+// dropped in natively via Explorer/Teams appear without any app action.
+// Bytes live in SharePoint; see Product Spec/04-project-files.md.
 // =============================================================================
 
-function FilesTabPlaceholder() {
+// Reconcile at most once per project per interval per app session — the walk
+// costs a Graph call per subfolder and tab-hopping shouldn't hammer it.
+const filesSyncedAt = new Map<string, number>();
+const FILES_SYNC_THROTTLE_MS = 5 * 60 * 1000;
+
+function FilesTab({
+  projectId,
+  onCount,
+  onFolderUrl,
+}: {
+  projectId: string;
+  onCount: (n: number) => void;
+  onFolderUrl: (url: string | null) => void;
+}) {
+  const [files, setFiles] = useState<ProjectFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [busyFileId, setBusyFileId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [uploadCategory, setUploadCategory] = useState<ProjectFileCategory>('general');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const reload = async (): Promise<ProjectFile[]> => {
+    const rows = await fetchProjectFiles(projectId);
+    setFiles(rows);
+    onCount(rows.length);
+    return rows;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await reload();
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+      // Background reconcile with SharePoint, throttled per session.
+      const last = filesSyncedAt.get(projectId) ?? 0;
+      if (Date.now() - last < FILES_SYNC_THROTTLE_MS) return;
+      try {
+        setSyncing(true);
+        const res = await syncProjectFiles(projectId);
+        filesSyncedAt.set(projectId, Date.now());
+        if (cancelled) return;
+        onFolderUrl(res.folderWebUrl ?? null);
+        if (res.added > 0 || res.updated > 0 || res.removed > 0) {
+          await reload();
+          if (res.added > 0) {
+            setNotice(`${res.added} file${res.added === 1 ? '' : 's'} found in SharePoint`);
+          }
+        }
+      } catch (err) {
+        // Reconcile failures are non-fatal — the index still renders.
+        console.warn('[FilesTab] sync failed:', err);
+      } finally {
+        if (!cancelled) setSyncing(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  const handleUpload = async (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const file of Array.from(list)) {
+        await uploadProjectFile(projectId, uploadCategory, file);
+      }
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDownload = async (f: ProjectFile) => {
+    setBusyFileId(f.id);
+    setError(null);
+    try {
+      await downloadProjectFile(f.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyFileId(null);
+    }
+  };
+
+  const handleDelete = async (f: ProjectFile) => {
+    if (!window.confirm(`Delete "${f.filename}"? This removes the file from SharePoint too.`)) return;
+    setBusyFileId(f.id);
+    setError(null);
+    try {
+      await deleteProjectFile(f.id);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyFileId(null);
+    }
+  };
+
+  const grouped = PROJECT_FILE_CATEGORIES
+    .map((c) => ({ ...c, files: files.filter((f) => f.category === c.key) }))
+    .filter((g) => g.files.length > 0);
+
+  if (loading) {
+    return (
+      <div className="px-6 py-14 text-center text-fg-2">
+        <Loader2 size={20} className="animate-spin mx-auto" />
+      </div>
+    );
+  }
+
   return (
-    <div className="px-6 py-14 text-center">
-      <div className="w-12 h-12 rounded-xl bg-navy/[0.06] text-navy flex items-center justify-center mx-auto mb-3.5">
-        <Folder size={22} />
+    <div className="px-5 py-4">
+      {/* Toolbar — category picker + upload, plus background-sync indicator. */}
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        <select
+          value={uploadCategory}
+          onChange={(e) => setUploadCategory(e.target.value as ProjectFileCategory)}
+          className="text-[13px] border border-border rounded-lg px-2.5 py-1.5 bg-white text-fg outline-none"
+        >
+          {PROJECT_FILE_CATEGORIES.map((c) => (
+            <option key={c.key} value={c.key}>{c.label}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="btn-orange text-xs disabled:opacity-50"
+        >
+          {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+          {uploading ? 'Uploading…' : 'Upload files'}
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => handleUpload(e.target.files)}
+        />
+        <div className="flex-1" />
+        {syncing && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-fg-2">
+            <Loader2 size={12} className="animate-spin" /> Checking SharePoint…
+          </span>
+        )}
+        {!syncing && notice && (
+          <span className="text-xs text-fg-2">{notice}</span>
+        )}
       </div>
-      <div className="text-base font-semibold text-navy">Project file repository coming soon</div>
-      <div className="text-[13px] text-fg-2 max-w-[440px] mx-auto mt-1.5">
-        Standardized folder structure (Contracts, Drawings, Submittals, Meeting Notes, Photos, Closeout)
-        with per-file metadata and download support.
-      </div>
+
+      {error && (
+        <div className="text-[13px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">
+          {error}
+        </div>
+      )}
+
+      {grouped.length === 0 ? (
+        <div className="px-6 py-10 text-center">
+          <div className="w-12 h-12 rounded-xl bg-navy/[0.06] text-navy flex items-center justify-center mx-auto mb-3.5">
+            <Folder size={22} />
+          </div>
+          <div className="text-base font-semibold text-navy">No files yet</div>
+          <div className="text-[13px] text-fg-2 max-w-[440px] mx-auto mt-1.5">
+            Upload files here or drop them into the project's SharePoint folder —
+            they'll show up either way. Documents generated in Project Tools
+            (submittals, closeout docs) are filed here automatically.
+          </div>
+        </div>
+      ) : (
+        grouped.map((group) => (
+          <div key={group.key} className="mb-4 last:mb-0">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Eyebrow>{group.label}</Eyebrow>
+              <span className="text-[11px] font-mono text-fg-2">{group.files.length}</span>
+            </div>
+            <div className="border border-border rounded-lg overflow-hidden">
+              {group.files.map((f, i) => {
+                const isImage = (f.mimeType ?? '').startsWith('image/');
+                const FileIcon = isImage ? ImageIcon : FileText;
+                const busy = busyFileId === f.id;
+                return (
+                  <div
+                    key={f.id}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 ${i === 0 ? '' : 'border-t border-border'}`}
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-navy/[0.06] text-navy flex items-center justify-center flex-shrink-0">
+                      <FileIcon size={15} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <button
+                          onClick={() => handleDownload(f)}
+                          disabled={busy}
+                          title="Download"
+                          className="appearance-none border-0 bg-transparent p-0 cursor-pointer text-[13px] font-semibold text-navy truncate hover:underline disabled:opacity-60"
+                        >
+                          {f.filename}
+                        </button>
+                        {f.source === 'generated' && (
+                          <span
+                            title="Generated by Project Tools"
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-orange bg-orange/10 rounded-full px-1.5 py-px flex-shrink-0"
+                          >
+                            <Sparkles size={9} /> generated
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-fg-2 mt-0.5 truncate">
+                        {[
+                          formatFileSize(f.sizeBytes),
+                          f.source === 'sharepoint_sync' ? 'via SharePoint' : f.uploaderName,
+                          formatTimestamp(f.createdAt),
+                        ].filter(Boolean).join(' · ')}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {busy ? (
+                        <Loader2 size={14} className="animate-spin text-fg-2" />
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handleDownload(f)}
+                            title="Download"
+                            className="appearance-none border-0 bg-transparent p-1.5 cursor-pointer text-fg-2 hover:text-navy"
+                          >
+                            <Download size={14} />
+                          </button>
+                          {f.sharepointWebUrl && (
+                            <a
+                              href={f.sharepointWebUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Open in SharePoint"
+                              className="p-1.5 text-fg-2 hover:text-navy"
+                            >
+                              <ExternalLink size={14} />
+                            </a>
+                          )}
+                          <button
+                            onClick={() => handleDelete(f)}
+                            title="Delete"
+                            className="appearance-none border-0 bg-transparent p-1.5 cursor-pointer text-fg-2 hover:text-red-600"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }

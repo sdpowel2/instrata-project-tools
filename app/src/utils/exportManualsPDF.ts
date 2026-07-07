@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb, PageSizes } from 'pdf-lib';
 import type { Project, ManualBookmark } from '../types';
 import letterheadUrl from '../assets/letterhead.pdf?url';
 import { sanitizePdfText as sanitize } from './pdfText';
+import { fileGeneratedPdf } from '../lib/projectFiles';
 
 const NAVY      = rgb(0.133, 0.196, 0.431);
 const ORANGE    = rgb(0.965, 0.553, 0.180);
@@ -170,4 +171,10 @@ export async function exportManualsPDF(
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  // Fire-and-forget: file a copy into the project's SharePoint folder.
+  void fileGeneratedPdf(
+    project.id, 'closeout', 'manuals',
+    `${project.number} - Product Manuals.pdf`, pdfBytes,
+  );
 }

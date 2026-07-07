@@ -2,6 +2,7 @@ import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb, PageSizes } from 'pd
 import { sanitizePdfText as sanitize } from './pdfText';
 import type { Project, Warranty } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
+import { fileGeneratedPdf } from '../lib/projectFiles';
 
 // Brand colors (mirrors exportPunchListPDF.ts / exportCloseoutPDF.ts)
 const NAVY = rgb(0.133, 0.196, 0.431); // #22326E
@@ -333,4 +334,10 @@ export async function exportWarrantyPDF(
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  // Fire-and-forget: file a copy into the project's SharePoint folder.
+  void fileGeneratedPdf(
+    project.id, 'closeout', 'warranty',
+    `${project.number} - Warranties.pdf`, pdfBytes,
+  );
 }

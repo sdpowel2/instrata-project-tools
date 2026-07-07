@@ -3,6 +3,7 @@ import type { Submittal, SubmittalItem, Project } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
 import { fetchCutsheetBytes, hasCutsheet } from './cutsheetSource';
 import { sanitizePdfText as sanitize } from './pdfText';
+import { fileGeneratedPdf } from '../lib/projectFiles';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431); // #22326E
@@ -529,5 +530,11 @@ export async function exportSubmittalPDF(
 
   // Clean up after a delay to allow the download to start
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  // Fire-and-forget: file a copy into the project's SharePoint folder.
+  void fileGeneratedPdf(
+    project.id, 'submittals', 'submittal_package',
+    `${project.number} - ${submittal.title}.pdf`, pdfBytes,
+  );
   console.log('[PDF Export] Done!');
 }

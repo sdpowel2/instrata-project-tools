@@ -2,6 +2,7 @@ import { PDFDocument, PDFPage, PDFFont, PDFImage, StandardFonts, rgb, PageSizes 
 import { sanitizePdfText as sanitize } from './pdfText';
 import type { RFI, Project } from '../types';
 import instrataLogoUrl from '../assets/instrata-logo-color.png';
+import { fileGeneratedPdf } from '../lib/projectFiles';
 
 // Brand colors (match exportSubmittalPDF)
 const NAVY = rgb(0.133, 0.196, 0.431); // #22326E
@@ -292,6 +293,12 @@ export async function exportRFIPDF(rfi: RFI, project: Project): Promise<void> {
 
   const pdfBytes = await pdfDoc.save();
   downloadPdf(pdfBytes, `RFI-${rfi.number} - ${rfi.subject}.pdf`);
+
+  // Fire-and-forget: file a copy into the project's SharePoint folder.
+  void fileGeneratedPdf(
+    project.id, 'general', 'rfi',
+    `RFI-${rfi.number} - ${rfi.subject}.pdf`, pdfBytes,
+  );
 }
 
 /**
@@ -456,4 +463,10 @@ export async function exportRFILogPDF(rfis: RFI[], project: Project): Promise<vo
 
   const pdfBytes = await pdfDoc.save();
   downloadPdf(pdfBytes, `${project.number} - RFI Log.pdf`);
+
+  // Fire-and-forget: file a copy into the project's SharePoint folder.
+  void fileGeneratedPdf(
+    project.id, 'general', 'rfi',
+    `${project.number} - RFI Log.pdf`, pdfBytes,
+  );
 }

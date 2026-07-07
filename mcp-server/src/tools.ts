@@ -233,4 +233,61 @@ export function registerTools(server: McpServer, supa: SupabaseClient): void {
       return error ? fail(error.message) : ok(data);
     },
   );
+
+  // ── Project files ────────────────────────────────────────────────────────────
+  server.registerTool(
+    'list_project_files',
+    {
+      title: 'List project files',
+      description:
+        'List the files in a project\'s document repository (contracts, drawings, ' +
+        'submittals, meeting notes, photos, closeout docs). Files live in the company ' +
+        'SharePoint site; this reads the index. Use get_project_file to fetch one.',
+      inputSchema: {
+        project_id: z.string().describe('Project uuid'),
+        category: z
+          .enum(['contracts', 'drawings', 'submittals', 'meeting_notes', 'photos', 'closeout', 'general'])
+          .optional()
+          .describe('Filter to one folder category'),
+        search: z.string().optional().describe('Free-text match on filename or document type'),
+        limit: z.number().int().min(1).max(500).optional().describe('Max rows (default 100)'),
+      },
+    },
+    async ({ project_id, category, search, limit }) => {
+      let q = supa
+        .from('project_files')
+        .select('id, category, filename, doc_type, source, size_bytes, mime_type, sharepoint_path, sharepoint_web_url, created_at')
+        .eq('project_id', project_id)
+        .order('created_at', { ascending: false })
+        .limit(limit ?? 100);
+      if (category) q = q.eq('category', category);
+      if (search) {
+        const s = sanitize(search);
+        if (s) q = q.or(`filename.ilike.*${s}*,doc_type.ilike.*${s}*`);
+      }
+      const { data, error } = await q;
+      return error ? fail(error.message) : ok(data);
+    },
+  );
+
+  server.registerTool(
+    'get_project_file',
+    {
+      title: 'Get a project file download URL',
+      description:
+        'Get a fresh, short-lived (~1 hour) download URL for a project file by its id ' +
+        '(from list_project_files). Fetch the URL directly to retrieve the file bytes.',
+      inputSchema: { file_id: z.string().describe('File uuid from list_project_files') },
+    },
+    async ({ file_id }) => {
+      // The edge function verifies this user's JWT (sent automatically by the
+      // per-user client) and mints the pre-authenticated Graph URL — no Graph
+      // credentials ever live on this server.
+      const { data, error } = await supa.functions.invoke('sharepoint-project-files', {
+        body: { op: 'getDownloadUrl', fileId: file_id },
+      });
+      if (error) return fail(`Download URL request failed: ${error.message}`);
+      return ok(data);
+    },
+  );
 }

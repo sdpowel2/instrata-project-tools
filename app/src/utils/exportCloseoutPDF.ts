@@ -5,6 +5,7 @@ import instrataLogoUrl from '../assets/instrata-logo-color.png';
 import { isUrl, fetchFileBytes } from '../lib/storage';
 import { extractBookmarks } from './extractBookmarks';
 import { appendManualSection } from './exportManualsPDF';
+import { fileGeneratedPdf } from '../lib/projectFiles';
 
 // Brand colors
 const NAVY = rgb(0.133, 0.196, 0.431);
@@ -865,4 +866,10 @@ export async function exportCloseoutPDF(
   document.body.removeChild(a);
 
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  // Fire-and-forget: file a copy into the project's SharePoint folder.
+  void fileGeneratedPdf(
+    project.id, 'closeout', 'closeout',
+    `${project.number} - Closeout Package.pdf`, pdfBytes,
+  );
 }
