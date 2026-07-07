@@ -428,7 +428,7 @@ export function CutsheetReviewPage() {
                     </div>
                   )}
 
-                  <div className="flex flex-col gap-2 mt-auto">
+                  <div className="flex flex-col gap-2">
                     {duplicateOf ? (
                       <button
                         onClick={handleMarkDuplicate}
