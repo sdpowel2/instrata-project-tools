@@ -159,7 +159,11 @@ export async function fileGeneratedPdf(
     const pad = (n: number) => String(n).padStart(2, '0');
     const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`;
     const stamped = `${filename.replace(/\.pdf$/i, '')} — ${stamp}.pdf`;
-    const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: 'application/pdf' });
+    // Same cast the PDF exporters use — pdf-lib returns Uint8Array<ArrayBufferLike>,
+    // which TS won't accept as a BlobPart even though it's always a plain ArrayBuffer.
+    const blob = bytes instanceof Blob
+      ? bytes
+      : new Blob([bytes as Uint8Array<ArrayBuffer> | ArrayBuffer], { type: 'application/pdf' });
     const file = new File([blob], stamped, { type: 'application/pdf' });
     return await uploadProjectFile(projectId, category, file, { source: 'generated', docType });
   } catch (err) {
