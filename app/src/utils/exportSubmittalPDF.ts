@@ -151,43 +151,57 @@ export async function exportSubmittalPDF(
   // Thin orange divider below logo
   coverPage.drawRectangle({ x: MARGIN + 80, y: PAGE_H - 240, width: CONTENT_W - 160, height: 2, color: ORANGE });
 
-  // Project name
-  const projectName = sanitize(project.name);
+  // Project name — wrap onto multiple centered lines if it's too wide for the
+  // page (long names previously overflowed the margin and got clipped).
   const projectNameSize = 22;
-  const projectNameW = fontBold.widthOfTextAtSize(projectName, projectNameSize);
-  coverPage.drawText(projectName, {
-    x: (PAGE_W - projectNameW) / 2,
-    y: PAGE_H - 300,
-    size: projectNameSize,
-    font: fontBold,
-    color: NAVY,
+  const projectNameLineH = projectNameSize + 4;
+  const projectNameLines = wrapText(project.name, fontBold, projectNameSize, CONTENT_W);
+  const projectNameTopY = PAGE_H - 300;
+  projectNameLines.forEach((line, i) => {
+    const lineW = fontBold.widthOfTextAtSize(line, projectNameSize);
+    coverPage.drawText(line, {
+      x: (PAGE_W - lineW) / 2,
+      y: projectNameTopY - i * projectNameLineH,
+      size: projectNameSize,
+      font: fontBold,
+      color: NAVY,
+    });
   });
+  const projectNameBottomY = projectNameTopY - (projectNameLines.length - 1) * projectNameLineH;
 
-  // Submittal title
-  const submittalTitle = sanitize(submittal.title);
+  // Submittal title — also wrapped, and positioned relative to the (possibly
+  // multi-line) project name so the two never collide.
   const titleSize = 16;
-  const titleW = fontRegular.widthOfTextAtSize(submittalTitle, titleSize);
-  coverPage.drawText(submittalTitle, {
-    x: (PAGE_W - titleW) / 2,
-    y: PAGE_H - 330,
-    size: titleSize,
-    font: fontRegular,
-    color: DARK_GRAY,
+  const titleLineH = titleSize + 4;
+  const titleLines = wrapText(submittal.title, fontRegular, titleSize, CONTENT_W);
+  const titleTopY = projectNameBottomY - 30;
+  titleLines.forEach((line, i) => {
+    const lineW = fontRegular.widthOfTextAtSize(line, titleSize);
+    coverPage.drawText(line, {
+      x: (PAGE_W - lineW) / 2,
+      y: titleTopY - i * titleLineH,
+      size: titleSize,
+      font: fontRegular,
+      color: DARK_GRAY,
+    });
   });
+  const titleBottomY = titleTopY - (titleLines.length - 1) * titleLineH;
 
   // Revision
   const revText = sanitize(submittal.revision);
+  const revY = titleBottomY - 25;
   const revW = fontItalic.widthOfTextAtSize(revText, 11);
   coverPage.drawText(revText, {
     x: (PAGE_W - revW) / 2,
-    y: PAGE_H - 355,
+    y: revY,
     size: 11,
     font: fontItalic,
     color: MID_GRAY,
   });
 
-  // Details section
-  const detailsY = PAGE_H - 430;
+  // Details section — flows below the revision so a tall header block pushes it
+  // down instead of overlapping.
+  const detailsY = revY - 75;
   const detailLines = [
     { label: 'Prepared By:', value: sanitize(submittal.preparedBy) },
     { label: 'Submitted To:', value: sanitize(submittal.submittedTo) },
