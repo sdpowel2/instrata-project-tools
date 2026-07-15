@@ -12,6 +12,7 @@ import { StatusBadge } from './StatusBadge';
 import { BugReportModal } from './BugReportModal';
 import { NotificationBell } from './NotificationBell';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { FEATURES } from '../config/featureFlags';
 import instrataLogo from '../assets/instrata-logo-white.png';
 
 // Cutsheet count is rendered as a badge on Dashboard for admins only — the
@@ -21,22 +22,23 @@ const PROJECTS_NAV = { to: '/projects', icon: FolderOpen, label: 'Projects' };
 const PRODUCTS_NAV = { to: '/products', icon: Package, label: 'Products' };
 
 const presalesTools = [
-  { to: 'review', icon: ScanLine, label: 'Auto-Review' },
-  { to: 'bid-leveling', icon: Scale, label: 'Bid Leveling' },
-  { to: 'rfis', icon: MessageSquareWarning, label: 'RFIs' },
+  { to: 'review', icon: ScanLine, label: 'Auto-Review', enabled: FEATURES.autoReview },
+  { to: 'bid-leveling', icon: Scale, label: 'Bid Leveling', enabled: FEATURES.bidLeveling },
+  { to: 'rfis', icon: MessageSquareWarning, label: 'RFIs', enabled: true },
 ];
 const postsalesTools = [
-  { to: 'submittals', icon: FileText, label: 'Submittals' },
+  { to: 'submittals', icon: FileText, label: 'Submittals', enabled: true },
   // RFIs persist into Post-Sales — answered RFIs from pre-sales remain visible
-  { to: 'rfis', icon: MessageSquareWarning, label: 'RFIs' },
-  { to: 'closeout', icon: ClipboardCheck, label: 'Closeout' },
-  { to: 'manual', icon: BookOpen, label: 'Owner Manual' },
+  { to: 'rfis', icon: MessageSquareWarning, label: 'RFIs', enabled: true },
+  { to: 'closeout', icon: ClipboardCheck, label: 'Closeout', enabled: true },
+  { to: 'manual', icon: BookOpen, label: 'Owner Manual', enabled: FEATURES.ownerManual },
 ];
-// Operations is a parallel section to Pre/Post-Sales. Schedule & Milestones
-// and Purchasing are live; Inventory is still scaffolded.
+// Operations is a parallel section to Pre/Post-Sales. The whole section is
+// feature-flagged off for the v1 rollout; Inventory stays scaffolded-only
+// even once the flag flips.
 const operationsTools = [
-  { to: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', enabled: true  },
-  { to: 'purchasing', icon: Truck,    label: 'Purchasing',             enabled: true  },
+  { to: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', enabled: FEATURES.operations },
+  { to: 'purchasing', icon: Truck,    label: 'Purchasing',             enabled: FEATURES.operations },
   { to: 'inventory',  icon: Package,  label: 'Inventory',              enabled: false },
 ];
 
@@ -128,31 +130,49 @@ export function Layout() {
               {/* Pre-Sales group */}
               <PhaseGroup label="Pre-Sales" accent="#6FB6FF">
                 {presalesTools.map((item) => (
-                  <SidebarLink
-                    key={`pre-${item.to}`}
-                    to={`/projects/${project.id}/${item.to}`}
-                    icon={item.icon}
-                    label={item.label}
-                    indent
-                  />
+                  item.enabled ? (
+                    <SidebarLink
+                      key={`pre-${item.to}`}
+                      to={`/projects/${project.id}/${item.to}`}
+                      icon={item.icon}
+                      label={item.label}
+                      indent
+                    />
+                  ) : (
+                    <SidebarDisabledLink
+                      key={`pre-${item.to}`}
+                      icon={item.icon}
+                      label={item.label}
+                      indent
+                    />
+                  )
                 ))}
               </PhaseGroup>
 
               {/* Post-Sales group */}
               <PhaseGroup label="Post-Sales" accent="var(--color-orange)">
                 {postsalesTools.map((item) => (
-                  <SidebarLink
-                    key={`post-${item.to}`}
-                    to={`/projects/${project.id}/${item.to}`}
-                    icon={item.icon}
-                    label={item.label}
-                    indent
-                  />
+                  item.enabled ? (
+                    <SidebarLink
+                      key={`post-${item.to}`}
+                      to={`/projects/${project.id}/${item.to}`}
+                      icon={item.icon}
+                      label={item.label}
+                      indent
+                    />
+                  ) : (
+                    <SidebarDisabledLink
+                      key={`post-${item.to}`}
+                      icon={item.icon}
+                      label={item.label}
+                      indent
+                    />
+                  )
                 ))}
               </PhaseGroup>
 
-              {/* Operations group — Schedule & Milestones is live, Purchasing
-                  and Inventory are still scaffolded. */}
+              {/* Operations group — entire section is feature-flagged off
+                  for the v1 rollout. */}
               <PhaseGroup label="Operations" accent="#22C55E">
                 {operationsTools.map((item) => (
                   item.enabled ? (
@@ -275,8 +295,8 @@ function SidebarLink({ to, icon: Icon, label, end, indent, badge, onClick }: Sid
 }
 
 // Inert sidebar entry that mirrors SidebarLink styling but does not
-// navigate. Used for Operations tools, which surface in the sidebar today
-// but won't be functional until the next feature push.
+// navigate. Used for feature-flagged-off tools, which surface in the sidebar
+// but won't be functional until a future feature push.
 function SidebarDisabledLink({
   icon: Icon,
   label,

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useStore } from '../store';
+import { FEATURES } from '../config/featureFlags';
 import { Eyebrow } from './ui';
 import { BugReportsCard } from './BugReportsCard';
 import type { Project, ProjectPhase, ProjectStatus, ReviewRun } from '../types';
@@ -134,7 +135,9 @@ export function AdminDashboardSection() {
           renderMeta={(item) => <DueDatePill dueDate={item.dueDate} />}
         />
 
-        <NeedsReviewCard />
+        {/* Needs Review runs off auto-review escalations, so it goes dark
+            while Auto-Review is feature-flagged off. */}
+        {FEATURES.autoReview && <NeedsReviewCard />}
 
         <TeamBandwidthCard />
       </div>

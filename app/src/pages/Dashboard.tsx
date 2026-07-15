@@ -11,6 +11,7 @@ import { DToolsSyncDot } from '../components/DToolsSyncDot';
 import { Eyebrow, PageHeader } from '../components/ui';
 import { PipelineBar, tilesForPhase, buildPipelineCounts } from '../components/PipelineBar';
 import { AdminDashboardSection } from '../components/AdminDashboardSection';
+import { FEATURES } from '../config/featureFlags';
 import type { Project, ProjectStatus, ProjectPhase } from '../types';
 
 export function Dashboard() {
@@ -246,7 +247,10 @@ function MyWorkCard({ myProjectIds, allRfis, allSubmittals, allReviewRuns, allCl
 
   const items: { label: string; value: number; icon: React.ComponentType<{ size?: number }>; phase: ProjectPhase }[] = [
     { label: 'Open RFIs',          value: rfis,    icon: MessageSquareWarning, phase: 'Pre-Sales' },
-    { label: 'Auto-Review items',  value: reviews, icon: ScanLine,             phase: 'Pre-Sales' },
+    // Auto-Review is feature-flagged off for the v1 rollout.
+    ...(FEATURES.autoReview
+      ? [{ label: 'Auto-Review items', value: reviews, icon: ScanLine, phase: 'Pre-Sales' as ProjectPhase }]
+      : []),
     { label: 'Pending Submittals', value: subs,    icon: FileText,             phase: 'Post-Sales' },
     { label: 'Open Punch Items',   value: punch,   icon: ClipboardCheck,       phase: 'Post-Sales' },
   ];
