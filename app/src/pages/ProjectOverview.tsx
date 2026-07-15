@@ -21,6 +21,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import { fileGeneratedFile } from '../lib/projectFiles';
 import { generateBoMWorkbook, downloadBoM, XLSX_MIME } from '../utils/exportBoMExcel';
+import { FEATURES } from '../config/featureFlags';
 import type {
   ItemCategory, SubmittalItemLocation, ProjectPhase, ProjectStatus,
   ProjectChangeOrder, ChangeOrderStatus, ChangeOrderItem, BomItemType, DToolsSyncDelta,
@@ -228,17 +229,23 @@ export function ProjectOverview() {
   const rfisOpen = rfis.filter((r) => r.status === 'Open').length;
 
   const preItems: ToolItem[] = [
-    { tool: 'review',       icon: ScanLine,             label: 'Auto-Review',  value: reviewsOpen,    sub: reviewsOpen ? `${reviewsOpen} run${reviewsOpen === 1 ? '' : 's'} awaiting review` : 'Nothing in queue' },
-    { tool: 'bid-leveling', icon: Scale,                label: 'Bid Leveling', value: 0,              sub: 'Compare vendor bids' },
+    FEATURES.autoReview
+      ? { tool: 'review',   icon: ScanLine, label: 'Auto-Review',  value: reviewsOpen, sub: reviewsOpen ? `${reviewsOpen} run${reviewsOpen === 1 ? '' : 's'} awaiting review` : 'Nothing in queue' }
+      : { tool: 'review',   icon: ScanLine, label: 'Auto-Review',  value: '—', sub: 'Coming soon', enabled: false },
+    FEATURES.bidLeveling
+      ? { tool: 'bid-leveling', icon: Scale, label: 'Bid Leveling', value: 0,   sub: 'Compare vendor bids' }
+      : { tool: 'bid-leveling', icon: Scale, label: 'Bid Leveling', value: '—', sub: 'Coming soon', enabled: false },
     { tool: 'rfis',         icon: MessageSquareWarning, label: 'RFIs',         value: rfisOpen,       sub: `${rfis.length} total · ${rfisOpen} open` },
   ];
   const postItems: ToolItem[] = [
     { tool: 'submittals',   icon: FileText,             label: 'Submittals',   value: submittals.length, sub: `${subsApproved} approved · ${subsPending} pending` },
     { tool: 'closeout',     icon: ClipboardCheck,       label: 'Closeout',     value: closeout?.punchItems.length ?? 0, sub: closeout ? `${punchOpen} open punch items` : 'Not yet started' },
-    { tool: 'manual',       icon: BookOpen,             label: 'Owner Manual', value: manuals.length,    sub: manuals.length > 0 ? `${manuals[0].sections.length} sections` : 'Generated after closeout' },
+    FEATURES.ownerManual
+      ? { tool: 'manual',   icon: BookOpen, label: 'Owner Manual', value: manuals.length, sub: manuals.length > 0 ? `${manuals[0].sections.length} sections` : 'Generated after closeout' }
+      : { tool: 'manual',   icon: BookOpen, label: 'Owner Manual', value: '—', sub: 'Coming soon', enabled: false },
   ];
-  // Operations is a parallel section. Schedule & Milestones and Purchasing
-  // are live; Inventory is still scaffolded.
+  // Operations is a parallel section, feature-flagged off for the v1
+  // rollout. Inventory stays scaffolded-only even once the flag flips.
   const milestoneOverdue = milestones.filter((m) => computeMilestoneStatus(m) === 'overdue').length;
   const milestoneAtRisk  = milestones.filter((m) => computeMilestoneStatus(m) === 'at_risk').length;
   const milestoneOpen    = milestones.filter((m) => !m.completedDate).length;
@@ -260,9 +267,13 @@ export function ProjectOverview() {
     : `${purchOrdered} ordered · ${purchReceived} received`;
 
   const opsItems: ToolItem[] = [
-    { tool: 'schedule',   icon: Calendar, label: 'Schedule & Milestones', value: milestones.length || '—', sub: scheduleSub, enabled: true },
-    { tool: 'purchasing', icon: Truck,    label: 'Purchasing',            value: purchasingModules.length || '—', sub: purchasingSub, enabled: true },
-    { tool: 'inventory',  icon: Package,  label: 'Inventory',             value: '—', sub: 'Nothing received' },
+    FEATURES.operations
+      ? { tool: 'schedule', icon: Calendar, label: 'Schedule & Milestones', value: milestones.length || '—', sub: scheduleSub, enabled: true }
+      : { tool: 'schedule', icon: Calendar, label: 'Schedule & Milestones', value: '—', sub: 'Coming soon', enabled: false },
+    FEATURES.operations
+      ? { tool: 'purchasing', icon: Truck,  label: 'Purchasing',            value: purchasingModules.length || '—', sub: purchasingSub, enabled: true }
+      : { tool: 'purchasing', icon: Truck,  label: 'Purchasing',            value: '—', sub: 'Coming soon', enabled: false },
+    { tool: 'inventory',  icon: Package,  label: 'Inventory',             value: '—', sub: 'Nothing received', enabled: false },
   ];
 
   return (
@@ -319,8 +330,9 @@ export function ProjectOverview() {
       </div>
 
       {/* Milestone summary — next 3 upcoming/at-risk milestones per spec §6.
-          Hidden until at least one milestone exists. */}
-      {milestones.length > 0 && (
+          Hidden until at least one milestone exists, and while the
+          Operations tools are feature-flagged off. */}
+      {FEATURES.operations && milestones.length > 0 && (
         <div className="mt-5">
           <MilestoneSummaryCard
             milestones={milestones}

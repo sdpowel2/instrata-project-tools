@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom';
+import { FEATURES } from './config/featureFlags';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectsList } from './pages/ProjectsList';
@@ -57,6 +58,15 @@ function ProtectedRoute() {
 }
 
 /**
+ * Rendered in place of a feature-flagged-off project tool so direct URLs
+ * and stale bookmarks land on the project overview instead of a blank outlet.
+ */
+function FeatureOffRedirect() {
+  const { projectId } = useParams();
+  return <Navigate to={`/projects/${projectId}`} replace />;
+}
+
+/**
  * Sits between auth confirmation and the child routes.
  * Fetches all Supabase data into the Zustand store before rendering.
  */
@@ -92,18 +102,18 @@ export default function App() {
               <Route path="projects/new" element={<ProjectNew />} />
               <Route path="projects/:projectId" element={<ProjectHome />}>
                 <Route index element={<ProjectOverview />} />
-                <Route path="review" element={<AutoReviewPage />} />
+                <Route path="review" element={FEATURES.autoReview ? <AutoReviewPage /> : <FeatureOffRedirect />} />
                 <Route path="submittals" element={<SubmittalList />} />
                 <Route path="submittals/:submittalId" element={<SubmittalDetail />} />
                 <Route path="rfis" element={<RFIList />} />
                 <Route path="closeout" element={<CloseoutDashboard />} />
-                <Route path="manual" element={<OwnerManualPage />} />
-                <Route path="bid-leveling" element={<BidLevelingPage />} />
+                <Route path="manual" element={FEATURES.ownerManual ? <OwnerManualPage /> : <FeatureOffRedirect />} />
+                <Route path="bid-leveling" element={FEATURES.bidLeveling ? <BidLevelingPage /> : <FeatureOffRedirect />} />
                 <Route path="pre-survey" element={<EffortSurveyPage kind="pre-sales" />} />
                 <Route path="post-survey" element={<EffortSurveyPage kind="post-sales" />} />
-                <Route path="schedule" element={<ScheduleMilestonesPage />} />
-                <Route path="purchasing" element={<PurchasingListPage />} />
-                <Route path="purchasing/:purchasingId" element={<PurchasingDetailPage />} />
+                <Route path="schedule" element={FEATURES.operations ? <ScheduleMilestonesPage /> : <FeatureOffRedirect />} />
+                <Route path="purchasing" element={FEATURES.operations ? <PurchasingListPage /> : <FeatureOffRedirect />} />
+                <Route path="purchasing/:purchasingId" element={FEATURES.operations ? <PurchasingDetailPage /> : <FeatureOffRedirect />} />
               </Route>
               <Route path="products" element={<ProductsPage />} />
               <Route path="directory" element={<DirectoryPage />} />
