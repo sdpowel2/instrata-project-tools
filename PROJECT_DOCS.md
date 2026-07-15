@@ -782,6 +782,17 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - **Area** — what changed and why.
 -->
 
+### 2026-07-14 — Export BoM to Excel (branded, from the Project Quote)
+An **Export BoM** button in the Project Quote header rebuilds the two-tab, Instrata-branded workbook the Claude cowork skill produced, straight from the already-ingested BoM. Commit `b72425f`.
+
+- **`utils/exportBoMExcel.ts` (new) — built with ExcelJS, not the bundled SheetJS.** The app's `xlsx` is the SheetJS *community* build, which can't write cell styling (fills/fonts/bold are Pro-only) — that's why the first cut came out unstyled. Switched the writer to **ExcelJS** (added to `app/package.json`) and lifted the palette + layout verbatim from the reference file's `styles.xml`: navy `#1B3A5C` title + column-header band with white text, orange `#E8872B` brand bar + section-header text, light-blue `#D6E0EA` section fill, gray `#333333` bordered data rows, Arial throughout; section headers merged A:G, Unit Cost as `$#,##0.00`.
+- **Two tabs.** *BoM by Manufacturer* (Manufacturer, Model, Quantity, Vendor, Unit Cost, CO Number, CO Type — grouped by mfr; Vendor parsed from `pricedFrom`) and *BoM by Location* (Manufacturer, Model, Quantity, Labor Type, Unit Labor Hours, CO Number, CO Type — grouped by room).
+- **CO attribution is double-count-safe.** The ingested `ProjectBoMItem` carries no per-item CO tag, so contract lines all read `Base Bid`; only the *ghost* CO lines (pending + approved-not-yet-republished — the same set the Quote card flags "not in contract") are appended, tagged with `co.number` + Internal/External. Approved+merged COs stay under Base Bid so their items aren't counted twice.
+- **Labor rows on the by-Location tab.** DTools quantifies time-based labor in *hours* (a labor line's `Quantity` field == its hours, so our synced rows carry `qty == laborHours`) — those now render as **QTY 1** with the hours in the Unit Labor Hours column, matching the reference; expense-type labor (Airfare, S&H, Premiere Protect: zero hours) keeps its real count in QTY with blank hours (`laborQtyHours` helper). Fixes a bug where labor QTY mirrored the hours (e.g. QTY 3.09).
+- **Delivery.** Downloads client-side and auto-files a timestamped copy into Project Files (`general` / `doc_type='bom'`) via a new generic `fileGeneratedFile` in `lib/projectFiles.ts` (mime-aware sibling of `fileGeneratedPdf`).
+- **Project Quote header layout.** DTools Project Total is pinned left and made more prominent (divider + larger figure); the action buttons stay grouped on the right (`ml-auto`) so adding Export didn't shove the row around.
+- **Build gotcha caught pre-merge.** `exceljs` had initially been installed into the *repo-root* `package.json`; the local build only worked because Node walks up to root `node_modules`, but the Dockerfile runs `npm ci` against `app/package*.json` — so it's now a dependency of `app/` (root change reverted).
+
 ### 2026-07-06 — Project Files (SharePoint-backed repository, Files tab live)
 The Files tab on the Project Log card is real: a per-project document repository where **SharePoint holds the bytes and Supabase holds the index**. Full design in `Product Spec/04-project-files.md`; commits `c9fdb50`, `97097ab`.
 
