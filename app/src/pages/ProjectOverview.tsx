@@ -4,7 +4,7 @@ import {
   FileText, MessageSquareWarning, ClipboardCheck, BookOpen,
   Upload, Plus, Package, RefreshCw, Loader2, Check,
   ScanLine, Scale, ChevronRight, Users, ChevronDown,
-  Calendar, Truck, ShieldCheck, MapPin,
+  Calendar, Truck, ShieldCheck, MapPin, Download,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,6 +19,8 @@ import { ProjectLog } from '../components/ProjectLog';
 import { ProjectDocumentationSection } from '../components/ProjectDocumentation';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
+import { fileGeneratedFile } from '../lib/projectFiles';
+import { generateBoMWorkbook, downloadBoM, XLSX_MIME } from '../utils/exportBoMExcel';
 import type {
   ItemCategory, SubmittalItemLocation, ProjectPhase, ProjectStatus,
   ProjectChangeOrder, ChangeOrderStatus, ChangeOrderItem, BomItemType, DToolsSyncDelta,
@@ -64,6 +66,7 @@ export function ProjectOverview() {
   const [showCSVImport, setShowCSVImport] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
   const [showDToolsPicker, setShowDToolsPicker] = useState(false);
+  const [exportingBoM, setExportingBoM] = useState(false);
   // Action a non-member is trying to take — drives the "join or view-only"
   // modal. `allowViewOnly` is true for read-only destinations (opening a tool),
   // false for edits (which can't proceed without joining). null = no prompt.
@@ -196,6 +199,24 @@ export function ProjectOverview() {
         }
       }));
       Promise.all(promises).then((resolved) => importBoMItems(projectId!, resolved));
+    }
+  };
+
+  // Build the two-tab Excel BoM from the ingested data, download it, and
+  // auto-file a copy into Project Files (best-effort — download still wins if
+  // filing fails). Read-only, so view-only users can export too.
+  const handleExportBoM = async () => {
+    if (!project) return;
+    setExportingBoM(true);
+    try {
+      const gen = await generateBoMWorkbook(project, bomItems, changeOrders);
+      downloadBoM(gen);
+      await fileGeneratedFile(project.id, 'general', 'bom', gen.filename, XLSX_MIME, gen.bytes);
+    } catch (err) {
+      console.error('[ExportBoM] failed:', err);
+      alert('Could not generate the BoM export. See the console for details.');
+    } finally {
+      setExportingBoM(false);
     }
   };
 
@@ -332,6 +353,8 @@ export function ProjectOverview() {
           })}
           onCsvImport={() => requireMembership(() => setShowCSVImport(true))}
           onAddItem={() => requireMembership(() => setShowAddItem(true))}
+          onExport={() => requireMembership(handleExportBoM, { allowViewOnly: true })}
+          exporting={exportingBoM}
         />
       </div>
 
@@ -623,6 +646,8 @@ interface ProjectQuoteSectionProps {
   onSync: () => void;
   onCsvImport: () => void;
   onAddItem: () => void;
+  onExport: () => void;
+  exporting: boolean;
 }
 
 // Hierarchical DTools locations look like "1st Floor\(Typical of 1) Council Chamber - (1607)".
@@ -781,7 +806,7 @@ function countNode(node: LocationNode): number {
   return count;
 }
 
-function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImport, onAddItem }: ProjectQuoteSectionProps) {
+function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImport, onAddItem, onExport, exporting }: ProjectQuoteSectionProps) {
   const syncing = project.dtoolsBomStatus === 'loading';
   const synced = project.dtoolsBomStatus === 'found';
   const publishedOn = project.dtoolsSyncDelta?.publishedOn;
@@ -824,13 +849,20 @@ function ProjectQuoteSection({ project, bomItems, changeOrders, onSync, onCsvImp
               )}
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2.5">
           {bomItems.length > 0 && totalDisplay && (
-            <div className="text-right pr-1.5">
+            <div className="text-left pl-4 ml-1 border-l border-border">
               <div className="text-[10px] font-bold text-fg-2 tracking-[0.1em] uppercase">DTools Project Total</div>
-              <div className="text-xl font-bold text-navy font-mono">{totalDisplay}</div>
+              <div className="text-2xl font-bold text-navy font-mono">{totalDisplay}</div>
             </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2.5 ml-auto">
+          {bomItems.length > 0 && (
+            <button onClick={onExport} disabled={exporting} className="btn-secondary text-sm disabled:opacity-60">
+              {exporting
+                ? <><Loader2 size={14} className="animate-spin" /> Exporting…</>
+                : <><Download size={14} /> Export BoM</>}
+            </button>
           )}
           <button onClick={onCsvImport} className="btn-secondary text-sm">
             <Upload size={14} /> Import CSV

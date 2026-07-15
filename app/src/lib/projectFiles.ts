@@ -172,6 +172,40 @@ export async function fileGeneratedPdf(
   }
 }
 
+/**
+ * Auto-file a generated non-PDF document (e.g. the Excel BoM export) into the
+ * project folder. Like fileGeneratedPdf, it timestamps the copy so re-exports
+ * version side-by-side, and never throws — export flows must not break because
+ * filing failed; returns null on failure.
+ */
+export async function fileGeneratedFile(
+  projectId: string,
+  category: ProjectFileCategory,
+  docType: string,
+  filename: string,
+  mimeType: string,
+  bytes: Uint8Array | ArrayBuffer | Blob,
+): Promise<ProjectFile | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`;
+    const dot = filename.lastIndexOf('.');
+    const stem = dot > 0 ? filename.slice(0, dot) : filename;
+    const ext = dot > 0 ? filename.slice(dot) : '';
+    const stamped = `${stem} — ${stamp}${ext}`;
+    const blob = bytes instanceof Blob
+      ? bytes
+      : new Blob([bytes as Uint8Array<ArrayBuffer> | ArrayBuffer], { type: mimeType });
+    const file = new File([blob], stamped, { type: mimeType });
+    return await uploadProjectFile(projectId, category, file, { source: 'generated', docType });
+  } catch (err) {
+    console.warn('[fileGeneratedFile] auto-file failed (export still succeeded):', err);
+    return null;
+  }
+}
+
 /** Mint a fresh ~1h download URL and hand it to the browser. */
 export async function downloadProjectFile(fileId: string): Promise<void> {
   const { data, error } = await supabase.functions.invoke<{ downloadUrl: string; filename: string }>(
