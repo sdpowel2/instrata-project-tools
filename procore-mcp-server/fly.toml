@@ -1,0 +1,38 @@
+# fly.toml — Instrata Procore MCP server (read-only).
+#
+# TEMPLATE — provisioning is DEFERRED until the company paid Fly/Supabase plans
+# are in place. Deploy from this directory once ready:  fly deploy
+#
+# Secrets are runtime env (set via `fly secrets set`), NEVER build args:
+#   fly secrets set \
+#     BASE_URL=https://instrata-procore-mcp.fly.dev \
+#     PROCORE_CLIENT_ID=... PROCORE_CLIENT_SECRET=... \
+#     PROCORE_BASE_URL=https://api.procore.com PROCORE_AUTH_URL=https://login.procore.com \
+#     DATABASE_URL=postgres://... \
+#     TOKEN_ENCRYPTION_KEY=... SESSION_SECRET=...
+app = "instrata-procore-mcp"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep one machine warm: MCP clients have a ~10s connect timeout and the OAuth
+  # flow is interactive. All state lives in external Postgres, so the app itself
+  # is stateless (no Fly volume) and could scale out later if needed.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+# 512 MB gives headroom for PDF/DOCX text extraction in read_document.
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
