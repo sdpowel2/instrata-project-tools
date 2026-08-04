@@ -724,6 +724,39 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 
 ---
 
+## 8A. Procore MCP Server (read-only, per-user OAuth)
+
+A **second, standalone** Node/TypeScript MCP service in `procore-mcp-server/` — separate from the Supabase-backed `mcp-server/` (§8) and architecturally very different. It gives staff read-only Procore access through a Claude client so they can ask *"give me updates on the LEGO project"* and Claude pulls recent RFIs, submittals, daily logs, change events, and documents. **Built and validated against the Procore developer sandbox; NOT yet deployed** (see the access constraint below — it gates real-world value more than infra does). Spec: `Product Spec/procore-mcp-spec.md`. Commits `bc3b91d`, `4b74ec8`. Branch `feature/procore-mcp`.
+
+**Why it's not just a clone of §8.** The Supabase server pastes a personal token and queries Postgres under RLS. Procore has no RLS to lean on and no personal REST tokens, so this server is a full **two-layer OAuth** bridge:
+- **Layer 1 (Claude ↔ server):** a real OAuth 2.1 authorization server (Dynamic Client Registration + PKCE, protected-resource metadata) built on the `@modelcontextprotocol/sdk` auth router. Claude registers itself; no client secret is distributed.
+- **Layer 2 (server ↔ Procore):** one Procore Developer app, **Authorization-Code** grant. The connector login chains straight into a Procore login; the server keys its user record to the Procore user via `/rest/v1.0/me`. Every Procore call uses the **calling user's own token** — no service account, access mirrors that user's Procore permissions exactly.
+
+```
+Claude ──OAuth2.1(DCR+PKCE)──▶ procore-mcp-server ──AuthCode OAuth──▶ Procore login
+   │                                │  encrypted per-user token store (dedicated Postgres, AES-256-GCM)
+   └──MCP Streamable HTTP, Bearer──▶│  stateful session pinned to one user id
+                                    └──REST as the user (Procore-Company-Id per company)──▶ api.procore.com
+```
+
+**Token store.** Per-user Procore tokens are **AES-256-GCM sealed** in a **dedicated Postgres** (intentionally *not* the app's Supabase — isolates the Procore trust domain; key in `TOKEN_ENCRYPTION_KEY`, never in the DB). DCR clients + the refresh tokens we issue to Claude are persisted too, so a restart doesn't force re-auth. Transport is **stateful** MCP Streamable HTTP with each session pinned to one user (no cross-user token use).
+
+**Tools (15, all read-only):** `whoami`, `list_companies`, `list_projects`, `find_project`, `get_project_activity` (parallel fan-out digest; a 403 on one section degrades to `access:"forbidden"`), `list_rfis`/`get_rfi`, `list_submittals`/`get_submittal`, `list_daily_logs`, `list_change_events`/`get_change_event`, `list_recent_documents`, `read_document` (server-side PDF/DOCX text extraction, in-memory, 50 MB ceiling). Ships with a companion **`procore-updates` Claude skill** that owns the AV-relevance judgment (Div 27/28, ball-in-court, keywords) so the server stays generic.
+
+**Procore endpoint notes (verified against the live sandbox — these differ from the obvious guesses):**
+- RFIs: `GET /rest/v1.0/projects/{id}/rfis` — **omit `sort=updated_at`** (v1.0 500s on it); sort client-side.
+- Change events: **company-scoped** `GET /rest/v1.0/change_events?project_id={id}` (the nested `/projects/{id}/change_events` 404s).
+- Documents: **walk the folder tree** — `GET /rest/v1.0/folders?project_id=` then recurse `/folders/{id}` (the flat `/files` list 404s). `read_document` uses the single-file `GET /rest/v1.0/files/{id}` for a fresh signed URL and **sends the bearer token** when fetching the Procore FAS download URL.
+- Daily logs: unified `GET /rest/v1.0/projects/{id}/daily_logs?filters[start_date]=&filters[end_date]=` returns one object keyed by sub-log type.
+
+**Validated end-to-end against the sandbox:** OAuth flow, `whoami`, companies, projects, RFI list **and** detail, document listing + full multi-page PDF text extraction. Two bugs found in testing were fixed and would have hit production too: an expired access token surfaced as an unrecoverable **500 instead of 401** (now throws `InvalidTokenError` so the client refreshes), and FAS document downloads **401'd without the bearer header**.
+
+⚠️ **Production access constraint (the real blocker — see §9).** Procore requires the app to be **installed/approved on each company by that company's admin**, even for per-user OAuth. A subcontractor invited to a GC's Procore account **cannot** use this unless that GC installs the custom app (version-key custom install, ~2-min admin action, no Marketplace review). Works on companies you administer or cooperative GCs; a non-starter on security-strict ones. There is **no user-level personal access token** for the Procore REST API to sidestep this.
+
+**Env:** `BASE_URL`, `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, `PROCORE_BASE_URL` (`https://sandbox.procore.com` dev / `https://api.procore.com` prod), `PROCORE_AUTH_URL` (`https://login-sandbox.procore.com` dev / `https://login.procore.com` prod), `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `SESSION_SECRET`. Local `.env` loaded via `dotenv`. Deploy scaffolding (`Dockerfile`, `fly.toml` template, migration SQL) is ready; production deploy is deferred until the paid-plan migration + a production Procore app with per-company installs. See `procore-mcp-server/README.md`.
+
+---
+
 ## 9. Known Limitations & Tech Debt
 
 **Auth & Authorization**
@@ -770,6 +803,12 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - **CI deploys only the frontend.** `.github/workflows/deploy.yml` runs `flyctl deploy` (root `fly.toml` → app `instrata-project-tools`) on every push to `main`. It does **not** deploy the MCP server — `mcp-server` must be deployed manually (`cd mcp-server && fly deploy --remote-only`, its own `fly.toml` → `instrata-project-tools-mcp`). Edge functions deploy separately via `npx supabase functions deploy <name>` (config in `supabase/config.toml`); `functions deploy` never deletes server-side functions — removing one requires `functions delete`.
 - `supabase` CLI is a root devDep (run via `npx supabase`); migrations are run **manually in the SQL Editor** per migration file headers — files use non-timestamped names so `supabase db push` is a no-op.
 
+**Procore MCP (`procore-mcp-server/`, not yet deployed)**
+- **Access is GC-gated (the dominant risk).** Procore requires each company's admin to install/approve the custom app before its API returns that company's data — even for per-user OAuth mirroring the user's own permissions. Since Instrata reaches Procore only by being *invited* to GCs' accounts, the tool delivers value only for GCs willing to do a one-time custom install (or where we have admin rights). No user-level REST PAT exists to bypass this. This — not infra — is what determines whether the project is worth deploying; validate demand with a friendly GC before spending on production.
+- **Field mappings are endpoint-verified but not data-verified for the sparse tools.** The sandbox had no submittals, change events, or daily logs, so those normalizers are proven to hit the right endpoint and not crash, but their field extraction is defensive/unconfirmed against populated payloads — expect one-line normalizer tweaks when real projects have data. RFIs, projects, companies, and document PDF extraction *were* validated against real records.
+- **Endpoint paths were pinned against the current sandbox API version** and may drift on newer Procore REST versions (submittals use v1.1; some resources have v2.0 variants with richer payloads). The `NOTE:` comments in `tools/` / `procore/` flag the spots to recheck.
+- Production deploy needs paid Fly + a dedicated Postgres + a **production** Procore app (redirect URI, per-company installs). Deferred to the paid-plan / team-rollout migration; scaffolding is ready.
+
 **Docs**
 - This file. Keep it honest.
 
@@ -781,6 +820,15 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-08-04 — Procore MCP server (read-only, per-user OAuth) — built + sandbox-validated, not deployed
+A second standalone MCP service (`procore-mcp-server/`) that bridges Claude to Procore on each user's behalf, so staff can pull GC project updates (RFIs, submittals, daily logs, change events, documents) in natural language. Full design in new **§8A**; spec `Product Spec/procore-mcp-spec.md`; commits `bc3b91d`, `4b74ec8` on branch `feature/procore-mcp`. **Read-only, no write path.**
+
+- **Two-layer OAuth, no service account.** Layer 1 is a real OAuth 2.1 authorization server for Claude (DCR + PKCE via `@modelcontextprotocol/sdk`); Layer 2 is a per-user Procore Authorization-Code flow keyed to the Procore user (`/rest/v1.0/me`). Every Procore call runs as the calling user, so access mirrors their Procore permissions. Deliberately **not** the §8 pattern — Procore has no RLS and no personal REST tokens to lean on.
+- **Encrypted token store in a dedicated Postgres** (AES-256-GCM; key only in env, never in the DB), isolated from the app's Supabase. DCR clients + issued refresh tokens persist so restarts don't force re-auth. Stateful MCP sessions pinned to one user.
+- **15 read-only tools + a companion `procore-updates` skill** (the skill owns AV-relevance — Div 27/28, ball-in-court, keywords — keeping the server generic). `read_document` does server-side PDF/DOCX text extraction in-memory.
+- **Validated end-to-end against the Procore developer sandbox:** OAuth, companies, projects, RFI list + detail, document listing, and full multi-page PDF extraction — all with real records. Fixed two bugs that would have hit production: expired tokens returned an unrecoverable 500 instead of 401 (blocked refresh), and FAS document downloads 401'd with no bearer header. Endpoint paths corrected against live payloads (RFIs drop `sort`; change events are company-scoped; documents walk the folder tree; daily logs use one `filters[start_date/end_date]` endpoint).
+- **⚠️ Blocker for real use (see §9):** Procore requires each GC's admin to install the custom app on their company before its data is reachable — per-user OAuth doesn't bypass this. Since we only ever join GCs' Procore accounts as invitees, the tool works only for GCs willing to install it. Deployment (paid Fly + dedicated Postgres + production Procore app) is deferred until that demand is validated and the paid-plan migration lands.
 
 ### 2026-07-14 — Export BoM to Excel (branded, from the Project Quote)
 An **Export BoM** button in the Project Quote header rebuilds the two-tab, Instrata-branded workbook the Claude cowork skill produced, straight from the already-ingested BoM. Commit `b72425f`.
