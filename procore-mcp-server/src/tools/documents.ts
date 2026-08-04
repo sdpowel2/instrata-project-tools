@@ -1,13 +1,14 @@
 /**
  * Document tools: list_recent_documents, read_document (spec §6.9, §6.10).
- * Procore: GET /rest/v1.0/files?project_id= for the file index, then the latest
- * file version's pre-signed URL to fetch bytes for extraction.
  *
- * read_document extracts text from an in-memory buffer (nothing hits disk) and
- * enforces a hard size ceiling.
+ * Procore's Documents tool is a folder tree. We fetch the root folder via
+ * GET /rest/v1.0/folders?project_id= and recurse into subfolders via
+ * GET /rest/v1.0/folders/{id}?project_id=, collecting each folder's files[].
+ * read_document reuses that same walk to locate a file, then downloads the
+ * latest version's URL and extracts text from an in-memory buffer (no disk).
  *
- * NOTE: Procore's documents/files endpoints vary by version; confirm paths and
- * the version/url fields against the sandbox during integration testing.
+ * NOTE: file-object fields (file_versions/url/size) are coded defensively; verify
+ * against a real file once the sandbox has documents.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { z } from 'zod';
@@ -19,9 +20,17 @@ import { personName, withinSince, firstStr } from './normalize.js';
 import { resolveProject, orientation } from './scope.js';
 import { extractText } from '../extract/text.js';
 
-const MAX_TRAVERSAL = 2000; // cap file-index walk (spec §6.9)
+const MAX_FOLDERS = 500; // cap folder fetches so a huge tree can't run away
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB hard ceiling (spec §6.10)
 const DEFAULT_MAX_CHARS = 40_000;
+
+type RawFolder = {
+  id: number;
+  name?: string;
+  name_with_path?: string;
+  folders?: Array<{ id: number }>;
+  files?: any[];
+};
 
 export type DocItem = {
   file_id: number;
@@ -32,17 +41,51 @@ export type DocItem = {
   updated_by?: string;
 };
 
-const latestVersion = (f: any): any => (Array.isArray(f.file_versions) && f.file_versions.length ? f.file_versions[0] : undefined);
+const latestVersion = (f: any): any =>
+  Array.isArray(f.file_versions) && f.file_versions.length ? f.file_versions[0] : undefined;
 
-function normalizeFile(f: any): DocItem {
-  const v = latestVersion(f);
+function fetchFolder(ctx: AppContext, ref: ProjectRef, folderId?: number): Promise<RawFolder> {
+  const path = folderId ? `/rest/v1.0/folders/${folderId}` : `/rest/v1.0/folders`;
+  return ctx.rest.get<RawFolder>(path, { companyId: ref.company_id, query: { project_id: ref.project_id } });
+}
+
+/** Walk the Documents tree breadth-first, collecting files with their folder path. */
+async function collectFiles(
+  ctx: AppContext,
+  ref: ProjectRef,
+): Promise<{ files: Array<{ raw: any; folderPath: string }>; truncated: boolean }> {
+  const files: Array<{ raw: any; folderPath: string }> = [];
+  const queue: number[] = [];
+  let fetched = 0;
+
+  const process = (folder: RawFolder) => {
+    const folderPath = folder.name_with_path ?? folder.name ?? '';
+    for (const f of folder.files ?? []) files.push({ raw: f, folderPath });
+    for (const sub of folder.folders ?? []) queue.push(sub.id);
+  };
+
+  process(await fetchFolder(ctx, ref)); // root
+  while (queue.length && fetched < MAX_FOLDERS) {
+    const id = queue.shift()!;
+    fetched++;
+    try {
+      process(await fetchFolder(ctx, ref, id));
+    } catch {
+      // A single unreadable folder shouldn't sink the whole listing.
+    }
+  }
+  return { files, truncated: queue.length > 0 };
+}
+
+function normalizeFile(raw: any, folderPath: string): DocItem {
+  const v = latestVersion(raw);
   return {
-    file_id: f.id,
-    filename: firstStr(f.name, f.filename),
-    folder_path: firstStr(f.folder?.name, f.parent?.name, f.location),
-    size_bytes: f.size ?? v?.size,
-    updated_at: f.updated_at,
-    updated_by: personName(f.updated_by ?? f.created_by),
+    file_id: raw.id,
+    filename: firstStr(raw.name, raw.filename, v?.name),
+    folder_path: folderPath || undefined,
+    size_bytes: raw.size ?? v?.size,
+    updated_at: raw.updated_at,
+    updated_by: personName(raw.updated_by ?? raw.created_by),
   };
 }
 
@@ -51,18 +94,13 @@ export async function fetchRecentDocuments(
   ref: ProjectRef,
   opts: { since: string; limit: number; folderPath?: string },
 ): Promise<{ items: DocItem[]; has_more: boolean; truncated_traversal: boolean }> {
-  const raw = await ctx.rest.get<any[]>(`/rest/v1.0/files`, {
-    companyId: ref.company_id,
-    query: { project_id: ref.project_id, sort: 'updated_at', per_page: MAX_LIMIT },
-  });
-  const truncated_traversal = raw.length >= MAX_TRAVERSAL;
-  let items = raw
-    .slice(0, MAX_TRAVERSAL)
-    .map(normalizeFile)
-    .filter((d) => withinSince(d.updated_at, opts.since));
-  if (opts.folderPath) items = items.filter((d) => (d.folder_path ?? '').toLowerCase().includes(opts.folderPath!.toLowerCase()));
+  const { files, truncated } = await collectFiles(ctx, ref);
+  let items = files.map(({ raw, folderPath }) => normalizeFile(raw, folderPath)).filter((d) => withinSince(d.updated_at, opts.since));
+  if (opts.folderPath) {
+    items = items.filter((d) => (d.folder_path ?? '').toLowerCase().includes(opts.folderPath!.toLowerCase()));
+  }
   items.sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
-  return { items: items.slice(0, opts.limit), has_more: items.length > opts.limit, truncated_traversal };
+  return { items: items.slice(0, opts.limit), has_more: items.length > opts.limit, truncated_traversal: truncated };
 }
 
 export async function readDocument(
@@ -71,20 +109,27 @@ export async function readDocument(
   fileId: number,
   maxChars: number,
 ): Promise<unknown> {
+  // The single-file GET works even though the flat /files list 404s. It carries
+  // the latest version's signed download URL.
   const f = await ctx.rest.get<any>(`/rest/v1.0/files/${fileId}`, {
     companyId: ref.company_id,
     query: { project_id: ref.project_id },
   });
   const v = latestVersion(f);
-  const url = firstStr(v?.url, f.url);
+  const url = firstStr(v?.url, v?.prostore_file?.url, f.url);
   const filename = firstStr(f.name, f.filename) ?? `file-${fileId}`;
   const declaredSize = f.size ?? v?.size;
   if (!url) return { ...orientation(ref), filename, extracted: false, note: 'No downloadable version found for this file.' };
   if (declaredSize && declaredSize > MAX_FILE_BYTES) {
-    return { ...orientation(ref), filename, extracted: false, note: `File is ${Math.round(declaredSize / 1e6)} MB, above the ${MAX_FILE_BYTES / 1e6} MB limit.` };
+    return { ...orientation(ref), filename, extracted: false, note: `File is ~${Math.round(declaredSize / 1e6)} MB, above the ${MAX_FILE_BYTES / 1e6} MB limit.` };
   }
 
-  const res = await fetch(url);
+  // Procore FAS download URLs sit on the API host and require the bearer token.
+  // On a cross-origin redirect to blob storage, fetch drops Authorization itself.
+  const token = await ctx.procore.accessTokenFor(ctx.userId);
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, 'Procore-Company-Id': String(ref.company_id) },
+  });
   if (!res.ok) throw new Error(`Failed to download file ${fileId} (${res.status}).`);
   const contentLength = Number(res.headers.get('content-length') ?? '');
   if (!Number.isNaN(contentLength) && contentLength > MAX_FILE_BYTES) {

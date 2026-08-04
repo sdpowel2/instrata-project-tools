@@ -81,7 +81,31 @@ async function main(): Promise<void> {
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const sessionUser = new Map<string, string>();
 
-  app.post('/mcp', bearer, express.json({ limit: '1mb' }), async (req: Request, res: Response) => {
+  // CORS for browser-based MCP clients (e.g. the Inspector). Server-to-server
+  // clients (claude.ai) ignore these; harmless in production.
+  const mcpCors = (req: Request, res: Response, next: () => void) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin ?? '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, mcp-session-id, mcp-protocol-version, last-event-id');
+    res.header('Access-Control-Expose-Headers', 'mcp-session-id');
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  };
+
+  // Log every MCP request + its final status so connection issues are visible.
+  const mcpLog = (req: Request, res: Response, next: () => void) => {
+    const sid = req.header('mcp-session-id') ? 'yes' : 'no';
+    const auth = req.header('authorization') ? 'yes' : 'no';
+    res.on('finish', () => console.log(`[mcp] ${req.method} sid=${sid} auth=${auth} -> ${res.statusCode}`));
+    next();
+  };
+
+  app.options('/mcp', mcpCors);
+  app.post('/mcp', mcpCors, mcpLog, bearer, express.json({ limit: '1mb' }), async (req: Request, res: Response) => {
+   try {
     const userId = getUserId(req);
     const sid = req.header('mcp-session-id');
     let transport = sid ? transports.get(sid) : undefined;
@@ -90,7 +114,9 @@ async function main(): Promise<void> {
       if (sessionUser.get(sid!) !== userId) {
         return jsonRpcError(res, 403, 'This session does not belong to the authenticated user.');
       }
-    } else if (!sid && isInitializeRequest(req.body)) {
+    } else if (isInitializeRequest(req.body)) {
+      // Fresh initialize — create a new session even if a stale mcp-session-id
+      // is present (e.g. after a server restart); we mint a new id below.
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
@@ -115,6 +141,10 @@ async function main(): Promise<void> {
     }
 
     await transport!.handleRequest(req, res, req.body);
+   } catch (err) {
+     console.error('[mcp] POST handler error:', err);
+     if (!res.headersSent) jsonRpcError(res, 500, 'Internal server error.');
+   }
   });
 
   // GET (SSE stream) and DELETE (teardown) for an existing session.
@@ -127,8 +157,8 @@ async function main(): Promise<void> {
     }
     await transport.handleRequest(req, res);
   };
-  app.get('/mcp', bearer, handleSessionRequest);
-  app.delete('/mcp', bearer, handleSessionRequest);
+  app.get('/mcp', mcpCors, mcpLog, bearer, handleSessionRequest);
+  app.delete('/mcp', mcpCors, mcpLog, bearer, handleSessionRequest);
 
   const server = app.listen(config.port, () => {
     console.log(`[procore-mcp] ${SERVER_INFO.name} listening on :${config.port}`);

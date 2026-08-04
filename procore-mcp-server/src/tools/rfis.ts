@@ -24,7 +24,7 @@ export type RfiListItem = {
   updated_at?: string;
 };
 
-function normalizeRfi(r: any): RfiListItem {
+export function normalizeRfi(r: any): RfiListItem {
   return {
     rfi_id: r.id,
     number: firstStr(r.full_number, r.number != null ? String(r.number) : undefined),
@@ -42,9 +42,10 @@ export async function fetchRfis(
   ref: ProjectRef,
   opts: { since: string; limit: number; status?: string },
 ): Promise<{ items: RfiListItem[]; has_more: boolean }> {
+  // v1.0 RFIs 500 on sort=updated_at, so we sort client-side below.
   const raw = await ctx.rest.get<any[]>(`/rest/v1.0/projects/${ref.project_id}/rfis`, {
     companyId: ref.company_id,
-    query: { sort: 'updated_at', per_page: MAX_LIMIT },
+    query: { per_page: MAX_LIMIT },
   });
   let items = raw.map(normalizeRfi).filter((r) => withinSince(r.updated_at, opts.since));
   if (opts.status) items = items.filter((r) => (r.status ?? '').toLowerCase() === opts.status!.toLowerCase());

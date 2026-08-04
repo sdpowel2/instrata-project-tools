@@ -23,7 +23,7 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { InvalidGrantError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { TokenStore } from '../store/tokenStore.js';
 import type { ProcoreOAuth } from './procoreOAuth.js';
 import type { PgRefreshTokenStore } from './refreshStore.js';
@@ -172,13 +172,27 @@ export class InstrataOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const claims = await verifyAccessJwt(token);
+    // Must throw InvalidTokenError (not a raw jose error) so requireBearerAuth
+    // returns 401 + WWW-Authenticate and the client refreshes/re-authorizes —
+    // otherwise an expired token would surface as an unrecoverable 500.
+    let claims: Awaited<ReturnType<typeof verifyAccessJwt>>;
+    try {
+      claims = await verifyAccessJwt(token);
+    } catch {
+      throw new InvalidTokenError('Access token is invalid or expired.');
+    }
+    let resource: URL | undefined;
+    try {
+      resource = claims.resource ? new URL(claims.resource) : undefined;
+    } catch {
+      resource = undefined;
+    }
     return {
       token,
       clientId: claims.clientId,
       scopes: claims.scope ? claims.scope.split(' ') : [],
       expiresAt: claims.exp,
-      resource: claims.resource ? new URL(claims.resource) : undefined,
+      resource,
       extra: { userId: claims.userId },
     };
   }

@@ -28,11 +28,13 @@ type DailyDay = { date: string; entries: DailyEntry[] };
 const orgName = (o: any): string | undefined =>
   typeof o === 'string' ? o : o?.name ?? o?.vendor?.name ?? o?.company?.name;
 
-const LOG_TYPES: Array<{ type: string; path: string; text: (e: any) => string | undefined }> = [
-  { type: 'notes', path: 'notes_logs', text: (e) => firstStr(e.comments, e.comment, e.notes, e.description) },
+// The unified /daily_logs endpoint returns ONE object with an array per sub-log
+// type. v1 surfaces notes, manpower, delay, and work logs.
+const SUBLOGS: Array<{ key: string; type: string; text: (e: any) => string | undefined }> = [
+  { key: 'notes_logs', type: 'notes', text: (e) => firstStr(e.comments, e.comment, e.notes, e.description) },
   {
+    key: 'manpower_logs',
     type: 'manpower',
-    path: 'manpower_logs',
     text: (e) => {
       const workers = e.num_workers ?? e.number_of_workers ?? e.man_count;
       const hours = e.hours ?? e.man_hours;
@@ -40,40 +42,29 @@ const LOG_TYPES: Array<{ type: string; path: string; text: (e: any) => string | 
       return firstStr(parts.filter(Boolean).join(', ') || undefined, e.comments, e.notes);
     },
   },
-  { type: 'delay', path: 'delay_logs', text: (e) => firstStr([e.delay_type, e.comment ?? e.comments].filter(Boolean).join(' — ') || undefined, e.description) },
-  { type: 'work', path: 'work_logs', text: (e) => firstStr(e.description, e.comments, e.comment) },
+  { key: 'delay_logs', type: 'delay', text: (e) => firstStr([e.delay_type, e.comment ?? e.comments].filter(Boolean).join(' — ') || undefined, e.description) },
+  { key: 'work_logs', type: 'work', text: (e) => firstStr(e.description, e.comments, e.comment) },
 ];
 
 const logDate = (e: any): string | undefined => firstStr(e.date, e.log_date, e.datetime, e.created_at)?.slice(0, 10);
-
-async function fetchLogType(
-  ctx: AppContext,
-  ref: ProjectRef,
-  path: string,
-  startDate: string,
-  endDate: string,
-): Promise<any[]> {
-  try {
-    return await ctx.rest.get<any[]>(`/rest/v1.0/projects/${ref.project_id}/${path}`, {
-      companyId: ref.company_id,
-      query: { start_date: startDate, end_date: endDate, per_page: MAX_LIMIT },
-    });
-  } catch {
-    return []; // a missing/forbidden sub-log shouldn't sink the whole daily-log call
-  }
-}
 
 export async function fetchDailyLogs(
   ctx: AppContext,
   ref: ProjectRef,
   opts: { startDate: string; endDate: string },
 ): Promise<DailyDay[]> {
+  // One call returns { notes_logs: [...], manpower_logs: [...], ... } for the range.
+  const data = await ctx.rest.get<Record<string, any[]>>(`/rest/v1.0/projects/${ref.project_id}/daily_logs`, {
+    companyId: ref.company_id,
+    query: { 'filters[start_date]': opts.startDate, 'filters[end_date]': opts.endDate },
+  });
+
   const byDate = new Map<string, DailyEntry[]>();
-  for (const lt of LOG_TYPES) {
-    const rows = await fetchLogType(ctx, ref, lt.path, opts.startDate, opts.endDate);
+  for (const sub of SUBLOGS) {
+    const rows = Array.isArray(data?.[sub.key]) ? data[sub.key] : [];
     for (const e of rows) {
       const date = logDate(e) ?? opts.endDate;
-      const entry: DailyEntry = { type: lt.type, company: orgName(e), text: lt.text(e) };
+      const entry: DailyEntry = { type: sub.type, company: orgName(e), text: sub.text(e) };
       if (!entry.text && !entry.company) continue;
       (byDate.get(date) ?? byDate.set(date, []).get(date)!).push(entry);
     }
@@ -116,9 +107,11 @@ export async function fetchChangeEvents(
   ref: ProjectRef,
   opts: { since: string; limit: number; status?: string },
 ): Promise<{ items: ChangeEventItem[]; has_more: boolean }> {
-  const raw = await ctx.rest.get<any[]>(`/rest/v1.0/projects/${ref.project_id}/change_events`, {
+  // Change events are company-scoped with a project_id filter (the nested
+  // /projects/{id}/change_events path 404s).
+  const raw = await ctx.rest.get<any[]>(`/rest/v1.0/change_events`, {
     companyId: ref.company_id,
-    query: { sort: 'updated_at', per_page: MAX_LIMIT },
+    query: { project_id: ref.project_id, per_page: MAX_LIMIT },
   });
   let items = raw.map(normalizeChangeEvent).filter((c) => withinSince(c.updated_at, opts.since));
   if (opts.status) items = items.filter((c) => (c.status ?? '').toLowerCase() === opts.status!.toLowerCase());
@@ -127,8 +120,9 @@ export async function fetchChangeEvents(
 }
 
 export async function fetchChangeEvent(ctx: AppContext, ref: ProjectRef, id: number): Promise<unknown> {
-  const c = await ctx.rest.get<any>(`/rest/v1.0/projects/${ref.project_id}/change_events/${id}`, {
+  const c = await ctx.rest.get<any>(`/rest/v1.0/change_events/${id}`, {
     companyId: ref.company_id,
+    query: { project_id: ref.project_id },
   });
   const lineItems = Array.isArray(c.line_items) ? c.line_items : [];
   return {
