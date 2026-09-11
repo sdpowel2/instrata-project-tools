@@ -5,28 +5,37 @@
  * (BoM, RFIs, submittals, purchasing, milestones) return rows only for projects
  * the user is a member of (or admin/creator); org-wide tables (projects,
  * catalog, vendor contacts) are visible to any authenticated user.
+ *
+ * Write tools for the cutsheet submittal workflow live in submittalTools.ts.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { ok, fail, sanitize, cutsheetStatus } from './toolHelpers.js';
 
-type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
+export function registerTools(server: McpServer, supa: SupabaseClient, userId: string): void {
+  // ── Caller identity ─────────────────────────────────────────────────────────
+  server.registerTool(
+    'get_me',
+    {
+      title: 'Get the current user',
+      description:
+        'Return the calling user\'s profile (id, full name, email). Use the full name ' +
+        'for fields like a submittal\'s "Prepared By".',
+      inputSchema: {},
+    },
+    async () => {
+      const { data, error } = await supa
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) return fail(error.message);
+      if (!data) return fail('No profile found for the current user.');
+      return ok(data);
+    },
+  );
 
-const ok = (data: unknown): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-});
-
-const fail = (message: string): ToolResult => ({
-  content: [{ type: 'text', text: `Error: ${message}` }],
-  isError: true,
-});
-
-/** Escape a free-text term for use inside a PostgREST `.or()` ilike pattern. */
-function sanitize(term: string): string {
-  return term.replace(/[(),*%]/g, ' ').trim();
-}
-
-export function registerTools(server: McpServer, supa: SupabaseClient): void {
   // ── Projects ────────────────────────────────────────────────────────────────
   server.registerTool(
     'list_projects',
@@ -119,7 +128,13 @@ export function registerTools(server: McpServer, supa: SupabaseClient): void {
     'list_submittals',
     {
       title: 'List submittals',
-      description: 'List submittal packages for a project. Set include_items to also return each package’s line items.',
+      description:
+        'List submittal packages for a project. Set include_items to also return each ' +
+        'package’s line items, including per-item cutsheet match status: has_cutsheet is ' +
+        'true when a cutsheet PDF is already attached, and cutsheet_source says where it ' +
+        'came from ("repository" = approved SharePoint repo, "staging" = uploaded and ' +
+        'pending admin approval, "legacy" = direct upload). Items with has_cutsheet false ' +
+        'still need a cutsheet.',
       inputSchema: {
         project_id: z.string().describe('Project uuid'),
         include_items: z.boolean().optional().describe('Embed submittal line items (default false)'),
@@ -127,14 +142,25 @@ export function registerTools(server: McpServer, supa: SupabaseClient): void {
     },
     async ({ project_id, include_items }) => {
       const cols = include_items
-        ? 'id, title, revision, prepared_by, submitted_to, status, notes, created_at, submittal_items(id, manufacturer, model, description, category, qty, approval_state, sort_order)'
+        ? 'id, title, revision, prepared_by, submitted_to, status, notes, created_at, ' +
+          'submittal_items(id, manufacturer, model, description, category, qty, approval_state, sort_order, ' +
+          'cutsheet_repository_id, cutsheet_staging_id, cut_sheet_url, cut_sheet_name)'
         : 'id, title, revision, prepared_by, submitted_to, status, notes, created_at';
       const { data, error } = await supa
         .from('submittals')
         .select(cols)
         .eq('project_id', project_id)
         .order('created_at', { ascending: false });
-      return error ? fail(error.message) : ok(data);
+      if (error) return fail(error.message);
+      if (!include_items) return ok(data);
+      const withStatus = ((data ?? []) as unknown as Record<string, unknown>[]).map((s) => ({
+        ...s,
+        submittal_items: ((s.submittal_items as Record<string, unknown>[]) ?? []).map((it) => ({
+          ...it,
+          ...cutsheetStatus(it),
+        })),
+      }));
+      return ok(withStatus);
     },
   );
 

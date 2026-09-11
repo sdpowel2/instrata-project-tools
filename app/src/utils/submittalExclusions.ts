@@ -16,6 +16,8 @@
 
 import type { ProjectBoMItem, SubmittalItem } from '../types';
 
+// Twin: mcp-server/src/submittalTools.ts copies this list for its server-side
+// populate_submittal_from_bom tool. Keep the two in sync.
 export const EXCLUDED_MANUFACTURERS = [
   'Instrata',
   'Premiere',

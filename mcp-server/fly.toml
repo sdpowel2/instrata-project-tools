@@ -1,4 +1,4 @@
-# fly.toml — Instrata Project Tools MCP server (read-only).
+# fly.toml — Instrata Project Tools MCP server (read-only + scoped cutsheet submittal writes).
 # Deploy from this directory:  fly deploy   (or: fly deploy -c mcp-server/fly.toml)
 # Secrets (runtime env, NOT build args):
 #   fly secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_JWT_SECRET=...

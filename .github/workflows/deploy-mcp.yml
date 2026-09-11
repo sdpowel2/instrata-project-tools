@@ -1,0 +1,25 @@
+name: Deploy MCP server to Fly.io
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "mcp-server/**"
+      - ".github/workflows/deploy-mcp.yml"
+
+jobs:
+  deploy:
+    name: Deploy mcp-server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Runtime secrets (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_JWT_SECRET)
+      # are set on the Fly app itself — no build args needed.
+      - run: flyctl deploy --remote-only
+        working-directory: mcp-server
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

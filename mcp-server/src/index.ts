@@ -1,11 +1,13 @@
 /**
- * Instrata Project Tools — read-only MCP server.
+ * Instrata Project Tools — MCP server. Read-only, except for scoped write
+ * tools covering the cutsheet submittal workflow (see submittalTools.ts).
  *
  * Stateless Streamable HTTP transport. Each request must carry a personal
  * access token (generated from the app's Settings → "Connect Claude" card) as
  * `Authorization: Bearer <token>`. We resolve it to a user, mint a short-lived
- * user-scoped Supabase JWT, and expose read-only tools that query as that user
- * so RLS governs everything. No service-role key is used. See README.md.
+ * user-scoped Supabase JWT, and expose tools that query as that user so RLS
+ * governs everything — including the write tools, which only succeed on
+ * projects the user is a member of. No service-role key is used. See README.md.
  */
 import express, { type Request, type Response } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -15,6 +17,7 @@ import { config } from './config.js';
 import { resolveToken } from './auth.js';
 import { clientForUser } from './supabase.js';
 import { registerTools } from './tools.js';
+import { registerSubmittalTools } from './submittalTools.js';
 import { allow, keyFor } from './rateLimit.js';
 
 const SERVER_INFO = { name: 'instrata-project-tools', version: '1.0.0' };
@@ -35,7 +38,8 @@ function jsonRpcError(res: Response, status: number, message: string): void {
 }
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+// 8mb: attach_cutsheet accepts base64 PDFs up to ~4 MB decoded (~5.6 MB encoded).
+app.use(express.json({ limit: '8mb' }));
 
 // Health check (Fly).
 app.get('/', (_req, res) => res.json({ ok: true, service: SERVER_INFO.name }));
@@ -55,7 +59,8 @@ app.post('/mcp', async (req: Request, res: Response) => {
   try {
     const supa = await clientForUser(userId);
     const server = new McpServer(SERVER_INFO);
-    registerTools(server, supa);
+    registerTools(server, supa, userId);
+    registerSubmittalTools(server, supa, userId);
 
     // Stateless mode: no session id generator.
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

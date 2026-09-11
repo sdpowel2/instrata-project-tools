@@ -1,8 +1,11 @@
-# Instrata Project Tools — MCP server (read-only)
+# Instrata Project Tools — MCP server
 
 A small HTTP service that lets staff connect a Claude client (Desktop, Code, or
 claude.ai) to their Project Tools data and ask questions in natural language. It
-exposes **read-only** tools backed by the same Supabase tables the web app uses.
+exposes tools backed by the same Supabase tables the web app uses — **read-only,
+except for a scoped set of write tools covering the cutsheet submittal workflow**
+(create/populate a submittal package and attach cutsheets; see
+`Product Spec/cutsheet-submittal-mcp-writes-spec.md`).
 
 ## How access works (and why it's secure)
 
@@ -23,7 +26,10 @@ Claude client ──(MCP / Streamable HTTP, Authorization: Bearer <token>)──
   what they'd see in the app — no more. Project-scoped data (BoM, RFIs,
   submittals, purchasing, milestones) only returns for projects they belong to.
 - **No service-role key.** The server holds the anon key (public) and the JWT
-  secret (to mint user tokens). It is read-only — there is no write path.
+  secret (to mint user tokens). The write tools go through the same per-user
+  client, so RLS is the write boundary too: they only succeed on projects the
+  connecting user is a **member** of, exactly like the app UI. (Reads are
+  org-wide; writes are member-gated.)
 
 ## ⚠️ Auth & the legacy key
 
@@ -75,19 +81,42 @@ staff paste into their Claude client.
 
 ## Tools
 
-All read-only. Discovery starts with `list_projects` (returns project ids), then
-the project-scoped tools take a `project_id`:
+Discovery starts with `list_projects` (returns project ids), then the
+project-scoped tools take a `project_id`.
+
+### Read-only
 
 | Tool | Returns |
 |------|---------|
+| `get_me` | The calling user's profile (id, full name, email) |
 | `list_projects` | Projects (search by name/number/client/code, filter by status) |
 | `get_project` | Full record for one project id |
 | `get_project_bom` | Equipment / labor line items |
 | `list_rfis` | RFIs (optionally Open only) |
-| `list_submittals` | Submittal packages (optionally with line items) |
+| `list_submittals` | Submittal packages; with `include_items`, line items carry `has_cutsheet` / `cutsheet_source` match status |
 | `list_purchasing` | Purchasing modules + items (status, PO #, dates) |
 | `list_milestones` | Schedule milestones |
 | `search_catalog` | Full-text product catalog search |
 | `search_vendor_contacts` | Vendor / distributor / rep directory |
+| `search_cutsheet_repository` | Approved cutsheet repository search (mfr / model / free text) |
 | `list_project_files` | Project document repository index (SharePoint-backed; filter by category / search) |
 | `get_project_file` | Fresh ~1h download URL for one file (minted by the sharepoint-project-files edge function with the caller's JWT) |
+
+### Write (cutsheet submittal workflow only — `src/submittalTools.ts`)
+
+| Tool | Does |
+|------|------|
+| `create_submittal` | New package; `prepared_by` defaults to the caller's name, title to "AV Submittals" |
+| `update_submittal` | Edit package fields (title, submitted_to, revision, notes) |
+| `populate_submittal_from_bom` | Server-side "Autopopulate from BoM": filter/dedup line items, auto-attach repository cutsheets, return per-item match status. Refuses to overwrite existing items unless `replace: true` |
+| `attach_cutsheet` | Attach a cutsheet to a line item from the repository (`repository_id`), a fetched `url`, or `base64_pdf`. New files are deduped against the repository, otherwise staged pending admin approval |
+| `detach_cutsheet` | Clear a line item's cutsheet so a different one can be attached |
+
+Notes on writes:
+- The final submittal **PDF export stays in the app** (Submittal → Export) — the
+  server has no PDF generation.
+- New cutsheets uploaded via `attach_cutsheet` land in the **admin staging
+  review queue** (`source_context: 'mcp_skill'`); they attach and export
+  immediately but should be approved so the repository grows.
+- The BoM filter rules (labor + house manufacturers) are a copy of
+  `app/src/utils/submittalExclusions.ts` — keep the two in sync.
