@@ -31,6 +31,22 @@ Claude client ──(MCP / Streamable HTTP, Authorization: Bearer <token>)──
   connecting user is a **member** of, exactly like the app UI. (Reads are
   org-wide; writes are member-gated.)
 
+## Connecting a client
+
+Two ways to present the personal token:
+
+1. **`Authorization: Bearer <token>` header** — preferred. Works in Claude Code
+   (`claude mcp add --transport http ... --header "Authorization: Bearer ..."`),
+   Claude Desktop (via `mcp-remote --header`), and the MCP Inspector.
+2. **`?key=<token>` in the URL** — fallback for clients that can't send custom
+   headers. claude.ai org custom connectors currently only offer OAuth or
+   no-auth (static request headers are a gated beta), so add the connector as
+   "no auth" with the URL `https://<host>/mcp?key=instrata_mcp_...`. The token
+   is then visible in the connector's URL field (org admins + assigned users)
+   — acceptable for a role-scoped pilot; rotate the token from Settings →
+   Connect Claude if it leaks. The proper long-term fix for claude.ai is the
+   OAuth 2.1 upgrade already planned for the legacy-key migration below.
+
 ## ⚠️ Auth & the legacy key
 
 The server signs its short-lived user JWTs with the project's **legacy HS256 JWT

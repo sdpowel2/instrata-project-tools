@@ -29,6 +29,21 @@ function bearer(req: Request): string | undefined {
   return m ? m[1].trim() : undefined;
 }
 
+/**
+ * Fallback: token as a `?key=` query param, for clients that can't send custom
+ * headers — claude.ai org custom connectors currently only offer OAuth or
+ * no-auth (static request headers are a gated beta). A "no auth" connector
+ * pointed at `/mcp?key=instrata_mcp_...` works today. Trade-off: the token is
+ * visible in the connector's URL field (org admins + assigned users) and in
+ * any URL-level logging, so treat it as a pilot workaround — rotate the token
+ * from Settings → Connect Claude if it leaks, and prefer the Authorization
+ * header wherever headers are supported.
+ */
+function queryKey(req: Request): string | undefined {
+  const k = req.query.key;
+  return typeof k === 'string' && k.trim() !== '' ? k.trim() : undefined;
+}
+
 function jsonRpcError(res: Response, status: number, message: string): void {
   res.status(status).json({
     jsonrpc: '2.0',
@@ -48,7 +63,7 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 // MCP endpoint — stateless: a fresh server + transport per request.
 app.post('/mcp', async (req: Request, res: Response) => {
   const reqId = randomUUID().slice(0, 8);
-  const token = bearer(req);
+  const token = bearer(req) ?? queryKey(req);
 
   if (!token) return jsonRpcError(res, 401, 'Missing bearer token. Generate one in the app under Settings → Connect Claude.');
   if (!allow(keyFor(token))) return jsonRpcError(res, 429, 'Rate limit exceeded, slow down.');
