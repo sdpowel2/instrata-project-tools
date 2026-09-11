@@ -60,10 +60,9 @@ app.use(express.json({ limit: '8mb' }));
 app.get('/', (_req, res) => res.json({ ok: true, service: SERVER_INFO.name }));
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-// MCP endpoint — stateless: a fresh server + transport per request.
-app.post('/mcp', async (req: Request, res: Response) => {
+// MCP request handler — stateless: a fresh server + transport per request.
+async function handleMcp(req: Request, res: Response, token: string | undefined): Promise<void> {
   const reqId = randomUUID().slice(0, 8);
-  const token = bearer(req) ?? queryKey(req);
 
   if (!token) return jsonRpcError(res, 401, 'Missing bearer token. Generate one in the app under Settings → Connect Claude.');
   if (!allow(keyFor(token))) return jsonRpcError(res, 429, 'Rate limit exceeded, slow down.');
@@ -89,13 +88,25 @@ app.post('/mcp', async (req: Request, res: Response) => {
     console.error(`[${reqId}] handler error:`, err);
     if (!res.headersSent) jsonRpcError(res, 500, 'Internal server error.');
   }
-});
+}
+
+app.post('/mcp', (req, res) => handleMcp(req, res, bearer(req) ?? queryKey(req)));
+
+// Token as a path segment (Zapier-style), for clients that can't send custom
+// headers AND normalize away query params — claude.ai custom connectors do
+// both, and fall back to an OAuth flow (which we don't implement) whenever
+// their first unauthenticated request gets a 401. Embedding the token in the
+// path makes that first request succeed, so no OAuth is ever attempted.
+// Same visibility trade-offs as ?key= (see queryKey above).
+app.post('/mcp/:key', (req, res) => handleMcp(req, res, bearer(req) ?? (req.params.key?.trim() || undefined)));
 
 // Stateless server: GET (SSE stream) and DELETE (session teardown) are unused.
 const methodNotAllowed = (_req: Request, res: Response) =>
   jsonRpcError(res, 405, 'Method not allowed.');
 app.get('/mcp', methodNotAllowed);
 app.delete('/mcp', methodNotAllowed);
+app.get('/mcp/:key', methodNotAllowed);
+app.delete('/mcp/:key', methodNotAllowed);
 
 app.listen(config.port, () => {
   console.log(`[mcp] ${SERVER_INFO.name} listening on :${config.port}`);
