@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell, KeyRound, Copy, Check, FileSpreadsheet } from 'lucide-react';
+import { Users, Shield, ShieldCheck, Loader2, Plus, Trash2, SlidersHorizontal, Briefcase, Warehouse as WarehouseIcon, Pencil, Bell, Link2, Unplug, Copy, Check, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useStore } from '../store';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -714,41 +714,111 @@ function NotificationsSection() {
   );
 }
 
-// ─── Connect Claude (MCP) Section ─────────────────────────────────────────────
-// Lets any signed-in user mint a personal token for the read-only MCP server
-// (see /mcp-server). Tokens are scoped by RLS exactly like the app, so a token
-// only ever exposes what its owner can already see.
+// ─── Connected apps (MCP / OAuth) Section ────────────────────────────────────
+// Shows the Claude connections this user has approved for the Project Tools
+// MCP server and lets them disconnect. Connections are OAuth 2.1 grants issued
+// by mcp-server's own authorization server (see /mcp-server); one row here =
+// one refresh-token family = one "Connect" click. RLS on oauth_refresh_tokens /
+// oauth_access_tokens limits reads to the caller's own rows, and
+// oauth_disconnect() (SECURITY INVOKER) does the revoking under the same RLS.
+// Nothing is minted from this page any more — sign-in + consent happen on the
+// MCP server when a client connects.
 
 const MCP_SERVER_URL =
   import.meta.env.VITE_MCP_SERVER_URL || 'https://instrata-project-tools-mcp.fly.dev/mcp';
 
-interface McpToken {
-  id: string;
-  name: string;
+interface RefreshRow {
+  family_id: string;
+  client_id: string;
+  scope: string;
   created_at: string;
-  last_used_at: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  replaced_by: string | null;
 }
 
-function ConnectClaudeSection() {
+interface ConnectedApp {
+  familyId: string;
+  clientId: string;
+  clientName: string;
+  scopes: string[];
+  connectedAt: string;   // earliest token in the family
+  lastUsedAt: string | null;
+  expiresAt: string;     // current refresh token's expiry (sliding)
+}
+
+const CLIENT_NAME_FALLBACK = 'Claude';
+
+function ConnectedAppsSection() {
   const configured = isSupabaseConfigured();
-  const [tokens, setTokens] = useState<McpToken[]>([]);
+  const [apps, setApps] = useState<ConnectedApp[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [revealedToken, setRevealedToken] = useState<string | null>(null);
-  const [copied, setCopied] = useState<'token' | 'url' | null>(null);
+  const [busy, setBusy] = useState<string | null>(null); // familyId or 'all'
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('mcp_tokens')
-      .select('id, name, created_at, last_used_at')
-      .is('revoked_at', null)
-      .order('created_at', { ascending: false });
-    if (error) console.error('[Settings] Failed to load MCP tokens:', error);
-    else setTokens(data ?? []);
+    // All of this user's refresh tokens (RLS), then group client-side by family.
+    const { data: refreshRows, error } = await supabase
+      .from('oauth_refresh_tokens')
+      .select('family_id, client_id, scope, created_at, expires_at, revoked_at, replaced_by')
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('[Settings] Failed to load connected apps:', error);
+      setLoading(false);
+      return;
+    }
+
+    const families = new Map<string, ConnectedApp>();
+    for (const r of (refreshRows ?? []) as RefreshRow[]) {
+      const live = r.revoked_at === null && r.replaced_by === null;
+      const existing = families.get(r.family_id);
+      if (!existing) {
+        families.set(r.family_id, {
+          familyId: r.family_id,
+          clientId: r.client_id,
+          clientName: CLIENT_NAME_FALLBACK,
+          scopes: r.scope.split(' ').filter(Boolean),
+          connectedAt: r.created_at,
+          lastUsedAt: null,
+          expiresAt: live ? r.expires_at : '',
+        });
+      } else if (live) {
+        existing.expiresAt = r.expires_at;
+        existing.scopes = r.scope.split(' ').filter(Boolean);
+      }
+    }
+    // A family with no live refresh token is disconnected (or fully expired).
+    const liveApps = [...families.values()].filter((a) => a.expiresAt !== '' && new Date(a.expiresAt) > new Date());
+
+    if (liveApps.length > 0) {
+      const familyIds = liveApps.map((a) => a.familyId);
+      const clientIds = [...new Set(liveApps.map((a) => a.clientId))];
+      const [{ data: accessRows }, { data: clientRows }] = await Promise.all([
+        supabase
+          .from('oauth_access_tokens')
+          .select('family_id, last_used_at')
+          .in('family_id', familyIds)
+          .not('last_used_at', 'is', null),
+        supabase.from('oauth_clients').select('client_id, client_name').in('client_id', clientIds),
+      ]);
+      const lastUsed = new Map<string, string>();
+      for (const row of (accessRows ?? []) as { family_id: string; last_used_at: string }[]) {
+        const prev = lastUsed.get(row.family_id);
+        if (!prev || row.last_used_at > prev) lastUsed.set(row.family_id, row.last_used_at);
+      }
+      const names = new Map<string, string>();
+      for (const c of (clientRows ?? []) as { client_id: string; client_name: string | null }[]) {
+        if (c.client_name) names.set(c.client_id, c.client_name);
+      }
+      for (const a of liveApps) {
+        a.lastUsedAt = lastUsed.get(a.familyId) ?? null;
+        a.clientName = names.get(a.clientId) ?? CLIENT_NAME_FALLBACK; // admin-registered client has no row
+      }
+    }
+
+    liveApps.sort((a, b) => b.connectedAt.localeCompare(a.connectedAt));
+    setApps(liveApps);
     setLoading(false);
   }, []);
 
@@ -757,44 +827,29 @@ function ConnectClaudeSection() {
     else setLoading(false);
   }, [configured, load]);
 
-  const openModal = () => {
-    setNewName('');
-    setCreateError(null);
-    setRevealedToken(null);
-    setShowModal(true);
-  };
-
-  const handleCreate = async () => {
-    setCreating(true);
-    setCreateError(null);
-    const { data, error } = await supabase.rpc('create_mcp_token', { p_name: newName.trim() });
+  const disconnect = async (familyId: string | null) => {
+    const msg = familyId
+      ? 'Disconnect this Claude connection? It will lose access immediately and will need to reconnect.'
+      : 'Disconnect ALL Claude connections? Every connected client will lose access immediately.';
+    if (!window.confirm(msg)) return;
+    setBusy(familyId ?? 'all');
+    const { error } = await supabase.rpc('oauth_disconnect', { p_family_id: familyId });
     if (error) {
-      setCreateError(error.message);
+      alert('Failed to disconnect: ' + error.message);
     } else {
-      setRevealedToken(data as string);
       await load();
     }
-    setCreating(false);
+    setBusy(null);
   };
 
-  const handleRevoke = async (id: string) => {
-    if (!window.confirm('Revoke this token? Any Claude client using it will immediately lose access.')) return;
-    const { error } = await supabase
-      .from('mcp_tokens')
-      .update({ revoked_at: new Date().toISOString() })
-      .eq('id', id);
-    if (error) {
-      alert('Failed to revoke token: ' + error.message);
-      return;
-    }
-    setTokens((prev) => prev.filter((t) => t.id !== id));
+  const copyUrl = () => {
+    navigator.clipboard.writeText(MCP_SERVER_URL);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
-  const copy = (text: string, which: 'token' | 'url') => {
-    navigator.clipboard.writeText(text);
-    setCopied(which);
-    setTimeout(() => setCopied(null), 1500);
-  };
+  const describeScopes = (scopes: string[]) =>
+    scopes.includes('mcp:write') ? 'Read & write' : scopes.includes('mcp:read') ? 'Read-only' : 'No access';
 
   if (!configured) {
     return (
@@ -805,110 +860,78 @@ function ConnectClaudeSection() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <p className="text-sm text-text-secondary">
-        Generate a personal token to connect a Claude client (Desktop, Code, or claude.ai) to your
-        project data. Claude can read—but never change—exactly what you can see in this app.
+        Connect a Claude client (claude.ai, Claude Desktop, or Claude Code) to your project data. When you
+        connect, you’ll sign in with your Project Tools email and password and approve what Claude may do.
+        Claude then acts as you: it can see exactly what you can see here, and can only change submittals on
+        projects you belong to.
       </p>
 
-      <div className="flex justify-end">
-        <button onClick={openModal} className="btn-primary text-sm">
-          <Plus size={14} /> Generate Token
-        </button>
+      <label className="block">
+        <span className="text-sm font-medium text-text-primary">MCP server URL</span>
+        <div className="flex gap-2 mt-1.5">
+          <input readOnly value={MCP_SERVER_URL} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
+          <button onClick={copyUrl} className="btn-secondary text-sm flex-shrink-0" title="Copy URL">
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </div>
+      </label>
+
+      <div className="text-xs text-text-secondary space-y-1">
+        <p className="font-medium text-text-primary">How to connect</p>
+        <p><span className="font-medium">claude.ai:</span> an Instrata admin adds the URL above as a custom connector once; then open it and click <em>Connect</em>.</p>
+        <p><span className="font-medium">Claude Code:</span> run
+          <code className="mx-1 px-1 py-0.5 bg-surface rounded">claude mcp add --transport http project-tools {MCP_SERVER_URL}</code>
+          then <code className="mx-1 px-1 py-0.5 bg-surface rounded">/mcp</code> to sign in.</p>
+      </div>
+
+      <div className="flex items-center justify-between pt-2">
+        <span className="text-sm font-medium text-text-primary">Active connections</span>
+        {apps.length > 1 && (
+          <button onClick={() => disconnect(null)} disabled={busy !== null} className="btn-secondary text-xs disabled:opacity-50">
+            {busy === 'all' ? <Loader2 size={12} className="animate-spin inline mr-1" /> : <Unplug size={12} className="inline mr-1" />}
+            Disconnect all
+          </button>
+        )}
       </div>
 
       {loading ? (
         <div className="py-4 flex justify-center"><Loader2 size={16} className="animate-spin text-text-secondary" /></div>
-      ) : tokens.length === 0 ? (
-        <p className="text-sm text-text-secondary py-2">No tokens yet. Generate one to get started.</p>
+      ) : apps.length === 0 ? (
+        <p className="text-sm text-text-secondary py-2">
+          No Claude clients are connected. Connections appear here after you approve one.
+        </p>
       ) : (
         <div className="space-y-2">
-          {tokens.map((t) => (
-            <div key={t.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface/30">
+          {apps.map((a) => (
+            <div key={a.familyId} className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface/30">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg bg-navy/10 flex items-center justify-center flex-shrink-0">
-                  <KeyRound size={16} className="text-navy" />
+                  <Link2 size={16} className="text-navy" />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-sm font-medium text-text-primary truncate">{t.name || 'Untitled token'}</div>
+                  <div className="text-sm font-medium text-text-primary truncate">{a.clientName}</div>
                   <div className="text-xs text-text-secondary">
-                    Created {new Date(t.created_at).toLocaleDateString()}
+                    {describeScopes(a.scopes)}
+                    {' · '}connected {new Date(a.connectedAt).toLocaleDateString()}
                     {' · '}
-                    {t.last_used_at ? `last used ${new Date(t.last_used_at).toLocaleDateString()}` : 'never used'}
+                    {a.lastUsedAt ? `last used ${new Date(a.lastUsedAt).toLocaleDateString()}` : 'not used yet'}
                   </div>
                 </div>
               </div>
-              <button onClick={() => handleRevoke(t.id)} title="Revoke" className="p-1.5 rounded-md text-fg-2 hover:bg-red-50 hover:text-red-600 flex-shrink-0">
-                <Trash2 size={14} />
+              <button
+                onClick={() => disconnect(a.familyId)}
+                disabled={busy !== null}
+                title="Disconnect"
+                className="p-1.5 rounded-md text-fg-2 hover:bg-red-50 hover:text-red-600 flex-shrink-0 disabled:opacity-50"
+              >
+                {busy === a.familyId ? <Loader2 size={14} className="animate-spin" /> : <Unplug size={14} />}
               </button>
             </div>
           ))}
         </div>
       )}
-
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={revealedToken ? 'Token created' : 'Generate Claude token'}>
-        {revealedToken ? (
-          <div className="space-y-4">
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
-              Copy this token now — it’s shown only once and can’t be retrieved later. If you lose it, just revoke it and generate a new one.
-            </div>
-
-            <label className="block">
-              <span className="text-sm font-medium text-text-primary">Your token</span>
-              <div className="flex gap-2 mt-1.5">
-                <input readOnly value={revealedToken} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
-                <button onClick={() => copy(revealedToken, 'token')} className="btn-secondary text-sm flex-shrink-0">
-                  {copied === 'token' ? <Check size={14} /> : <Copy size={14} />}
-                </button>
-              </div>
-            </label>
-
-            <label className="block">
-              <span className="text-sm font-medium text-text-primary">MCP server URL</span>
-              <div className="flex gap-2 mt-1.5">
-                <input readOnly value={MCP_SERVER_URL} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
-                <button onClick={() => copy(MCP_SERVER_URL, 'url')} className="btn-secondary text-sm flex-shrink-0">
-                  {copied === 'url' ? <Check size={14} /> : <Copy size={14} />}
-                </button>
-              </div>
-            </label>
-
-            <div className="text-xs text-text-secondary space-y-1">
-              <p className="font-medium text-text-primary">To add it in Claude:</p>
-              <p>Add a custom connector / MCP server using the URL above, with an HTTP header
-              <code className="mx-1 px-1 py-0.5 bg-surface rounded">Authorization: Bearer &lt;token&gt;</code>.</p>
-            </div>
-
-            <div className="flex justify-end pt-3 border-t border-border">
-              <button onClick={() => setShowModal(false)} className="btn-primary text-sm">Done</button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <label className="block">
-              <span className="text-sm font-medium text-text-primary">Name</span>
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && !creating && handleCreate()}
-                className="input mt-1.5"
-                placeholder="e.g. Laptop / Claude Desktop"
-              />
-              <span className="text-xs text-text-secondary mt-0.5 block">A label to help you recognize this token later.</span>
-            </label>
-            {createError && (
-              <div className="p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">{createError}</div>
-            )}
-            <div className="flex justify-end gap-2 pt-3 border-t border-border">
-              <button type="button" onClick={() => setShowModal(false)} className="btn-secondary text-sm">Cancel</button>
-              <button onClick={handleCreate} disabled={creating} className="btn-primary text-sm disabled:opacity-50">
-                {creating ? <><Loader2 size={14} className="animate-spin inline mr-1" />Generating…</> : 'Generate'}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }
@@ -1037,10 +1060,10 @@ export function SettingsPage() {
 
       <div className="bg-white rounded-xl border border-border shadow-sm p-6 mb-6">
         <div className="flex items-center gap-2 mb-4">
-          <KeyRound size={18} className="text-navy" />
-          <h2 className="text-base font-semibold text-navy">Connect Claude</h2>
+          <Link2 size={18} className="text-navy" />
+          <h2 className="text-base font-semibold text-navy">Connected apps</h2>
         </div>
-        <ConnectClaudeSection />
+        <ConnectedAppsSection />
       </div>
 
       <div className="bg-white rounded-xl border border-border shadow-sm p-6">

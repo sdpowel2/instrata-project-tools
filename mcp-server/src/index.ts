@@ -1,47 +1,50 @@
 /**
- * Instrata Project Tools — MCP server. Read-only, except for scoped write
- * tools covering the cutsheet submittal workflow (see submittalTools.ts).
+ * Instrata Project Tools — MCP server. Read tools plus scoped write tools for
+ * the cutsheet submittal workflow (submittalTools.ts).
  *
- * Stateless Streamable HTTP transport. Each request must carry a personal
- * access token (generated from the app's Settings → "Connect Claude" card) as
- * `Authorization: Bearer <token>`. We resolve it to a user, mint a short-lived
- * user-scoped Supabase JWT, and expose tools that query as that user so RLS
- * governs everything — including the write tools, which only succeed on
- * projects the user is a member of. No service-role key is used. See README.md.
+ * Auth: this process is its own OAuth 2.1 authorization server (src/oauth/).
+ * Clients discover it from a 401 on /mcp, register (DCR/CIMD or the admin
+ * pre-registered client), send the user through our login + consent page, and
+ * exchange the code for opaque bearer tokens. Every /mcp request must carry
+ * `Authorization: Bearer <access token>`; we resolve it to a Project Tools
+ * user, mint a short-lived user-scoped Supabase JWT, and run the tools as that
+ * user so RLS governs everything — including the write tools. Tool visibility
+ * follows the token's scopes (mcp:read / mcp:write). No service-role key is
+ * used anywhere. See README.md.
+ *
+ * Transport: stateless Streamable HTTP — a fresh McpServer + transport per
+ * request, no sessions.
  */
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { randomUUID } from 'node:crypto';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { authorizationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
+import { tokenHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/token.js';
+import { clientRegistrationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/register.js';
+import { revocationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/revoke.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { config } from './config.js';
-import { resolveToken } from './auth.js';
 import { clientForUser } from './supabase.js';
 import { registerTools } from './tools.js';
 import { registerSubmittalTools } from './submittalTools.js';
+import { assertToolScopesComplete, collectingRegistrar, scopedRegistrar } from './toolHelpers.js';
 import { allow, keyFor } from './rateLimit.js';
+import { ProjectToolsOAuthProvider } from './oauth/provider.js';
+import { consentRouter } from './oauth/consent.js';
+import { ISSUER, MCP_RESOURCE_URL, OAUTH_PATHS, PRM_URL, metadataRouter } from './oauth/metadata.js';
 
-const SERVER_INFO = { name: 'instrata-project-tools', version: '1.0.0' };
+const SERVER_INFO = { name: 'instrata-project-tools', version: '2.0.0' };
 
-function bearer(req: Request): string | undefined {
-  const h = req.header('authorization') ?? req.header('Authorization');
-  if (!h) return undefined;
-  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
-  return m ? m[1].trim() : undefined;
-}
-
-/**
- * Fallback: token as a `?key=` query param, for clients that can't send custom
- * headers — claude.ai org custom connectors currently only offer OAuth or
- * no-auth (static request headers are a gated beta). A "no auth" connector
- * pointed at `/mcp?key=instrata_mcp_...` works today. Trade-off: the token is
- * visible in the connector's URL field (org admins + assigned users) and in
- * any URL-level logging, so treat it as a pilot workaround — rotate the token
- * from Settings → Connect Claude if it leaks, and prefer the Authorization
- * header wherever headers are supported.
- */
-function queryKey(req: Request): string | undefined {
-  const k = req.query.key;
-  return typeof k === 'string' && k.trim() !== '' ? k.trim() : undefined;
+// ── Startup audit: every tool must have a scope (src/oauth/scopes.ts) ─────────
+{
+  const names: string[] = [];
+  const collector = collectingRegistrar(names);
+  const noClient = null as unknown as SupabaseClient; // handlers are never invoked here
+  registerTools(collector, noClient, '');
+  registerSubmittalTools(collector, noClient, '');
+  assertToolScopesComplete(names);
 }
 
 function jsonRpcError(res: Response, status: number, message: string): void {
@@ -52,29 +55,89 @@ function jsonRpcError(res: Response, status: number, message: string): void {
   });
 }
 
+const provider = new ProjectToolsOAuthProvider();
+
 const app = express();
+// Fly terminates TLS and proxies to us; needed so rate limits key on the real client IP.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
 // 8mb: attach_cutsheet accepts base64 PDFs up to ~4 MB decoded (~5.6 MB encoded).
+// Only parses application/json, so it never touches the form-encoded OAuth endpoints.
 app.use(express.json({ limit: '8mb' }));
 
 // Health check (Fly).
 app.get('/', (_req, res) => res.json({ ok: true, service: SERVER_INFO.name }));
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-// MCP request handler — stateless: a fresh server + transport per request.
-async function handleMcp(req: Request, res: Response, token: string | undefined): Promise<void> {
+// ── OAuth 2.1 authorization server ────────────────────────────────────────────
+// Per-IP limits per spec §9 (30 req/min on token + register). Discovery docs
+// are static and unlimited.
+const perMinute = (limit: number) => ({ windowMs: 60_000, limit });
+
+app.use(metadataRouter());
+app.use(OAUTH_PATHS.authorize, authorizationHandler({ provider, rateLimit: perMinute(30) }));
+app.use(OAUTH_PATHS.consent, consentRouter(provider));
+app.use(
+  OAUTH_PATHS.token,
+  express.urlencoded({ extended: false }),
+  basicClientAuthShim,
+  tokenHandler({ provider, rateLimit: perMinute(30) }),
+);
+app.use(
+  OAUTH_PATHS.register,
+  clientRegistrationHandler({ clientsStore: provider.clientsStore, clientSecretExpirySeconds: 0, rateLimit: perMinute(30) }),
+);
+app.use(OAUTH_PATHS.revoke, revocationHandler({ provider, rateLimit: perMinute(30) }));
+
+/**
+ * The SDK's client authentication reads client_id / client_secret from the
+ * form body (client_secret_post). RFC 6749 §2.3.1 also allows HTTP Basic;
+ * decode it into the body so both work. Body fields win if both are present.
+ */
+function basicClientAuthShim(req: Request, _res: Response, next: NextFunction): void {
+  const header = req.headers.authorization;
+  if (header && /^Basic\s+/i.test(header)) {
+    try {
+      const decoded = Buffer.from(header.replace(/^Basic\s+/i, '').trim(), 'base64').toString('utf8');
+      const sep = decoded.indexOf(':');
+      if (sep > 0) {
+        const body = (req.body ??= {}) as Record<string, unknown>;
+        body.client_id ??= decodeURIComponent(decoded.slice(0, sep));
+        body.client_secret ??= decodeURIComponent(decoded.slice(sep + 1));
+      }
+    } catch {
+      /* malformed Basic header → fall through; the SDK will reject as invalid_client */
+    }
+  }
+  next();
+}
+
+// ── MCP endpoint ──────────────────────────────────────────────────────────────
+// requireBearerAuth answers every unauthenticated / invalid / expired request
+// with HTTP 401 + `WWW-Authenticate: Bearer error="invalid_token",
+// resource_metadata="<PRM_URL>"`, which is what starts OAuth discovery in
+// Claude. On success it sets req.auth, which the transport forwards to tool
+// handlers as extra.authInfo.
+const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: PRM_URL });
+
+async function handleMcp(req: Request, res: Response): Promise<void> {
   const reqId = randomUUID().slice(0, 8);
+  const auth = req.auth;
+  if (!auth) return jsonRpcError(res, 401, 'Unauthorized.');
+  if (!allow(keyFor(auth.token))) return jsonRpcError(res, 429, 'Rate limit exceeded, slow down.');
 
-  if (!token) return jsonRpcError(res, 401, 'Missing bearer token. Generate one in the app under Settings → Connect Claude.');
-  if (!allow(keyFor(token))) return jsonRpcError(res, 429, 'Rate limit exceeded, slow down.');
-
-  const userId = await resolveToken(token);
-  if (!userId) return jsonRpcError(res, 401, 'Invalid or revoked token.');
+  const userId = auth.extra?.userId;
+  if (typeof userId !== 'string' || !userId) {
+    console.error(`[${reqId}] access token verified but carries no userId`);
+    return jsonRpcError(res, 500, 'Internal server error.');
+  }
 
   try {
     const supa = await clientForUser(userId);
     const server = new McpServer(SERVER_INFO);
-    registerTools(server, supa, userId);
-    registerSubmittalTools(server, supa, userId);
+    const registrar = scopedRegistrar(server, auth.scopes);
+    registerTools(registrar, supa, userId);
+    registerSubmittalTools(registrar, supa, userId);
 
     // Stateless mode: no session id generator.
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -90,24 +153,16 @@ async function handleMcp(req: Request, res: Response, token: string | undefined)
   }
 }
 
-app.post('/mcp', (req, res) => handleMcp(req, res, bearer(req) ?? queryKey(req)));
-
-// Token as a path segment (Zapier-style), for clients that can't send custom
-// headers AND normalize away query params — claude.ai custom connectors do
-// both, and fall back to an OAuth flow (which we don't implement) whenever
-// their first unauthenticated request gets a 401. Embedding the token in the
-// path makes that first request succeed, so no OAuth is ever attempted.
-// Same visibility trade-offs as ?key= (see queryKey above).
-app.post('/mcp/:key', (req, res) => handleMcp(req, res, bearer(req) ?? (req.params.key?.trim() || undefined)));
+app.post('/mcp', bearer, handleMcp);
 
 // Stateless server: GET (SSE stream) and DELETE (session teardown) are unused.
-const methodNotAllowed = (_req: Request, res: Response) =>
-  jsonRpcError(res, 405, 'Method not allowed.');
-app.get('/mcp', methodNotAllowed);
-app.delete('/mcp', methodNotAllowed);
-app.get('/mcp/:key', methodNotAllowed);
-app.delete('/mcp/:key', methodNotAllowed);
+// Bearer check first so an unauthenticated probe still gets the 401 + discovery header.
+const methodNotAllowed = (_req: Request, res: Response) => jsonRpcError(res, 405, 'Method not allowed.');
+app.get('/mcp', bearer, methodNotAllowed);
+app.delete('/mcp', bearer, methodNotAllowed);
 
 app.listen(config.port, () => {
-  console.log(`[mcp] ${SERVER_INFO.name} listening on :${config.port}`);
+  console.log(`[mcp] ${SERVER_INFO.name} v${SERVER_INFO.version} listening on :${config.port}`);
+  console.log(`[mcp] issuer ${ISSUER} · resource ${MCP_RESOURCE_URL}`);
+  console.log(`[mcp] admin client: ${config.adminClientId ? `${config.adminClientId} (${config.adminClientSecret ? 'confidential' : 'public'})` : 'not configured'}`);
 });

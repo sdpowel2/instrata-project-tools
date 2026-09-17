@@ -1,7 +1,14 @@
-# fly.toml — Instrata Project Tools MCP server (read-only + scoped cutsheet submittal writes).
+# fly.toml — Instrata Project Tools MCP server (read tools + scoped cutsheet
+# submittal writes, behind its own OAuth 2.1 authorization server).
 # Deploy from this directory:  fly deploy   (or: fly deploy -c mcp-server/fly.toml)
+# CI also deploys on pushes to main touching mcp-server/** (.github/workflows/deploy-mcp.yml),
+# so set secrets BEFORE merging auth changes.
 # Secrets (runtime env, NOT build args):
-#   fly secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_JWT_SECRET=...
+#   fly secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_JWT_SECRET=... \
+#                   PUBLIC_BASE_URL=https://instrata-project-tools-mcp.fly.dev \
+#                   OAUTH_ADMIN_CLIENT_ID=... OAUTH_ADMIN_CLIENT_SECRET=...   # optional pair
+# No redirects anywhere: force_https only 301s plain-http requests, which no
+# OAuth/MCP client sends. Do not add trailing-slash or www rewrites.
 app = "instrata-project-tools-mcp"
 primary_region = "iad"
 

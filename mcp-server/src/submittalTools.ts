@@ -11,10 +11,9 @@
  * for admin review. See Product Spec/cutsheet-submittal-mcp-writes-spec.md.
  */
 import { randomUUID } from 'node:crypto';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import { ok, fail, sanitize, cutsheetStatus } from './toolHelpers.js';
+import { ok, fail, sanitize, cutsheetStatus, type ToolRegistrar } from './toolHelpers.js';
 
 // Twin of EXCLUDED_MANUFACTURERS in app/src/utils/submittalExclusions.ts —
 // house manufacturers whose BoM rows are internal labor/service lines, never
@@ -121,7 +120,7 @@ type UploadStagingResult = {
   staged?: { stagingId: string; sharepointItemId: string; sharepointPath: string };
 };
 
-export function registerSubmittalTools(server: McpServer, supa: SupabaseClient, userId: string): void {
+export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClient, userId: string): void {
   // ── create_submittal ─────────────────────────────────────────────────────────
   server.registerTool(
     'create_submittal',

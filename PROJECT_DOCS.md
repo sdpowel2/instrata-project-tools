@@ -685,9 +685,11 @@ Runtime secrets (set via `fly secrets set`, read at **runtime** — not build ar
 |---|---|
 | `SUPABASE_URL` | project URL |
 | `SUPABASE_ANON_KEY` | PostgREST apikey (public, same as `VITE_SUPABASE_ANON_KEY`) |
-| `SUPABASE_JWT_SECRET` | **legacy HS256 secret** — mints short-lived per-user JWTs. SENSITIVE; treat like service-role. No service-role key is used by this server. |
+| `SUPABASE_JWT_SECRET` | **legacy HS256 secret** — mints short-lived per-user JWTs and the server's own `mcp_service` role JWT. SENSITIVE; treat like service-role. No service-role key is used by this server. |
+| `PUBLIC_BASE_URL` | this server's public origin (`https://instrata-project-tools-mcp.fly.dev`). OAuth issuer + protected-resource identity; must match the URL clients use exactly. Server refuses to boot without it. |
+| `OAUTH_ADMIN_CLIENT_ID` / `OAUTH_ADMIN_CLIENT_SECRET` | optional pre-registered OAuth client for the claude.ai connector's Advanced settings (bypasses DCR). Secret lives only here, never in the DB. |
 
-Optional client override: `VITE_MCP_SERVER_URL` (frontend build-time) points the Settings "Connect Claude" card at a non-default server URL; defaults to `https://instrata-project-tools-mcp.fly.dev/mcp`.
+Optional client override: `VITE_MCP_SERVER_URL` (frontend build-time) points the Settings "Connected apps" card at a non-default server URL; defaults to `https://instrata-project-tools-mcp.fly.dev/mcp`.
 
 ### Notable in-code defaults (consider moving to env)
 - D-Tools subsidiary→business-unit map is hard-coded in three functions (`SUBSIDIARY_TO_BU`).
@@ -698,29 +700,34 @@ Optional client override: `VITE_MCP_SERVER_URL` (frontend build-time) points the
 
 ---
 
-## 8. MCP Server (read-only)
+## 8. MCP Server (OAuth 2.1 · read tools + scoped submittal writes)
 
-A standalone Node/TypeScript service in `mcp-server/`, deployed as a **separate Fly app** (`instrata-project-tools-mcp`) alongside the SPA. It lets internal staff connect a Claude client (Desktop, Code, claude.ai) to their project data and query it in natural language. **Read-only — no write path.**
+A standalone Node/TypeScript service in `mcp-server/`, deployed as a **separate Fly app** (`instrata-project-tools-mcp`) alongside the SPA. It lets internal staff connect a Claude client (claude.ai, Desktop, Code, Inspector) to their project data and work with it in natural language. Read tools cover everything; **write tools are limited to the cutsheet submittal workflow** (`src/submittalTools.ts`, spec `Product Spec/cutsheet-submittal-mcp-writes-spec.md`).
 
-**Security model (same as the app).** Staff generate a personal token in **Settings → Connect Claude**; only its SHA-256 hash is stored (`mcp_tokens` table). On each request the server resolves the token to a `user_id` (`resolve_mcp_token` RPC), mints a short-lived (~5 min) Supabase JWT for that user, and queries PostgREST **as them** — so the existing RLS policies are the sole authority. A token can only ever surface what its owner already sees in the app. The server holds **no service-role key**.
+**Auth: the server is its own OAuth 2.1 authorization server** (spec `Product Spec/project-tools-mcp-auth-spec.md`, design `…-implementation-plan.md`). Clients hit `POST /mcp`, get a 401 with `WWW-Authenticate: resource_metadata=…`, discover the AS at the same origin (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`), register (DCR at `/oauth/register`, or CIMD for Claude Code, or an admin pre-registered client id from env), and send the user to `/oauth/authorize`. Because the SPA and this server are different origins with no shared session, `/oauth/authorize` renders the server's **own login + consent page**: the user enters their Project Tools email/password (verified against Supabase Auth — same identity store as the app) and approves the requested scopes; `POST /oauth/consent` issues a one-time code and `POST /oauth/token` exchanges it (PKCE S256 mandatory) for an opaque access token (1 h) + refresh token (30 d, rotated on every use, family revoked on replay). The protocol plumbing is `@modelcontextprotocol/sdk`'s `server/auth` handlers; `src/oauth/` supplies the Supabase-backed provider, client store, consent page and metadata. The old personal-token scheme (`mcp_tokens`, `?key=`, `/mcp/<token>`) is gone.
+
+**Security model (same as the app).** A verified access token resolves to a `user_id`; the server mints a short-lived (~5 min) Supabase JWT for that user and queries PostgREST **as them**, so the existing RLS policies are the sole authority — for writes too (member-gated, like the UI). **Scopes gate tool visibility:** `mcp:read` → the 13 read tools, `mcp:write` → the 5 write tools, `offline_access` → a refresh token; a token lacking a scope doesn't see those tools in `tools/list`, and calling one returns an `isError` tool result, never a 401. OAuth state lives in `oauth_clients` / `oauth_auth_codes` / `oauth_access_tokens` / `oauth_refresh_tokens` (hashes only), owned by a dedicated PostgREST role **`mcp_service`** that only this server can assume (it mints the role's JWT with the legacy secret) — chosen over service-role or `authenticated`-callable RPCs so no app user can reach token-issuing functions. Redirect URIs are allowlisted to `https://claude.ai/api/mcp/auth_callback` and loopback `/callback` (any port). The server holds **no service-role key**.
 
 ```
-Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mcp-server
-                                                                      │ resolve_mcp_token → user_id
-                                                                      │ mint {sub:user_id, role:authenticated} JWT
-                                                                      ▼ query AS user
-                                                                  Supabase ── RLS ──▶ only that user's data
+Claude client ──401──▶ discovery ──▶ DCR/CIMD ──▶ browser: /oauth/authorize (login + consent) ──▶ code ──▶ /oauth/token ──▶ tokens
+Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)──▶ mcp-server
+                                                                             │ token hash → user_id + scopes (oauth_access_tokens, as mcp_service)
+                                                                             │ mint {sub:user_id, role:authenticated} JWT
+                                                                             ▼ register only scope-permitted tools; query AS user
+                                                                         Supabase ── RLS ──▶ only that user's data
 ```
 
-**Tools (read-only):** `list_projects`, `get_project`, `get_project_bom`, `list_rfis`, `list_submittals`, `list_purchasing`, `list_milestones`, `search_catalog`, `search_vendor_contacts`, `list_project_files`, `get_project_file`. Most mirror queries already in `app/src/store/index.ts`; the two file tools (added 2026-07-06) read the `project_files` index and mint download URLs by invoking the `sharepoint-project-files` edge function **with the caller's minted JWT** — the server itself holds no Graph credentials, and the edge function re-verifies the user. Verified end-to-end (token → list → download URL → bytes fetched).
+**Tools.** Read (`mcp:read`): `get_me`, `list_projects`, `get_project`, `get_project_bom`, `list_rfis`, `list_submittals`, `list_purchasing`, `list_milestones`, `search_catalog`, `search_vendor_contacts`, `search_cutsheet_repository`, `list_project_files`, `get_project_file`. Write (`mcp:write`): `create_submittal`, `update_submittal`, `populate_submittal_from_bom`, `attach_cutsheet`, `detach_cutsheet`. The file tools mint download URLs by invoking the `sharepoint-project-files` edge function **with the caller's minted JWT** — the server holds no Graph credentials. Every tool must have an entry in `src/oauth/scopes.ts`; the server refuses to boot otherwise.
 
-**Transport:** stateless MCP Streamable HTTP (`POST /mcp`), `@modelcontextprotocol/sdk`. Per-token in-memory rate limit. `GET /healthz` for Fly.
+**User-facing:** **Settings → Connected apps** lists the user's approved connections (one per refresh-token family: client, read-only vs read & write, connected/last used) with Disconnect / Disconnect all via the `oauth_disconnect` RPC (SECURITY INVOKER, own rows only).
 
-⚠️ **Legacy-key dependency.** The minted JWTs are signed with the project's **legacy HS256 secret** (dashboard "Previous Key" — still trusted for verification, and the same key the app's anon key depends on). Stable as long as that key remains. **When you rotate Supabase keys / revoke the legacy HS256 secret, this server's auth must be upgraded at the same time** (relay Supabase-issued tokens, or OAuth). See `mcp-server/README.md`.
+**Transport:** stateless MCP Streamable HTTP (`POST /mcp`), `@modelcontextprotocol/sdk` 1.30. Per-access-token in-memory rate limit on `/mcp`; per-IP limits on the OAuth endpoints. `GET /healthz` for Fly. **No redirects anywhere** (a redirect drops `Authorization` on hosted Claude).
 
-**Migration to run:** `add_mcp_tokens.sql` (table + `create_mcp_token` / `resolve_mcp_token` RPCs).
+⚠️ **Legacy-key dependency (unchanged by OAuth).** Both minted JWTs (per-user, and `mcp_service`) are signed with the project's **legacy HS256 secret** (dashboard "Previous Key" — still trusted for verification, and the same key the app's anon key depends on). OAuth changed how the caller is identified, not how the server talks to Supabase. **When you rotate Supabase keys / revoke the legacy HS256 secret, this server's Supabase access must be upgraded at the same time.** See `mcp-server/README.md`.
 
-**Deploy:** `cd mcp-server && fly launch --no-deploy && fly secrets set SUPABASE_URL=… SUPABASE_ANON_KEY=… SUPABASE_JWT_SECRET=… && fly deploy`.
+**Migrations:** `add_oauth_server.sql` (tables, `mcp_service` role + grants, RPCs, nightly `pg_cron` job `oauth-cleanup-nightly`) — applied 2026-09-17. `drop_mcp_tokens.sql` removes `mcp_tokens` + its RPCs after cutover.
+
+**Deploy:** CI (`deploy-mcp.yml`) on push to `main` touching `mcp-server/**`; secrets (`PUBLIC_BASE_URL`, optional admin client) must be set first. Manual: `cd mcp-server && fly deploy --remote-only`. Dev scripts: `scripts/verify-mcp-service-role.mts` (PostgREST honours the role), `scripts/oauth-smoke.mts` (full token lifecycle without a browser).
 
 ---
 
@@ -731,6 +738,9 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - `bug-screenshots` is a **public** Storage bucket — screenshots are readable by anyone with the object URL. **Open** — deferred from the 2026-07 security pass.
 - Several Bid Leveling RLS policies (`Authenticated users can update bid leveling sessions`) are intentionally permissive — any authenticated user can update any session. May tighten when concurrency matters.
 - **Design decision (intended):** every authenticated user can read all projects and self-add to any project team (see the project access model note in §3). Safe against escalation now that self-promote-to-admin is closed (2026-07), but confirm org-wide visibility is acceptable for the team.
+- **MCP consent page handles passwords on the MCP origin.** Because the SPA and `mcp-server` are separate Fly apps with no shared session, the OAuth consent page collects the user's Project Tools email/password itself (verified via Supabase Auth's password grant, session signed out immediately). It's branded, rate-limited (10/min/IP), `no-store`, `no-referrer`, frame-denied — but it is a second place staff type their password, on a `fly.dev` host. A custom Instrata domain would remove the "looks unfamiliar" concern; SSO/MFA later would mean switching to the SPA-redirect variant described in the implementation plan §2. **Open by design.**
+- **MCP `mcp:write` denial shape.** The auth spec asked for a JSON-RPC error (`-32003`); the SDK reports a scope-hidden tool as an `isError` tool result (`MCP error -32602: Tool … disabled`). Same intent (never a 401), documented in the README. **Accepted deviation.**
+- *Resolved 2026-09-17 (OAuth cutover):* placeholder MCP auth — pasted personal tokens, `?key=` and `/mcp/<token>` URL forms, `mcp_tokens` + `resolve_mcp_token` — replaced by the OAuth 2.1 server in §8.
 - *Resolved in the 2026-07 security pass:* self-promote-to-admin (profiles trigger); unauthenticated D-Tools + `sharepoint-cutsheet` functions; `monday-webhook` forgery (shared secret); `resolve_mcp_token` anon grant; OAuth state signing; `review_runs`/`review_flags` `with check(true)`. See §10.
 
 **Schema / Data Model**
@@ -767,7 +777,7 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 - React 19 + Vite 8 + Tailwind 4 is the bleeding edge; expect ecosystem friction (some libs still emit React 18-era warnings).
 
 **Deployment**
-- **CI deploys only the frontend.** `.github/workflows/deploy.yml` runs `flyctl deploy` (root `fly.toml` → app `instrata-project-tools`) on every push to `main`. It does **not** deploy the MCP server — `mcp-server` must be deployed manually (`cd mcp-server && fly deploy --remote-only`, its own `fly.toml` → `instrata-project-tools-mcp`). Edge functions deploy separately via `npx supabase functions deploy <name>` (config in `supabase/config.toml`); `functions deploy` never deletes server-side functions — removing one requires `functions delete`.
+- **Two CI deploys.** `.github/workflows/deploy.yml` runs `flyctl deploy` (root `fly.toml` → app `instrata-project-tools`) on every push to `main`; `.github/workflows/deploy-mcp.yml` deploys `mcp-server/` (its own `fly.toml` → `instrata-project-tools-mcp`, token `FLY_API_TOKEN_MCP`) on pushes to `main` that touch `mcp-server/**`. Because the MCP deploy fires on merge, any new Fly secret or migration the server needs must be in place **before** merging. Edge functions deploy separately via `npx supabase functions deploy <name>` (config in `supabase/config.toml`); `functions deploy` never deletes server-side functions — removing one requires `functions delete`.
 - `supabase` CLI is a root devDep (run via `npx supabase`); migrations are run **manually in the SQL Editor** per migration file headers — files use non-timestamped names so `supabase db push` is a no-op.
 
 **Docs**
@@ -781,6 +791,17 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <token>)──▶ mc
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-09-17 — MCP server: OAuth 2.1 replaces placeholder token auth
+The placeholder MCP auth (a personal token pasted as a header, or embedded in the URL as `?key=` / `/mcp/<token>`) stopped working with claude.ai custom connectors, which only offer OAuth or no-auth and start OAuth discovery on the first 401. `mcp-server` is now its own OAuth 2.1 authorization server. Spec `Product Spec/project-tools-mcp-auth-spec.md`; design + status `Product Spec/project-tools-mcp-auth-implementation-plan.md`; §8 rewritten.
+
+- **Flow.** 401 on `/mcp` with `WWW-Authenticate: resource_metadata=…` → RFC 9728 / 8414 discovery at the same origin → client registration (DCR at `/oauth/register`; CIMD for Claude Code; or an env-configured admin client for claude.ai Advanced settings) → `/oauth/authorize` renders the server's **own login + consent page** (Project Tools email/password verified against Supabase Auth; scopes and redirect host shown, loopback warning) → `POST /oauth/consent` issues a one-time code → `/oauth/token` (PKCE S256 required, form-urlencoded, Basic or body client auth) → opaque access token 1 h + refresh token 30 d. Refresh tokens rotate; replaying a rotated one revokes the family. `/oauth/revoke` per RFC 7009. Redirect URIs allowlisted to the claude.ai callback + loopback `/callback` (any port). No redirects on any path.
+- **Built on the SDK.** `@modelcontextprotocol/sdk` bumped 1.29 → 1.30; its `server/auth` handlers (authorize/token/register/revoke/metadata, `requireBearerAuth`) do the protocol work. `mcp-server/src/oauth/` (`provider`, `clients`, `store`, `consent`, `metadata`, `scopes`, `tokens`) supplies the Supabase-backed provider and our page. Metadata documents are hand-built because the SDK router can't emit `/oauth/*` paths, a root-level PRM, or `client_id_metadata_document_supported`.
+- **Storage + access model — `add_oauth_server.sql` (applied).** Four hash-only tables (`oauth_clients`, `oauth_auth_codes`, `oauth_refresh_tokens`, `oauth_access_tokens`) owned by a new PostgREST role **`mcp_service`** (nologin, granted to `authenticator`); the server mints that role's JWT with the legacy secret, so only it can read/write OAuth state — no service-role key, and no `authenticated`-callable token RPCs an app user could abuse. Atomic RPCs `oauth_consume_auth_code`, `oauth_rotate_refresh_token` (rotation + reuse detection in one transaction), `oauth_revoke_family`; `oauth_disconnect` for the app; `oauth_cleanup()` scheduled nightly via `pg_cron` (`oauth-cleanup-nightly`, extension enabled same day). Supabase's default table grants to anon/authenticated are explicitly revoked. Verified through PostgREST with `scripts/verify-mcp-service-role.mts` (200 as `mcp_service`, 403 as `authenticated`, 401 as `anon`).
+- **Scopes gate tools.** `mcp:read` (13 read tools), `mcp:write` (5 submittal write tools), `offline_access`. `toolHelpers.scopedRegistrar` registers-then-disables tools the token lacks, so `tools/list` reflects the grant; startup asserts every tool has a scope in `src/oauth/scopes.ts`. Tool bodies unchanged.
+- **Removed.** `resolveToken`, the `?key=` and `/mcp/:key` routes, the Settings "Connect Claude" token card. New **Settings → Connected apps** card lists the user's grants (client, read-only vs read & write, connected / last used) with Disconnect / Disconnect all. `drop_mcp_tokens.sql` (table + `create_mcp_token` / `resolve_mcp_token`) to run after production cutover.
+- **Config.** New required `PUBLIC_BASE_URL` (issuer; server won't boot without it), optional `OAUTH_ADMIN_CLIENT_ID` / `_SECRET`, TTL overrides. `deploy-mcp.yml` deploys on merge, so secrets go in first.
+- **Verified locally against production Supabase:** spec acceptance A + D (37 probes), and the full token lifecycle via `scripts/oauth-smoke.mts` (code exchange, replay → `invalid_grant`, `tools/list` = 18 tools, refresh rotation, family revocation on reuse, scope narrowing/widening, read-only grant hides write tools, revoke). Still to run against Fly: real-client tests C1–C4.
 
 ### 2026-07-14 — Export BoM to Excel (branded, from the Project Quote)
 An **Export BoM** button in the Project Quote header rebuilds the two-tab, Instrata-branded workbook the Claude cowork skill produced, straight from the already-ingested BoM. Commit `b72425f`.
