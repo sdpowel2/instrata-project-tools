@@ -42,6 +42,7 @@ export function authorizationServerMetadata(): OAuthMetadata {
     revocation_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
     scopes_supported: [...SCOPES],
     client_id_metadata_document_supported: true,
+    authorization_response_iss_parameter_supported: true,
   };
 }
 

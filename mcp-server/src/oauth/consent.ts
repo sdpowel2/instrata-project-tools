@@ -21,7 +21,7 @@ import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handle
 import type { AuthorizationParams, OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { config } from '../config.js';
-import { MCP_RESOURCE_URL, OAUTH_PATHS } from './metadata.js';
+import { ISSUER, MCP_RESOURCE_URL, OAUTH_PATHS } from './metadata.js';
 import { SCOPE_LABELS, isSupportedScope, resolveRequestedScopes, unsupportedScopes } from './scopes.js';
 import { insertAuthCode } from './store.js';
 import { randomToken, sha256Hex } from './tokens.js';
@@ -220,6 +220,7 @@ export function consentRouter(provider: OAuthServerProvider): Router {
       const target = new URL(body.redirect_uri);
       for (const [k, v] of Object.entries(qs)) target.searchParams.set(k, v);
       if (body.state) target.searchParams.set('state', body.state);
+      target.searchParams.set('iss', ISSUER); // RFC 9207 issuer identification
       setPageHeaders(res);
       res.redirect(302, target.href);
     };

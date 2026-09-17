@@ -69,6 +69,61 @@ app.use(express.json({ limit: '8mb' }));
 app.get('/', (_req, res) => res.json({ ok: true, service: SERVER_INFO.name }));
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
+/**
+ * Access log for the OAuth endpoints and /mcp: method, path, status, ms, and
+ * for 4xx/5xx the OAuth error code + description the client was sent. Never
+ * logs tokens, codes, verifiers, or the consent form body. Client ids are
+ * logged (they identify software, not people); the consent email is reduced
+ * to its domain.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!req.path.startsWith('/oauth/') && req.path !== '/mcp' && !req.path.startsWith('/.well-known/')) return next();
+  const started = Date.now();
+  let errorBody: { error?: string; error_description?: string } | undefined;
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    if (res.statusCode >= 400 && body && typeof body === 'object') errorBody = body as typeof errorBody;
+    return originalJson(body);
+  }) as Response['json'];
+  const host = (u: unknown): string => {
+    try {
+      return new URL(String(u)).host;
+    } catch {
+      return '?';
+    }
+  };
+  res.on('finish', () => {
+    try {
+      const src = req.method === 'POST' ? (req.body as Record<string, unknown> | undefined) : (req.query as Record<string, unknown>);
+      const parts: string[] = [];
+      if (src) {
+        if (typeof src.grant_type === 'string') parts.push(`grant=${src.grant_type}`);
+        if (typeof src.client_id === 'string') parts.push(`client=${src.client_id}`);
+        if (typeof src.decision === 'string') parts.push(`decision=${src.decision}`);
+        if (typeof src.email === 'string') parts.push(`email=*@${src.email.split('@')[1] ?? '?'}`);
+        if (typeof src.redirect_uri === 'string') parts.push(`redirect=${host(src.redirect_uri)}`);
+        if (src.code_challenge) parts.push('pkce=yes');
+        if (src.resource) parts.push(`resource=${String(src.resource)}`);
+      }
+      const loc = res.getHeader('location');
+      if (typeof loc === 'string') {
+        try {
+          const u = new URL(loc);
+          parts.push(`→ ${u.host}${u.pathname} [${[...u.searchParams.keys()].join(',')}]`);
+        } catch {
+          parts.push('→ (unparseable location)');
+        }
+      }
+      if (errorBody?.error) parts.push(`error=${errorBody.error}${errorBody.error_description ? ` (${errorBody.error_description})` : ''}`);
+      const ua = req.headers['user-agent'] ?? '';
+      console.log(`[http] ${req.method} ${req.path} ${res.statusCode} ${Date.now() - started}ms ${parts.join(' ')} ua="${ua.slice(0, 60)}"`);
+    } catch (err) {
+      console.error('[http] access log failed:', err);
+    }
+  });
+  next();
+});
+
 // ── OAuth 2.1 authorization server ────────────────────────────────────────────
 // Per-IP limits per spec §9 (30 req/min on token + register). Discovery docs
 // are static and unlimited.

@@ -115,8 +115,9 @@ function pinnedCimdClient(clientId: string): OAuthClientInformationFull | undefi
   if (!pinned) return undefined;
   console.warn(`[oauth] CIMD using pinned metadata for ${clientId}`);
   const client: OAuthClientInformationFull = { ...pinned, client_id: clientId };
-  // Short cache so we retry the live document soon rather than in an hour.
-  cimdCache.set(clientId, { client, expiresAt: Date.now() + 5 * 60 * 1000 });
+  // Same TTL as a live hit: every failed live attempt costs seconds on the
+  // token endpoint (the 403 arrives slowly), and Claude's budget there is 10 s.
+  cimdCache.set(clientId, { client, expiresAt: Date.now() + CIMD_CACHE_TTL_MS });
   upsertClientRow(toRow(client, 'cimd')).catch((err) => console.error('[oauth] CIMD mirror failed:', err));
   return client;
 }
