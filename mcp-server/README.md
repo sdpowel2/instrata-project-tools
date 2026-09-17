@@ -89,7 +89,13 @@ redirect-URI allowlist:
   `https://claude.ai/oauth/claude-code-client-metadata`). Fetched with a 5 s
   timeout and SSRF guard, validated, cached for an hour. Redirect URIs in the
   document that aren't on the allowlist are dropped rather than failing the
-  whole client, since we don't author that document.
+  whole client, since we don't author that document. **Pinned fallback:**
+  claude.ai's edge has returned 403 to this fetch from Fly's egress, so when
+  the live fetch fails for `https://claude.ai/oauth/mcp-oauth-client-metadata`
+  (claude.ai) or `…/claude-code-client-metadata` (Claude Code) the server uses
+  a pinned copy of the document (`KNOWN_CIMD_CLIENTS` in `src/oauth/clients.ts`)
+  and retries the live one after 5 minutes. Safe because those documents'
+  redirect URIs are exactly our allowlist.
 - **Admin pre-registered client** — `OAUTH_ADMIN_CLIENT_ID` (+ optional
   `OAUTH_ADMIN_CLIENT_SECRET`) from env. An Instrata admin can paste these into
   the claude.ai connector's Advanced settings to bypass DCR entirely. Not a DB
