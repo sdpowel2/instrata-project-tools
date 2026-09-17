@@ -116,7 +116,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       }
       if (errorBody?.error) parts.push(`error=${errorBody.error}${errorBody.error_description ? ` (${errorBody.error_description})` : ''}`);
       const ua = req.headers['user-agent'] ?? '';
-      console.log(`[http] ${req.method} ${req.path} ${res.statusCode} ${Date.now() - started}ms ${parts.join(' ')} ua="${ua.slice(0, 60)}"`);
+      // originalUrl: by 'finish' time req.path reflects the mounted router ('/'), not the request.
+      const path = req.originalUrl.split('?')[0];
+      console.log(`[http] ${req.method} ${path} ${res.statusCode} ${Date.now() - started}ms ${parts.join(' ')} ua="${ua.slice(0, 60)}"`);
     } catch (err) {
       console.error('[http] access log failed:', err);
     }

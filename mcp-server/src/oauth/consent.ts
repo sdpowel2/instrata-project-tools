@@ -57,9 +57,16 @@ function setPageHeaders(res: Response): void {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  // form-action must include the redirect targets, not just 'self': Chrome
+  // applies it to the 302 that follows a form POST, so `'self'` alone silently
+  // blocks the hop back to claude.ai / the loopback callback and leaves the
+  // user stuck on the page (seen in production 2026-09-17). The list mirrors
+  // the redirect allowlist in clients.ts.
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'none'; style-src 'unsafe-inline'; " +
+      "form-action 'self' https://claude.ai http://localhost:* http://127.0.0.1:*; " +
+      "frame-ancestors 'none'; base-uri 'none'",
   );
 }
 
