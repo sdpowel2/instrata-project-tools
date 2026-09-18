@@ -36,6 +36,20 @@ function dedupKey(manufacturer: string, model: string): string {
   return `${manufacturer.trim().toLowerCase()}|||${model.trim().toLowerCase()}`;
 }
 
+type RoomQty = { room: string; qty: number };
+
+/** Merge two per-room quantity lists, summing qty where the same room appears
+ *  in both. Twin of app/src/utils/submittalExclusions.ts mergeLocations. */
+function mergeLocations(a: RoomQty[], b: RoomQty[]): RoomQty[] {
+  const merged: RoomQty[] = a.map((l) => ({ ...l }));
+  for (const loc of b) {
+    const hit = merged.find((l) => l.room === loc.room);
+    if (hit) hit.qty += loc.qty;
+    else merged.push({ ...loc });
+  }
+  return merged;
+}
+
 /** Display name for a repo cutsheet: the filename tail of its SharePoint path. */
 function pathTail(sharepointPath: string): string {
   return sharepointPath.split('/').pop() ?? sharepointPath;
@@ -251,8 +265,20 @@ export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClie
       for (const item of eligible) {
         const key = dedupKey(item.manufacturer ?? '', item.model ?? '');
         const existing = consolidated.get(key);
-        if (existing) existing.qty += item.qty;
-        else consolidated.set(key, { ...item });
+        if (existing) {
+          existing.qty += item.qty;
+          // The DTools sync splits one part into several BoM rows when it is
+          // priced differently per row (e.g. a $0 OFE/CO copy next to the
+          // priced one). Merge the room lists so the submittal's BoM-by-Room
+          // covers every room, not just the first row's.
+          existing.locations = mergeLocations(existing.locations ?? [], item.locations ?? []);
+          if (!existing.cut_sheet_url && item.cut_sheet_url) {
+            existing.cut_sheet_url = item.cut_sheet_url;
+            existing.cut_sheet_name = item.cut_sheet_name;
+          }
+        } else {
+          consolidated.set(key, { ...item, locations: [...(item.locations ?? [])] });
+        }
       }
       const rows = Array.from(consolidated.values()).map((c, idx) => ({
         submittal_id,

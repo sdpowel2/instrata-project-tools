@@ -18,7 +18,7 @@ import type {
   ProjectDocument, ProjectDocumentType,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { isExcludedFromSubmittal } from '../utils/submittalExclusions';
+import { isExcludedFromSubmittal, mergeLocations } from '../utils/submittalExclusions';
 import {
   parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
 } from '../utils/reviewEngine';
@@ -1708,6 +1708,16 @@ export const useStore = create<AppState>((set, get) => ({
       const existing = map.get(key);
       if (existing) {
         existing.qty += item.qty;
+        // The DTools sync groups BoM rows by manufacturer+model+unitCost, so
+        // the same part priced two ways (e.g. a $0 OFE/CO copy alongside the
+        // priced row) arrives as separate rows, each with its own room list.
+        // Merge the rooms too — otherwise the printed "BoM by Room" only
+        // shows the first row's rooms and silently drops the rest.
+        existing.locations = mergeLocations(existing.locations, item.locations);
+        if (!existing.cutSheetData && item.cutSheetData) {
+          existing.cutSheetData = item.cutSheetData;
+          existing.cutSheetName = item.cutSheetName;
+        }
       } else {
         map.set(key, { manufacturer: item.manufacturer, model: item.model, description: item.description, category: item.category, qty: item.qty, locations: [...item.locations], cutSheetData: item.cutSheetData, cutSheetName: item.cutSheetName });
       }

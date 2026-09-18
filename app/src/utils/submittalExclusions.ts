@@ -14,7 +14,7 @@
 // surfaces the excluded list so the user can add anything back manually
 // when an edge case warrants it.
 
-import type { ProjectBoMItem, SubmittalItem } from '../types';
+import type { ProjectBoMItem, SubmittalItem, SubmittalItemLocation } from '../types';
 
 // Twin: mcp-server/src/submittalTools.ts copies this list for its server-side
 // populate_submittal_from_bom tool. Keep the two in sync.
@@ -104,4 +104,24 @@ export function listExcludedForSubmittal(
   return Array.from(grouped.values()).sort((a, b) =>
     a.manufacturer.localeCompare(b.manufacturer) || a.model.localeCompare(b.model),
   );
+}
+
+/**
+ * Merge two per-room quantity lists, summing qty where the same room appears
+ * in both. Used when populate consolidates duplicate manufacturer+model BoM
+ * rows: the DTools sync splits one part into several rows when it is priced
+ * differently per row (e.g. a $0 OFE/CO copy next to the priced one), and
+ * each row carries only its own rooms.
+ */
+export function mergeLocations(
+  a: SubmittalItemLocation[],
+  b: SubmittalItemLocation[],
+): SubmittalItemLocation[] {
+  const merged: SubmittalItemLocation[] = a.map((l) => ({ ...l }));
+  for (const loc of b) {
+    const hit = merged.find((l) => l.room === loc.room);
+    if (hit) hit.qty += loc.qty;
+    else merged.push({ ...loc });
+  }
+  return merged;
 }
