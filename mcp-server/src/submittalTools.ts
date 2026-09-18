@@ -32,8 +32,18 @@ function rlsDenied(error: { code?: string; message?: string } | null): boolean {
   return error.code === '42501' || /row-level security/i.test(error.message ?? '');
 }
 
-function dedupKey(manufacturer: string, model: string): string {
+/** manufacturer|||model, lowercased — the key the sharepoint-cutsheet
+ *  `lookupBatch` op returns its matches under. */
+function pairKey(manufacturer: string, model: string): string {
   return `${manufacturer.trim().toLowerCase()}|||${model.trim().toLowerCase()}`;
+}
+
+/** Populate-from-BoM consolidation key: manufacturer + model + owner-furnished.
+ *  Rows that differ only by unit cost merge; an OFE copy of a part stays a
+ *  separate line item. Twin of app/src/utils/submittalExclusions.ts
+ *  submittalDedupKey — keep in sync. */
+function dedupKey(manufacturer: string, model: string, ownerFurnished?: boolean | null): string {
+  return `${pairKey(manufacturer, model)}|||${ownerFurnished ? 'ofe' : 'std'}`;
 }
 
 type RoomQty = { room: string; qty: number };
@@ -250,7 +260,7 @@ export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClie
 
       const { data: bom, error: bomErr } = await supa
         .from('project_bom_items')
-        .select('manufacturer, model, description, category, qty, item_type, locations, cut_sheet_url, cut_sheet_name')
+        .select('manufacturer, model, description, category, qty, item_type, owner_furnished, locations, cut_sheet_url, cut_sheet_name')
         .eq('project_id', projectId)
         .order('sort_order', { ascending: true });
       if (bomErr) return fail(bomErr.message);
@@ -263,14 +273,15 @@ export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClie
       );
       const consolidated = new Map<string, (typeof bom)[number] & { qty: number }>();
       for (const item of eligible) {
-        const key = dedupKey(item.manufacturer ?? '', item.model ?? '');
+        // Dedupe by manufacturer+model+OFE. The DTools sync splits one part
+        // into several BoM rows when it is priced differently per row — in
+        // practice a $0 owner-furnished copy next to the priced one. Same-
+        // price-class rows merge (qty summed, rooms merged); OFE vs non-OFE
+        // copies stay separate line items so the submittal can flag them.
+        const key = dedupKey(item.manufacturer ?? '', item.model ?? '', item.owner_furnished);
         const existing = consolidated.get(key);
         if (existing) {
           existing.qty += item.qty;
-          // The DTools sync splits one part into several BoM rows when it is
-          // priced differently per row (e.g. a $0 OFE/CO copy next to the
-          // priced one). Merge the room lists so the submittal's BoM-by-Room
-          // covers every room, not just the first row's.
           existing.locations = mergeLocations(existing.locations ?? [], item.locations ?? []);
           if (!existing.cut_sheet_url && item.cut_sheet_url) {
             existing.cut_sheet_url = item.cut_sheet_url;
@@ -293,6 +304,7 @@ export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClie
         cut_sheet_url: c.cut_sheet_url ?? null,
         cut_sheet_name: c.cut_sheet_name ?? null,
         sort_order: idx,
+        owner_furnished: c.owner_furnished === true,
       }));
 
       if (replace && (existingCount ?? 0) > 0) {
@@ -304,7 +316,7 @@ export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClie
       const { data: inserted, error: insErr } = await supa
         .from('submittal_items')
         .insert(rows)
-        .select('id, manufacturer, model, description, category, qty, sort_order, cutsheet_repository_id, cutsheet_staging_id, cut_sheet_url, cut_sheet_name');
+        .select('id, manufacturer, model, description, category, qty, owner_furnished, sort_order, cutsheet_repository_id, cutsheet_staging_id, cut_sheet_url, cut_sheet_name');
       if (rlsDenied(insErr)) return fail(NOT_MEMBER_MSG);
       if (insErr) return fail(insErr.message);
 
@@ -325,7 +337,7 @@ export function registerSubmittalTools(server: ToolRegistrar, supa: SupabaseClie
         } else {
           const matches = lookupData?.matches ?? {};
           for (const item of candidates) {
-            const hit = matches[dedupKey(item.manufacturer, item.model)];
+            const hit = matches[pairKey(item.manufacturer, item.model)];
             if (!hit) continue;
             const name = pathTail(hit.sharepoint_path);
             const { error: updErr } = await supa

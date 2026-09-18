@@ -176,6 +176,7 @@ DTools pricing parity (`add_dtools_pricing_parity.sql`): `labor_type` text — f
 - `id` uuid PK
 - `submittal_id` uuid → `submittals` CASCADE
 - Columns mirror BoM display: `manufacturer`, `model`, `description`, `category`, `qty`, `notes`, `cut_sheet_url`, `cut_sheet_name`, `locations` jsonb, `sort_order`
+- `owner_furnished` boolean default false (`add_submittal_item_owner_furnished.sql`) — DTools `IsOfe` carried through from `project_bom_items`. Populate-from-BoM keeps an OFE copy of a part as a **separate row** from the Instrata-supplied copy (dedupe key manufacturer+model+ofe), so one model can appear twice in a submittal; the PDF flags the OFE lines and prints the shared cutsheet once.
 - **Cutsheet repository links** (added by cutsheet migrations):
   - `cutsheet_repository_id` uuid → `cutsheet_repository` ON DELETE SET NULL — auto-attached match
   - `cutsheet_staging_id` uuid → `cutsheet_staging` ON DELETE SET NULL — pending admin review
@@ -792,6 +793,17 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-09-18 — Submittal builder: owner-furnished (OFE) gear now flagged per line on the printed BoM
+Follow-up to the room-merge fix below, same project. On Nasdaq DC the Samsung displays and Logitech Rally kit are **owner-furnished in some rooms and Instrata-supplied in others**; DTools carries that as `IsOfe` per item and the sync already lands it on `project_bom_items.owner_furnished` (verified: every `$0` duplicate row is `owner_furnished=true`, its priced twin `false`). Populate-from-BoM was merging the OFE and non-OFE copies into one submittal line, so the flag never reached the submittal or the PDF.
+
+- **Populate keeps OFE and non-OFE copies as separate line items.** Dedupe key is now manufacturer + model + owner-furnished (`submittalDedupKey` in `utils/submittalExclusions.ts`; MCP twin `dedupKey` in `submittalTools.ts`). Rows that differ only by unit cost still merge (qty summed, rooms merged via `mergeLocations`); an OFE copy becomes its own item carrying its own rooms. Nasdaq DC: 62 → 70 line items, 15 of them OFE, 0 rooms missing.
+- **New column `submittal_items.owner_furnished`** (`add_submittal_item_owner_furnished.sql`, boolean default false — **run in the SQL Editor before deploying**; PostgREST rejects inserts naming an unknown column). `SubmittalItem.ownerFurnished` in `types.ts`; store row mappers read/write it; populate sets it.
+- **Where it shows.** `SubmittalDetail` items table: purple **OFE** badge beside the model (same styling as the BoM-by-location view). **Submittal PDF** "Bill of Materials by Room": new right-hand **OFE** column (widths rebalanced to 115/130/170/40/45 of 504), "OFE = Owner Furnished Equipment" legend in the section header when any line is flagged, and room subtotals read `… total qty (N OFE)`. Within a room the same model can now appear twice — once supplied by Instrata, once by the owner — which is the intended "different listing".
+- **Cutsheets print once per model.** The OFE and non-OFE items both get the same repository cutsheet from auto-attach; the PDF's TOC + cutsheet section dedupe by manufacturer+model so the package doesn't embed the same PDF twice.
+- **Purchasing lookup.** `PurchasingDetail`'s vendor / sold-in-price lookup now keys `manufacturer|model|ofe` with a plain-key fallback that prefers the priced (non-OFE) BoM row, so an OFE line resolves to its `$0` row and older single-line items never pick up the `$0` copy by accident.
+- **MCP.** `populate_submittal_from_bom` selects/consolidates/inserts `owner_furnished`; `list_submittals` (`include_items`) returns it per item.
+- **Not changed.** The DTools transform's `Manufacturer||Model||UnitCost` grouping — OFE rows already split naturally at `$0`, and the Gross Margin math depends on that key. Existing submittals need a re-pull from BoM to pick up the split + flag.
 
 ### 2026-09-18 — Submittal builder: BoM-by-Room dropped rooms when a part was split across BoM rows
 Reported on **Nasdaq DC (26-MA-0463)**: the Samsung QB55C sits in Office 303 on the project BoM, but the printed submittal's "Bill of Materials by Room" section only listed it under the two huddle rooms. The PDF was faithful to the saved submittal items — the rooms were lost earlier, at populate time.

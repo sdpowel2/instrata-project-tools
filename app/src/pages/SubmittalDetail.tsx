@@ -413,7 +413,12 @@ export function SubmittalDetail() {
                 <tr key={item.id} className={`hover:bg-surface/50 ${i % 2 === 1 ? 'bg-surface/30' : ''}`}>
                   <td className="px-3 py-3 text-text-secondary"><GripVertical size={14} className="cursor-grab" /></td>
                   <td className="px-4 py-3 text-sm font-medium text-text-primary">{item.manufacturer}</td>
-                  <td className="px-4 py-3 text-sm font-mono text-text-secondary">{item.model}</td>
+                  <td className="px-4 py-3 text-sm font-mono text-text-secondary">
+                    {item.model}
+                    {item.ownerFurnished && (
+                      <span className="ml-2 align-middle text-[9px] font-sans font-semibold bg-purple-100 text-purple-700 px-1 rounded" title="Owner Furnished Equipment">OFE</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-sm text-text-secondary max-w-[200px] truncate">{item.description}</td>
                   <td className="px-4 py-3"><span className="text-xs font-medium px-2 py-0.5 rounded bg-surface text-text-secondary">{item.category}</span></td>
                   <td className="px-4 py-3 text-sm text-text-primary text-center font-medium">{item.qty}</td>

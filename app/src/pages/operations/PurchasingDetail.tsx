@@ -70,14 +70,20 @@ export function PurchasingDetailPage() {
   // Vendor (priced_from) and sold-in price (unit_cost) live on
   // project_bom_items, not on submittal_items. Build a single lookup keyed
   // by manufacturer|model so both columns can resolve in O(1).
+  //
+  // The DTools sync can split one part into an owner-furnished ($0) row and
+  // an Instrata-supplied row, and populate-from-BoM keeps those as separate
+  // submittal items. Key on manufacturer|model|ofe so each submittal item
+  // resolves to its own BoM row; the plain manufacturer|model key falls back
+  // to the priced (non-OFE) row so older items never pick up the $0 copy.
   const bomLookup = useMemo(() => {
     const m = new Map<string, { pricedFrom?: string; unitCost?: number }>();
     for (const b of projectBoM) {
       if (b.projectId !== projectId) continue;
-      m.set(`${b.manufacturer.toLowerCase()}|||${b.model.toLowerCase()}`, {
-        pricedFrom: b.pricedFrom,
-        unitCost: b.unitCost,
-      });
+      const base = `${b.manufacturer.toLowerCase()}|||${b.model.toLowerCase()}`;
+      const entry = { pricedFrom: b.pricedFrom, unitCost: b.unitCost };
+      m.set(`${base}|||${b.ownerFurnished ? 'ofe' : 'std'}`, entry);
+      if (!b.ownerFurnished || !m.has(base)) m.set(base, entry);
     }
     return m;
   }, [projectBoM, projectId]);
@@ -321,7 +327,9 @@ function ManufacturerSection({
               const pi = itemBySubmittalItemId.get(submittalItem.id);
               const status = computePurchasingDisplayStatus({ submittal, submittalItem, purchasingItem: pi });
               const editable = isPurchasingRowEditable(status);
-              const bomMatch = bomLookup.get(`${submittalItem.manufacturer.toLowerCase()}|||${submittalItem.model.toLowerCase()}`);
+              const bomBaseKey = `${submittalItem.manufacturer.toLowerCase()}|||${submittalItem.model.toLowerCase()}`;
+              const bomMatch = bomLookup.get(`${bomBaseKey}|||${submittalItem.ownerFurnished ? 'ofe' : 'std'}`)
+                ?? bomLookup.get(bomBaseKey);
               const vendor = bomMatch?.pricedFrom;
               const soldIn = bomMatch?.unitCost;
               const ship = effectiveShipTo(pi, mfrDefault);

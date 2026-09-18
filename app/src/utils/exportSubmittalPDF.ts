@@ -249,7 +249,19 @@ export async function exportSubmittalPDF(
   // (repository, staging, legacy storage). Previously only checked
   // cutSheetData, so SharePoint-attached items silently produced PDFs
   // with missing cutsheet pages.
-  const itemsWithCutsheets = sortedItems.filter(hasCutsheet);
+  //
+  // One cutsheet per manufacturer+model: populate-from-BoM keeps an
+  // owner-furnished copy of a part as a separate line item from the
+  // Instrata-supplied copy (so the BoM-by-Room can flag it), and auto-attach
+  // gives both the same repository cutsheet. Print it once.
+  const seenCutsheetKeys = new Set<string>();
+  const itemsWithCutsheets = sortedItems.filter((item) => {
+    if (!hasCutsheet(item)) return false;
+    const key = `${item.manufacturer.trim().toLowerCase()}|||${item.model.trim().toLowerCase()}`;
+    if (seenCutsheetKeys.has(key)) return false;
+    seenCutsheetKeys.add(key);
+    return true;
+  });
   if (itemsWithCutsheets.length > 0) {
     tocEntries.push({ label: 'Product Cutsheets', indent: 0, pageRef: 'cutsheets_header' });
     for (const item of itemsWithCutsheets) {
@@ -309,7 +321,8 @@ export async function exportSubmittalPDF(
   const bomStartPage = currentPageNum + 1;
 
   // Gather all rooms from items
-  const roomMap = new Map<string, { manufacturer: string; model: string; description: string; qty: number; notes: string }[]>();
+  type BomLine = { manufacturer: string; model: string; description: string; qty: number; notes: string; ownerFurnished: boolean };
+  const roomMap = new Map<string, BomLine[]>();
   for (const item of sortedItems) {
     if (item.locations && item.locations.length > 0) {
       for (const loc of item.locations) {
@@ -320,6 +333,7 @@ export async function exportSubmittalPDF(
           description: item.description,
           qty: loc.qty,
           notes: item.notes,
+          ownerFurnished: item.ownerFurnished === true,
         });
       }
     }
@@ -334,8 +348,10 @@ export async function exportSubmittalPDF(
       description: i.description,
       qty: i.qty,
       notes: i.notes,
+      ownerFurnished: i.ownerFurnished === true,
     })));
   }
+  const anyOfe = Array.from(roomMap.values()).some((lines) => lines.some((l) => l.ownerFurnished));
 
   let bomPage = pdfDoc.addPage(PageSizes.Letter);
   currentPageNum++;
@@ -344,14 +360,29 @@ export async function exportSubmittalPDF(
   // BOM header
   bomPage.drawRectangle({ x: 0, y: bomY - 4, width: PAGE_W, height: 40, color: NAVY });
   bomPage.drawText('Bill of Materials by Room', { x: MARGIN, y: bomY + 6, size: 18, font: fontBold, color: WHITE });
+  if (anyOfe) {
+    // Legend for the OFE column, right-aligned in the header band.
+    const legend = 'OFE = Owner Furnished Equipment';
+    bomPage.drawText(legend, {
+      x: PAGE_W - MARGIN - fontItalic.widthOfTextAtSize(legend, 8),
+      y: bomY + 9,
+      size: 8,
+      font: fontItalic,
+      color: WHITE,
+    });
+  }
   bomY -= 60;
 
-  // Column definitions for BOM table
+  // Column definitions for BOM table (widths sum to 500 of CONTENT_W 504).
+  // The OFE column flags owner-furnished lines; populate-from-BoM keeps an
+  // OFE copy of a part as its own line item, so within a room the same model
+  // can appear twice — once supplied by Instrata, once by the owner.
   const bomCols = [
-    { label: 'Manufacturer', x: MARGIN, w: 130 },
-    { label: 'Model', x: MARGIN + 130, w: 140 },
-    { label: 'Description', x: MARGIN + 270, w: 175 },
-    { label: 'Qty', x: MARGIN + 445, w: 40 },
+    { label: 'Manufacturer', x: MARGIN, w: 115 },
+    { label: 'Model', x: MARGIN + 115, w: 130 },
+    { label: 'Description', x: MARGIN + 245, w: 170 },
+    { label: 'Qty', x: MARGIN + 415, w: 40 },
+    { label: 'OFE', x: MARGIN + 455, w: 45 },
   ];
 
   const rooms = Array.from(roomMap.keys()).sort((a, b) => {
@@ -399,6 +430,7 @@ export async function exportSubmittalPDF(
         { text: item.model, x: bomCols[1].x + 4, w: bomCols[1].w },
         { text: item.description, x: bomCols[2].x + 4, w: bomCols[2].w },
         { text: String(item.qty), x: bomCols[3].x + 4, w: bomCols[3].w },
+        { text: item.ownerFurnished ? 'OFE' : '', x: bomCols[4].x + 4, w: bomCols[4].w },
       ], fontRegular, 9, BLACK, bg);
       bomY -= 18;
 
@@ -429,7 +461,10 @@ export async function exportSubmittalPDF(
       thickness: 0.5,
       color: MID_GRAY,
     });
-    const subtotalText = sanitize(`${items.length} items - ${roomTotal} total qty`);
+    const roomOfe = items.filter((b) => b.ownerFurnished).reduce((a, b) => a + b.qty, 0);
+    const subtotalText = sanitize(
+      `${items.length} items - ${roomTotal} total qty` + (roomOfe > 0 ? ` (${roomOfe} OFE)` : ''),
+    );
     bomPage.drawText(subtotalText, {
       x: PAGE_W - MARGIN - fontItalic.widthOfTextAtSize(subtotalText, 8),
       y: bomY - 8,
@@ -443,8 +478,9 @@ export async function exportSubmittalPDF(
   addFooter(bomPage, fontRegular, currentPageNum, 'Bill of Materials by Room');
 
   // ===================== CUTSHEETS =====================
-  for (const item of sortedItems) {
-    if (!hasCutsheet(item)) continue;
+  // itemsWithCutsheets is already deduped to one item per manufacturer+model
+  // (see the TOC build above), so an OFE + non-OFE pair prints one cutsheet.
+  for (const item of itemsWithCutsheets) {
 
     try {
       // fetchCutsheetBytes resolves the right source (repository → SharePoint

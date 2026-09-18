@@ -481,6 +481,11 @@ export interface SubmittalItem {
   locations: SubmittalItemLocation[];
   notes: string;
   sortOrder: number;
+  /** Owner-furnished equipment (DTools `IsOfe`). Populate-from-BoM keeps OFE
+   *  and non-OFE copies of the same part as SEPARATE line items so the
+   *  printed BoM-by-Room can flag which rooms' gear the owner supplies.
+   *  Optional so existing callers (CSV import, manual add) default to false. */
+  ownerFurnished?: boolean;
   /** Per-item approval. Defaults to 'pending' if absent. Editable when the
    *  package is Submitted or Revise & Resubmit. When the package is forced
    *  to Approved every item flips to 'approved'. Optional so existing

@@ -142,7 +142,7 @@ export function registerTools(server: ToolRegistrar, supa: SupabaseClient, userI
     async ({ project_id, include_items }) => {
       const cols = include_items
         ? 'id, title, revision, prepared_by, submitted_to, status, notes, created_at, ' +
-          'submittal_items(id, manufacturer, model, description, category, qty, approval_state, sort_order, ' +
+          'submittal_items(id, manufacturer, model, description, category, qty, owner_furnished, approval_state, sort_order, ' +
           'cutsheet_repository_id, cutsheet_staging_id, cut_sheet_url, cut_sheet_name)'
         : 'id, title, revision, prepared_by, submitted_to, status, notes, created_at';
       const { data, error } = await supa

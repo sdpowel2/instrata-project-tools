@@ -18,7 +18,7 @@ import type {
   ProjectDocument, ProjectDocumentType,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { isExcludedFromSubmittal, mergeLocations } from '../utils/submittalExclusions';
+import { isExcludedFromSubmittal, mergeLocations, submittalDedupKey } from '../utils/submittalExclusions';
 import {
   parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
 } from '../utils/reviewEngine';
@@ -192,6 +192,7 @@ function rowToSubmittalItem(r: any): SubmittalItem {
     locations: r.locations ?? [], notes: r.notes ?? '', sortOrder: r.sort_order ?? 0,
     approvalState: (r.approval_state as SubmittalItemApprovalState) ?? 'pending',
     approvalChangedAt: r.approval_changed_at ? toDate(r.approval_changed_at) : undefined,
+    ownerFurnished: r.owner_furnished ?? false,
   };
 }
 function submittalItemToRow(item: Partial<SubmittalItem>): Record<string, any> {
@@ -212,6 +213,7 @@ function submittalItemToRow(item: Partial<SubmittalItem>): Record<string, any> {
   if (item.sortOrder !== undefined) row.sort_order = item.sortOrder;
   if (item.approvalState !== undefined) row.approval_state = item.approvalState;
   if (item.approvalChangedAt !== undefined) row.approval_changed_at = item.approvalChangedAt;
+  if (item.ownerFurnished !== undefined) row.owner_furnished = item.ownerFurnished;
   return row;
 }
 
@@ -1702,24 +1704,26 @@ export const useStore = create<AppState>((set, get) => ({
     const bomItems = get().projectBoM
       .filter((b) => b.projectId === projectId)
       .filter((b) => !isExcludedFromSubmittal(b));
-    const map = new Map<string, { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string }>();
+    const map = new Map<string, { manufacturer: string; model: string; description: string; category: ItemCategory; qty: number; locations: SubmittalItemLocation[]; cutSheetData?: string; cutSheetName?: string; ownerFurnished: boolean }>();
     for (const item of bomItems) {
-      const key = `${item.manufacturer.toLowerCase()}|||${item.model.toLowerCase()}`;
+      // Dedupe by manufacturer+model+OFE. The DTools sync groups BoM rows by
+      // manufacturer+model+unitCost, so the same part arrives as separate
+      // rows when it is priced differently — in practice a $0 owner-furnished
+      // copy alongside the Instrata-supplied one. Rows that differ only by
+      // price are merged (qty summed, rooms merged); OFE vs non-OFE copies
+      // stay separate line items so the submittal can flag which rooms' gear
+      // the owner supplies.
+      const key = submittalDedupKey(item.manufacturer, item.model, item.ownerFurnished);
       const existing = map.get(key);
       if (existing) {
         existing.qty += item.qty;
-        // The DTools sync groups BoM rows by manufacturer+model+unitCost, so
-        // the same part priced two ways (e.g. a $0 OFE/CO copy alongside the
-        // priced row) arrives as separate rows, each with its own room list.
-        // Merge the rooms too — otherwise the printed "BoM by Room" only
-        // shows the first row's rooms and silently drops the rest.
         existing.locations = mergeLocations(existing.locations, item.locations);
         if (!existing.cutSheetData && item.cutSheetData) {
           existing.cutSheetData = item.cutSheetData;
           existing.cutSheetName = item.cutSheetName;
         }
       } else {
-        map.set(key, { manufacturer: item.manufacturer, model: item.model, description: item.description, category: item.category, qty: item.qty, locations: [...item.locations], cutSheetData: item.cutSheetData, cutSheetName: item.cutSheetName });
+        map.set(key, { manufacturer: item.manufacturer, model: item.model, description: item.description, category: item.category, qty: item.qty, locations: [...item.locations], cutSheetData: item.cutSheetData, cutSheetName: item.cutSheetName, ownerFurnished: item.ownerFurnished === true });
       }
     }
     const consolidated = Array.from(map.values());
@@ -1740,6 +1744,7 @@ export const useStore = create<AppState>((set, get) => ({
       cutSheetData: c.cutSheetData,
       cutSheetName: c.cutSheetName,
       sortOrder: idx,
+      ownerFurnished: c.ownerFurnished,
     }));
 
     set((s) => ({

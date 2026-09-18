@@ -125,3 +125,16 @@ export function mergeLocations(
   }
   return merged;
 }
+
+/**
+ * Key used by populate-from-BoM to consolidate BoM rows into submittal line
+ * items: manufacturer + model + owner-furnished. Rows that differ only by
+ * unit cost (the DTools sync splits on price) merge; an owner-furnished copy
+ * of a part stays a separate line item from the Instrata-supplied copy so the
+ * submittal and printed BoM can flag it.
+ *
+ * Twin: mcp-server/src/submittalTools.ts dedupKey. Keep the two in sync.
+ */
+export function submittalDedupKey(manufacturer: string, model: string, ownerFurnished?: boolean): string {
+  return `${submittalKey(manufacturer, model)}|||${ownerFurnished ? 'ofe' : 'std'}`;
+}
