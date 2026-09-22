@@ -9,6 +9,7 @@ import { ProjectOverview } from './pages/ProjectOverview';
 import { SubmittalList } from './pages/SubmittalList';
 import { SubmittalDetail } from './pages/SubmittalDetail';
 import { RFIList } from './pages/RFIList';
+import { ProjectWiki } from './pages/ProjectWiki';
 import { CloseoutDashboard } from './pages/CloseoutDashboard';
 import { OwnerManualPage } from './pages/OwnerManual';
 import { SettingsPage } from './pages/SettingsPage';
@@ -102,6 +103,7 @@ export default function App() {
               <Route path="projects/new" element={<ProjectNew />} />
               <Route path="projects/:projectId" element={<ProjectHome />}>
                 <Route index element={<ProjectOverview />} />
+                <Route path="wiki" element={<ProjectWiki />} />
                 <Route path="review" element={FEATURES.autoReview ? <AutoReviewPage /> : <FeatureOffRedirect />} />
                 <Route path="submittals" element={<SubmittalList />} />
                 <Route path="submittals/:submittalId" element={<SubmittalDetail />} />

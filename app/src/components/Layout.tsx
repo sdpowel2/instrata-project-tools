@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser,
+  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser, NotebookPen,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -122,9 +122,10 @@ export function Layout() {
                 <div className="mt-2"><StatusBadge status={project.status} dot /></div>
               </div>
 
-              {/* Overview — persistent */}
+              {/* Overview + Wiki — persistent; the wiki straddles both phases */}
               <div className="mb-3.5">
                 <SidebarLink to={`/projects/${project.id}`} icon={Home} label="Overview" end />
+                <SidebarLink to={`/projects/${project.id}/wiki`} icon={NotebookPen} label="Project Wiki" />
               </div>
 
               {/* Pre-Sales group */}

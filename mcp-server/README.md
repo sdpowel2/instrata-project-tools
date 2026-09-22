@@ -224,8 +224,27 @@ token needs for the tool to appear (`src/oauth/scopes.ts`).
 | `search_cutsheet_repository` | Approved cutsheet repository search (mfr / model / free text) |
 | `list_project_files` | Project document repository index (SharePoint-backed; filter by category / search) |
 | `get_project_file` | Fresh ~1h download URL for one file (minted by the sharepoint-project-files edge function with the caller's JWT) |
+| `get_project_wiki` | Project wiki context (summary / scope / design basis / status) + the room index (one line per room with status, headline, decision + open-question counts) and blocking counts |
+| `list_project_rooms` | Room index rows; filter by `status`, `room_type`, `entry_kind` |
+| `get_project_room` | One room in full: fields + decisions + questions + labor + linked BoM lines / files. By `room_id`, or `project_id` + `dtools_location` / `room_number` |
+| `list_room_decisions` | Decisions with rationale; scope to a room or project-level, filter by `kind` |
+| `list_project_questions` | Questions log; filter by `severity` / `status` (default: open + answered — the "needs your input" set) |
+| `search_project_wiki` | Full-text search across headlines, detail, validation notes, decision rationale, questions/answers and project context (`search_project_wiki` RPC; web-search syntax; `<b>` marked snippets) |
 
-### Write (`mcp:write` — cutsheet submittal workflow only, `src/submittalTools.ts`)
+### Write (`mcp:write` — project wiki, `src/wikiTools.ts`)
+
+| Tool | Does |
+|------|------|
+| `upsert_project_wiki` | Create or patch the project-level context; only supplied fields change |
+| `upsert_project_room` | Idempotent create-or-update of a room / subsystem, matched by `room_id` else `(project_id, dtools_location)`. `headline` + `room_name` required on create; status defaults `pending` (agent) / `authored` (human). Warns when `typical_of_count` ≠ roster length |
+| `set_room_status` | Status transition with optional headline update |
+| `append_room_decision` | Append a decision (`kind`, one-line `title`, markdown `rationale`, `source_ref`); room-level or project-level. Append-only by design |
+| `set_room_labor` | Replace a room's labor buckets; `0` hours are stored, and the four CSV-required buckets (bench, cabling, commissioning, programming) are filled at 0.00 unless `fill_required_with_zero: false` |
+| `raise_room_question` | Log a question at `open` with `severity` (`functional_conflict` / `estimating_escalation`); moves the room to `escalated` unless `escalate_room: false` |
+| `answer_room_question` | Record the answer (+ optional resolution), optionally log the resulting decision and link it → `resolved`; an `escalated` room with nothing left open becomes `resolved` |
+| `link_room_bom_lines` / `link_room_files` | Populate the room ↔ BoM line / room ↔ project file link tables (duplicates skipped) |
+
+### Write (`mcp:write` — cutsheet submittal workflow, `src/submittalTools.ts`)
 
 | Tool | Does |
 |------|------|
@@ -243,4 +262,7 @@ Notes on writes:
   immediately but should be approved so the repository grows.
 - The BoM filter rules (labor + house manufacturers) are a copy of
   `app/src/utils/submittalExclusions.ts` — keep the two in sync.
+- Wiki writes need `add_project_wiki.sql` applied. The wiki vocabulary
+  (statuses, kinds, labor types) is duplicated in `app/src/lib/projectWiki.ts`
+  — keep the two in sync. Spec: `Product Spec/project-tools-wiki-spec.md`.
 - Adding a tool? Give it a scope in `src/oauth/scopes.ts` or the server won't boot.
