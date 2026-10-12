@@ -40,14 +40,13 @@ export interface ExecuteResult {
 }
 
 export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promise<ExecuteResult> {
-  const { db, gate, cfg } = deps;
+  const { db, cfg } = deps;
+  const gate = deps.gate.fork();
   const live = gate.mode === 'live';
   const correlationId = randomUUID();
   const boardId = cfg.boards.presales;
   if (!boardId) throw new Error('config_boards.presales has no monday board id');
   const columnIdFor = (k: string) => cfg.planner.columns[k]?.columnId;
-  gate.drain();
-
   // ── Outbound writes ──
   let createdId: string | null = null;
   if (plan.create) {

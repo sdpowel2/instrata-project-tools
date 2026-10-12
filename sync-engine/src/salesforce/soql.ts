@@ -42,7 +42,9 @@ export function opportunityQuery(ids: string[]): string {
 export function sweepQueries(since: Date): { opportunities: string; lineItems: string; deletedLineItems: string } {
   const t = soqlDateTime(since);
   return {
-    opportunities: `SELECT Id FROM Opportunity WHERE SystemModstamp >= ${t}`,
+    // Only opportunities that have an AV line. Line-item edits (incl. the AV flag
+    // flipping off) and deletes are caught by the other two queries.
+    opportunities: `SELECT Id FROM Opportunity WHERE SystemModstamp >= ${t} AND Id IN (SELECT OpportunityId FROM OpportunityLineItem WHERE isAVProduct__c = true OR Technology__c = 'AV')`,
     lineItems: `SELECT OpportunityId FROM OpportunityLineItem WHERE SystemModstamp >= ${t}`,
     // Run through /queryAll. Backstop for OLI deletes, which a delete-triggered
     // Flow can't call out for (plan §8.1).

@@ -25,7 +25,7 @@ test('sweep queries use unquoted UTC datetime literals and queryAll for deletes'
   const d = new Date('2026-10-10T12:00:00.123Z');
   assert.equal(soqlDateTime(d), '2026-10-10T12:00:00Z');
   const s = sweepQueries(d);
-  assert.equal(s.opportunities, 'SELECT Id FROM Opportunity WHERE SystemModstamp >= 2026-10-10T12:00:00Z');
+  assert.equal(s.opportunities, "SELECT Id FROM Opportunity WHERE SystemModstamp >= 2026-10-10T12:00:00Z AND Id IN (SELECT OpportunityId FROM OpportunityLineItem WHERE isAVProduct__c = true OR Technology__c = 'AV')");
   assert.match(s.deletedLineItems, /IsDeleted = true/);
 });
 

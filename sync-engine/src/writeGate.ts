@@ -23,6 +23,12 @@ export interface WriteGate {
   readonly mode: SyncMode;
   /** Returns and clears everything recorded since the last drain. */
   drain(): JournalEntry[];
+  /**
+   * A gate with its own empty journal (same mode, same clients). Every operation
+   * — a reconcile pass, a writeback — forks one, so concurrent operations never
+   * see each other's journal entries.
+   */
+  fork(): WriteGate;
   monday: {
     changeColumnValues(boardId: string, itemId: string, values: Record<string, unknown>): Promise<void>;
     /** Returns the new item id, or null in dry run. */
@@ -46,6 +52,7 @@ export function createWriteGate(mode: SyncMode, monday: MondayClient, salesforce
 
   return {
     mode,
+    fork: () => createWriteGate(mode, monday, salesforce),
     drain() {
       const out = journal;
       journal = [];

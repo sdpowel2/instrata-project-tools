@@ -17,8 +17,10 @@
  *   ENGINE_INTERNAL_SECRET     shared with mcp-server + the sync-admin edge function
  * Optional:
  *   DB_SCHEMA                  public (default) | sync_sandbox
- *   MONDAY_API_VERSION         default below — confirm it's inside monday's support window
+ *   MONDAY_API_VERSION         default '2026-07' (monday's "current" version as of 2026-10-11)
  *   SF_API_VERSION             default '66.0' (what the Instrata org serves, checked 2026-10-11)
+ *   PUBLIC_BASE_URL            this app's public origin; defaults to https://<FLY_APP_NAME>.fly.dev
+ *                              (Fly sets FLY_APP_NAME). monday webhook URLs are built from it.
  *   PORT                       default 8080
  */
 
@@ -47,6 +49,14 @@ function schemaName(): string {
   return v;
 }
 
+function publicBaseUrl(): string {
+  const explicit = process.env.PUBLIC_BASE_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const app = process.env.FLY_APP_NAME?.trim();
+  if (app) return `https://${app}.fly.dev`;
+  throw new Error('Set PUBLIC_BASE_URL (or run on Fly, which provides FLY_APP_NAME)');
+}
+
 export interface Env {
   databaseUrl: string;
   dbSchema: string;
@@ -54,6 +64,7 @@ export interface Env {
   monday: { token: string; apiVersion: string; integrationUserId: string; webhookPathSecret: string };
   salesforce: { loginUrl: string; clientId: string; clientSecret: string; apiVersion: string; webhookSecret: string };
   internalSecret: string;
+  publicBaseUrl: string;
   port: number;
 }
 
@@ -64,7 +75,7 @@ export function loadEnv(): Env {
     syncMode: syncMode(),
     monday: {
       token: required('MONDAY_API_TOKEN'),
-      apiVersion: optional('MONDAY_API_VERSION', '2025-10'),
+      apiVersion: optional('MONDAY_API_VERSION', '2026-07'),
       integrationUserId: required('MONDAY_INTEGRATION_USER_ID'),
       webhookPathSecret: required('MONDAY_WEBHOOK_PATH_SECRET'),
     },
@@ -76,6 +87,7 @@ export function loadEnv(): Env {
       webhookSecret: required('SF_WEBHOOK_SECRET'),
     },
     internalSecret: required('ENGINE_INTERNAL_SECRET'),
+    publicBaseUrl: publicBaseUrl(),
     port: Number(optional('PORT', '8080')),
   };
 }

@@ -3,11 +3,16 @@
  * Spec: Product Spec/project-tools-sync-and-queue-spec.md
  * Plan: Product Spec/sync-and-queue-implementation-plan.md
  *
- * This slice: config + drift check at boot, and an internal manual-reconcile
- * endpoint (usable against the sandbox before the Salesforce Flows exist).
- * Webhook ingress, the inbox worker and the schedulers come next.
+ *   POST /webhooks/salesforce          Flow callouts (X-AVSS-Secret)
+ *   POST /webhooks/monday/:secret      monday webhooks (path secret + challenge)
+ *   GET  /status                       internal
+ *   POST /admin/reconcile/:id          internal — manual re-sync (also the MCP tool)
+ *   POST /admin/sweep                  internal — run the safety sweep now
+ *
+ * Background: inbox drain (every 2 s, and immediately on ingest), Salesforce
+ * safety sweep (hourly), label drift check (hourly), monday webhook
+ * registration (at boot).
  */
-import { timingSafeEqual } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadEnv } from './env.ts';
 import { createDb } from './db/pool.ts';
@@ -16,10 +21,16 @@ import { loadRuntimeConfig, type RuntimeConfig } from './config/load.ts';
 import { runDriftCheck } from './config/driftRunner.ts';
 import type { DriftResult } from './config/drift.ts';
 import { createMondayClient } from './monday/client.ts';
+import { ensurePresalesWebhooks } from './monday/webhooks.ts';
 import { createSalesforceClient } from './salesforce/client.ts';
+import { assertSfId } from './salesforce/soql.ts';
 import { createWriteGate } from './writeGate.ts';
 import { reconcileOpportunities } from './reconcile/service.ts';
-import { assertSfId } from './salesforce/soql.ts';
+import { ingressRouter } from './ingress/routes.ts';
+import { safeEqual } from './ingress/parse.ts';
+import { drainInbox, type WorkerDeps } from './worker/process.ts';
+import { inboxStats } from './worker/inbox.ts';
+import { runSweep, type SweepResult } from './schedule/sweep.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -28,7 +39,7 @@ const monday = createMondayClient({ token: env.monday.token, apiVersion: env.mon
 const salesforce = createSalesforceClient(env.salesforce);
 const gate = createWriteGate(env.syncMode, monday, salesforce);
 
-// ── Config cache: reloaded at most once a minute (NOTIFY-driven reload comes with the worker) ──
+// ── Config cache (reloaded at most once a minute) ──
 const CONFIG_TTL_MS = 60_000;
 let cached: { cfg: RuntimeConfig; at: number } | null = null;
 let lastDrift: DriftResult = { findings: [], blockedColumns: [], deadMapRows: [] };
@@ -40,13 +51,55 @@ async function getConfig(): Promise<RuntimeConfig> {
   return cfg;
 }
 
+const deps: WorkerDeps = { db, gate, monday, salesforce, getConfig, integrationUserId: env.monday.integrationUserId };
+
+// ── Background jobs ──
+const jobs = { lastDrain: null as string | null, lastSweep: null as (SweepResult & { at: string }) | null, lastDrift: null as string | null };
+
+let draining = false;
+let drainAgain = false;
+async function drain(): Promise<void> {
+  if (draining) {
+    drainAgain = true;
+    return;
+  }
+  draining = true;
+  try {
+    do {
+      drainAgain = false;
+      await drainInbox(deps);
+    } while (drainAgain);
+    jobs.lastDrain = new Date().toISOString();
+  } catch (e) {
+    log.error('inbox drain failed', { error: errMessage(e) });
+  } finally {
+    draining = false;
+  }
+}
+
+async function sweep(): Promise<SweepResult | undefined> {
+  const result = await db.withLock('sf_sweep', () => runSweep({ db, salesforce }));
+  if (result) {
+    jobs.lastSweep = { ...result, at: new Date().toISOString() };
+    await setEngineStatus(db, 'last_sweep', { ...jobs.lastSweep });
+    log.info('sweep', { ...result });
+    void drain();
+  }
+  return result;
+}
+
 async function refreshDrift(): Promise<void> {
   lastDrift = await runDriftCheck(db, monday, await loadRuntimeConfig(db));
   cached = null;
+  jobs.lastDrift = new Date().toISOString();
   if (lastDrift.findings.length > 0) log.warn('config drift', { findings: lastDrift.findings.length, blocked: lastDrift.blockedColumns });
 }
 
-const deps = { db, gate, monday, salesforce, getConfig };
+function every(ms: number, name: string, fn: () => Promise<unknown>): NodeJS.Timeout {
+  return setInterval(() => {
+    fn().catch((e) => log.error(`${name} failed`, { error: errMessage(e) }));
+  }, ms);
+}
 
 // ── HTTP ──
 const app = express();
@@ -54,16 +107,15 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-}
+app.use(ingressRouter({
+  db,
+  salesforceSecret: env.salesforce.webhookSecret,
+  mondayPathSecret: env.monday.webhookPathSecret,
+  onIngest: () => void drain(),
+}));
 
-/** Internal endpoints: mcp-server and the sync-admin edge function only. */
 function internalOnly(req: Request, res: Response, next: NextFunction) {
-  const got = req.header('x-internal-secret') ?? '';
-  if (!safeEqual(got, env.internalSecret)) {
+  if (!safeEqual(req.header('x-internal-secret') ?? '', env.internalSecret)) {
     res.status(401).json({ error: 'unauthorized' });
     return;
   }
@@ -71,7 +123,13 @@ function internalOnly(req: Request, res: Response, next: NextFunction) {
 }
 
 app.get('/status', internalOnly, async (_req, res) => {
-  res.json({ mode: env.syncMode, schema: env.dbSchema, drift: lastDrift.findings.length, blockedColumns: lastDrift.blockedColumns });
+  res.json({
+    mode: env.syncMode,
+    schema: env.dbSchema,
+    inbox: await inboxStats(db).catch(() => null),
+    jobs,
+    drift: { findings: lastDrift.findings.length, blockedColumns: lastDrift.blockedColumns },
+  });
 });
 
 app.post('/admin/reconcile/:opportunityId', internalOnly, async (req, res) => {
@@ -83,19 +141,53 @@ app.post('/admin/reconcile/:opportunityId', internalOnly, async (req, res) => {
     return;
   }
   try {
-    const summary = await reconcileOpportunities(deps, [id]);
-    res.json({ mode: env.syncMode, ...summary });
+    res.json({ mode: env.syncMode, ...(await reconcileOpportunities(deps, [id])) });
   } catch (e) {
     log.error('manual reconcile failed', { id, error: errMessage(e) });
     res.status(502).json({ error: errMessage(e) });
   }
 });
 
+app.post('/admin/sweep', internalOnly, async (_req, res) => {
+  try {
+    const result = await sweep();
+    res.json(result ?? { skipped: 'another sweep is running' });
+  } catch (e) {
+    res.status(502).json({ error: errMessage(e) });
+  }
+});
+
 // ── Boot ──
+const timers: NodeJS.Timeout[] = [];
+
 async function main() {
   await refreshDrift();
   await setEngineStatus(db, 'boot', { mode: env.syncMode, schema: env.dbSchema, at: new Date().toISOString() });
-  app.listen(env.port, () => log.info('sync-engine listening', { port: env.port, mode: env.syncMode, schema: env.dbSchema }));
+
+  const server = app.listen(env.port, () => log.info('sync-engine listening', { port: env.port, mode: env.syncMode, schema: env.dbSchema }));
+
+  // monday sends a challenge to the URL during registration, so register after listen().
+  const cfg = await getConfig();
+  if (cfg.boards.presales) {
+    const url = `${env.publicBaseUrl}/webhooks/monday/${env.monday.webhookPathSecret}`;
+    ensurePresalesWebhooks(db, monday, cfg.boards.presales, url)
+      .then((r) => log.info('monday webhooks', r))
+      .catch((e) => log.error('monday webhook registration failed', { error: errMessage(e) }));
+  }
+
+  timers.push(every(2_000, 'inbox drain', drain));
+  timers.push(every(60 * 60_000, 'sweep', sweep));
+  timers.push(every(60 * 60_000, 'drift check', refreshDrift));
+  setTimeout(() => void sweep().catch((e) => log.error('sweep failed', { error: errMessage(e) })), 60_000);
+
+  const shutdown = (signal: string) => {
+    log.info('shutting down', { signal });
+    timers.forEach(clearInterval);
+    server.close(() => void db.close().finally(() => process.exit(0)));
+    setTimeout(() => process.exit(0), 10_000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 main().catch((e) => {

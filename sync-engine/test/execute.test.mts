@@ -8,8 +8,7 @@ import assert from 'node:assert/strict';
 import { createTestDb, type TestDb } from './helpers/pglite.mts';
 import { loadRuntimeConfig } from '../src/config/load.ts';
 import { insertLink } from '../src/db/store.ts';
-import type { MondayClient, MondayItemRaw } from '../src/monday/client.ts';
-import type { SalesforceClient } from '../src/salesforce/client.ts';
+import { fakeMonday, fakeSalesforce } from './helpers/fakes.mts';
 import { createWriteGate } from '../src/writeGate.ts';
 import { reconcileOpportunities } from '../src/reconcile/service.ts';
 import type { SfOpportunity } from '../src/reconcile/types.ts';
@@ -30,54 +29,6 @@ function opp(over: Partial<SfOpportunity> = {}): SfOpportunity {
   };
 }
 
-/** In-memory monday: items + a log of write calls. */
-function fakeMonday() {
-  const items = new Map<string, MondayItemRaw>();
-  const writes: { op: string; args: unknown[] }[] = [];
-  let nextId = 5000;
-  let failNextChange = false;
-  const client: MondayClient = {
-    query: async () => { throw new Error('not used'); },
-    getItems: async (ids) => ids.map((id) => items.get(id)).filter((x): x is MondayItemRaw => !!x),
-    pageBoardItems: async () => {},
-    getColumnLabels: async () => [],
-    listWebhooks: async () => [],
-    async changeColumnValues(boardId, itemId, values) {
-      if (failNextChange) { failNextChange = false; throw new Error('monday 500'); }
-      writes.push({ op: 'change', args: [boardId, itemId, values] });
-      const it = items.get(itemId);
-      const v = values as Record<string, any>;
-      if (it && v.status9) setCol(it, 'status9', JSON.stringify(v.status9));
-    },
-    async createItem(boardId, groupId, name, values) {
-      const id = String(nextId++);
-      writes.push({ op: 'create', args: [boardId, groupId, name, values] });
-      items.set(id, { id, name, state: 'active', group: { id: groupId ?? '' }, column_values: [] });
-      return id;
-    },
-    async moveItemToGroup(itemId, groupId) { writes.push({ op: 'move', args: [itemId, groupId] }); },
-    async archiveItem(itemId) { writes.push({ op: 'archive', args: [itemId] }); const it = items.get(itemId); if (it) it.state = 'archived'; },
-    async createUpdate(itemId, body, mentions) { writes.push({ op: 'update', args: [itemId, body, mentions] }); },
-    async createNotification(userId, itemId, text) { writes.push({ op: 'notify', args: [userId, itemId, text] }); },
-    async createWebhook() { return 'wh'; },
-  };
-  function setCol(it: MondayItemRaw, id: string, value: string) {
-    const c = it.column_values.find((x) => x.id === id);
-    if (c) c.value = value; else it.column_values.push({ id, value, text: null });
-  }
-  return { client, items, writes, failOnce: () => { failNextChange = true; }, setCol };
-}
-
-function fakeSalesforce(state: { opps: Map<string, SfOpportunity> }): SalesforceClient {
-  return {
-    query: async () => [], queryAll: async () => [],
-    getOpportunities: async (ids) => new Map(ids.filter((id) => state.opps.has(id)).map((id) => [id, state.opps.get(id)!])),
-    getLineItem: async () => null,
-    picklistValues: async () => [],
-    patchLineItem: async () => { throw new Error('writeback not under test'); },
-  };
-}
-
 let db: TestDb;
 beforeEach(async () => {
   db = await createTestDb();
@@ -87,12 +38,11 @@ afterEach(async () => { await db.close(); });
 
 function harness(mode: 'dry_run' | 'live', o: SfOpportunity = opp()) {
   const monday = fakeMonday();
-  const sfState = { opps: new Map([[o.Id, o]]) };
-  const salesforce = fakeSalesforce(sfState);
-  const gate = createWriteGate(mode, monday.client, salesforce);
-  const deps = { db, gate, monday: monday.client, salesforce, getConfig: () => loadRuntimeConfig(db) };
+  const sf = fakeSalesforce({ opps: [o] });
+  const gate = createWriteGate(mode, monday.client, sf.client);
+  const deps = { db, gate, monday: monday.client, salesforce: sf.client, getConfig: () => loadRuntimeConfig(db) };
   const run = () => reconcileOpportunities(deps, [OPP]);
-  return { monday, sfState, run, setOpp: (x: SfOpportunity) => sfState.opps.set(x.Id, x) };
+  return { monday, run, setOpp: (x: SfOpportunity) => sf.opps.set(x.Id, x) };
 }
 
 const rows = async (sql: string, params: unknown[] = []) => (await db.query<any>(sql, params)).rows;
