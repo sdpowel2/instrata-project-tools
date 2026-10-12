@@ -73,6 +73,7 @@ export type ColumnType =
 export interface ColumnDef {
   columnId: string | null; // null = not configured yet
   type: ColumnType;
+  boardKey?: string; // config_boards key the column lives on
   owner: 'salesforce' | 'monday' | 'shared' | 'engine';
 }
 

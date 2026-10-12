@@ -1,0 +1,123 @@
+/**
+ * Pure monday value encoding / decoding. No I/O — tested by test/monday.test.mts.
+ */
+import type { MondayValue } from '../reconcile/types.ts';
+
+/**
+ * Planner value → the per-column JSON `change_multiple_column_values` /
+ * `create_item` accept. Labels are always by ID (spec §2.2), and the caller
+ * always sends create_labels_if_missing: false (spec §1).
+ */
+export function encodeColumnValue(v: MondayValue): unknown {
+  switch (v.type) {
+    case 'status':
+      return { index: v.labelId };
+    case 'dropdown':
+      return { ids: v.labelIds };
+    case 'datetime': {
+      // UTC instant passed straight through — monday stores UTC and renders in
+      // each viewer's timezone (spec §12). No conversion.
+      const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})Z$/.exec(v.iso);
+      if (!m) throw new Error(`datetime must be second-precision UTC ISO, got "${v.iso}"`);
+      return { date: m[1], time: m[2] };
+    }
+    case 'text':
+      return v.text;
+    case 'long_text':
+      return { text: v.text };
+  }
+}
+
+/** { semanticKey: value } → { columnId: encoded } for one mutation. */
+export function encodeColumnValues(
+  writes: { semanticKey: string; value: MondayValue }[],
+  columnIdFor: (semanticKey: string) => string | null | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const w of writes) {
+    const id = columnIdFor(w.semanticKey);
+    if (!id) throw new Error(`No monday column configured for ${w.semanticKey}`);
+    out[id] = encodeColumnValue(w.value);
+  }
+  return out;
+}
+
+// ── Reading column values back ───────────────────────────────────────────────
+function parseJson(raw: string | null | undefined): any {
+  if (raw === null || raw === undefined || raw === '') return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Status column `value` is {"index": <label id>, …}. */
+export function readStatusLabelId(raw: string | null | undefined): number | null {
+  const j = parseJson(raw);
+  return j && Number.isInteger(j.index) ? j.index : null;
+}
+
+/** Numbers column `value` is a JSON string ("125000") or null. */
+export function readNumber(raw: string | null | undefined): number | null {
+  const j = parseJson(raw);
+  if (j === null || j === '') return null;
+  const n = Number(j);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** People column `value` is {"personsAndTeams": [{"id": 123, "kind": "person"}, …]}. */
+export function readPersonIds(raw: string | null | undefined): string[] {
+  const j = parseJson(raw);
+  const list = Array.isArray(j?.personsAndTeams) ? j.personsAndTeams : [];
+  return list.filter((p: any) => p?.kind === 'person' && p.id !== undefined).map((p: any) => String(p.id));
+}
+
+/** Dropdown column `value` is {"ids": [1, 2]}. */
+export function readDropdownIds(raw: string | null | undefined): number[] {
+  const j = parseJson(raw);
+  return Array.isArray(j?.ids) ? j.ids.map(Number).filter(Number.isInteger) : [];
+}
+
+export function readText(raw: string | null | undefined): string | null {
+  const j = parseJson(raw);
+  if (typeof j === 'string') return j.trim() === '' ? null : j;
+  if (j && typeof j.text === 'string') return j.text.trim() === '' ? null : j.text;
+  return null;
+}
+
+// ── Column label settings (config-drift check + mapping UI) ──────────────────
+export interface LiveLabel {
+  id: number;
+  label: string;
+  deactivated: boolean;
+}
+
+/**
+ * Status and dropdown settings come in a few shapes across API versions:
+ *   status:   {"labels": {"0": "In Progress", "1": "Won"}, …}
+ *             or {"labels": [{"id": 0, "label": "In Progress", "is_deactivated": false}]}
+ *   dropdown: {"labels": [{"id": 1, "name": "Yes"}], "deactivated_labels": [5]}
+ *             or {"labels": [{"id": 1, "label": "Yes", "is_deactivated": false}]}
+ * Normalize them all to LiveLabel[].
+ */
+export function parseColumnLabels(settings: unknown): LiveLabel[] {
+  const s: any = typeof settings === 'string' ? parseJson(settings) : settings;
+  if (!s || s.labels === undefined || s.labels === null) return [];
+  const deactivatedIds = new Set<number>((Array.isArray(s.deactivated_labels) ? s.deactivated_labels : []).map(Number));
+
+  if (Array.isArray(s.labels)) {
+    return s.labels
+      .filter((l: any) => l && l.id !== undefined)
+      .map((l: any) => ({
+        id: Number(l.id),
+        label: String(l.label ?? l.name ?? ''),
+        deactivated: Boolean(l.is_deactivated) || deactivatedIds.has(Number(l.id)),
+      }));
+  }
+  return Object.entries(s.labels as Record<string, unknown>).map(([id, label]) => ({
+    id: Number(id),
+    label: String(label ?? ''),
+    deactivated: deactivatedIds.has(Number(id)),
+  }));
+}
