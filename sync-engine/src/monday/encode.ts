@@ -86,6 +86,32 @@ export function readText(raw: string | null | undefined): string | null {
   return null;
 }
 
+/**
+ * Does monday already hold this value? Compares the intended write with the
+ * column's current raw value. Unknown or unparseable → false (write it).
+ */
+export function mondayValueMatches(v: MondayValue, raw: string | null | undefined): boolean {
+  if (raw === undefined) return false;
+  switch (v.type) {
+    case 'status':
+      return readStatusLabelId(raw) === v.labelId;
+    case 'dropdown': {
+      const cur = readDropdownIds(raw).slice().sort((a, b) => a - b);
+      const want = v.labelIds.slice().sort((a, b) => a - b);
+      return cur.length === want.length && cur.every((x, i) => x === want[i]);
+    }
+    case 'datetime': {
+      const j = parseJson(raw);
+      if (!j || typeof j.date !== 'string') return false;
+      const time = typeof j.time === 'string' && j.time !== '' ? j.time : null;
+      return time !== null && `${j.date}T${time}Z` === v.iso;
+    }
+    case 'text':
+    case 'long_text':
+      return readText(raw) === v.text;
+  }
+}
+
 // ── Column label settings (config-drift check + mapping UI) ──────────────────
 export interface LiveLabel {
   id: number;

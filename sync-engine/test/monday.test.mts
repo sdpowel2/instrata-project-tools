@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  encodeColumnValue, encodeColumnValues, parseColumnLabels, readDropdownIds, readNumber, readPersonIds, readStatusLabelId, readText,
+  encodeColumnValue, encodeColumnValues, mondayValueMatches, parseColumnLabels, readDropdownIds, readNumber, readPersonIds, readStatusLabelId, readText,
 } from '../src/monday/encode.ts';
 import { toSnapshot, snapshotColumnIds } from '../src/reconcile/snapshot.ts';
 import type { PlannerConfig } from '../src/reconcile/types.ts';
@@ -60,6 +60,19 @@ test('parses the older label-settings shapes too', () => {
   assert.deepEqual(parseColumnLabels(null), []);
 });
 
+test('mondayValueMatches: same value → true, anything else or unknown → false', () => {
+  assert.equal(mondayValueMatches({ type: 'dropdown', labelIds: [4] }, '{"ids":[4]}'), true);
+  assert.equal(mondayValueMatches({ type: 'dropdown', labelIds: [4] }, '{"ids":[3]}'), false);
+  assert.equal(mondayValueMatches({ type: 'dropdown', labelIds: [4] }, null), false);
+  assert.equal(mondayValueMatches({ type: 'text', text: 'Q-1' }, '"Q-1"'), true);
+  assert.equal(mondayValueMatches({ type: 'text', text: 'Q-1' }, '"Q-2"'), false);
+  assert.equal(mondayValueMatches({ type: 'datetime', iso: '2026-10-15T18:00:00Z' }, '{"date":"2026-10-15","time":"18:00:00","changed_at":"x"}'), true);
+  assert.equal(mondayValueMatches({ type: 'datetime', iso: '2026-10-15T18:00:00Z' }, '{"date":"2026-10-15"}'), false, 'date without time ≠ instant');
+  assert.equal(mondayValueMatches({ type: 'datetime', iso: '2026-10-15T18:00:00Z' }, '{"date":"2026-10-15","time":"14:00:00"}'), false);
+  assert.equal(mondayValueMatches({ type: 'status', labelId: 1 }, '{"index":1}'), true);
+  assert.equal(mondayValueMatches({ type: 'text', text: 'x' }, undefined), false, 'unknown → write');
+});
+
 test('builds planner snapshots from raw items', () => {
   const cfg = { columns: {
     'presales.status': { columnId: 'status9', type: 'status', owner: 'shared' },
@@ -75,5 +88,5 @@ test('builds planner snapshots from raw items', () => {
       { id: 'person', value: '{"personsAndTeams":[{"id":42,"kind":"person"}]}', text: 'Someone' },
     ],
   }, cfg);
-  assert.deepEqual(snap, { id: '13092716583', state: 'active', groupId: 'new_group66048', statusLabelId: 6, quotedPrice: 98000, engineerUserIds: ['42'] });
+  assert.deepEqual(snap, { id: '13092716583', state: 'active', groupId: 'new_group66048', statusLabelId: 6, quotedPrice: 98000, engineerUserIds: ['42'], fieldValues: {} });
 });

@@ -8,6 +8,8 @@
  *   GET  /status                       internal
  *   POST /admin/reconcile/:id          internal — manual re-sync (also the MCP tool)
  *   POST /admin/sweep                  internal — run the safety sweep now
+ *   POST /admin/backfill               internal — link existing board items ({preview})
+ *   POST /admin/requeue-linked         internal — re-check every linked opportunity
  *
  * Background: inbox drain (every 2 s, and immediately on ingest), Salesforce
  * safety sweep (hourly), label drift check (hourly), monday webhook
@@ -31,6 +33,8 @@ import { safeEqual } from './ingress/parse.ts';
 import { drainInbox, type WorkerDeps } from './worker/process.ts';
 import { inboxStats } from './worker/inbox.ts';
 import { runSweep, type SweepResult } from './schedule/sweep.ts';
+import { runBackfill } from './backfill/run.ts';
+import { requeueLinked } from './schedule/requeue.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -144,6 +148,42 @@ app.post('/admin/reconcile/:opportunityId', internalOnly, async (req, res) => {
     res.json({ mode: env.syncMode, ...(await reconcileOpportunities(deps, [id])) });
   } catch (e) {
     log.error('manual reconcile failed', { id, error: errMessage(e) });
+    res.status(502).json({ error: errMessage(e) });
+  }
+});
+
+// Cutover step 2. Body: {"preview": true} reports counts and saves nothing.
+app.post('/admin/backfill', internalOnly, async (req, res) => {
+  const preview = req.body?.preview !== false;
+  const reconcile = req.body?.reconcile !== false;
+  try {
+    const report = await db.withLock('backfill', async () => runBackfill({ db, monday, salesforce, cfg: await getConfig() }, { preview, reconcile }));
+    if (!report) {
+      res.status(409).json({ error: 'a backfill is already running' });
+      return;
+    }
+    log.info('backfill', { preview, linked: report.linked, problems: report.counts.problems, queued: report.reconcilesQueued });
+    if (report.reconcilesQueued > 0) void drain();
+    res.json(report);
+  } catch (e) {
+    log.error('backfill failed', { error: errMessage(e) });
+    res.status(502).json({ error: errMessage(e) });
+  }
+});
+
+// Re-check every linked opportunity. {"resetDryRunBaseline": true} is dry-run only.
+app.post('/admin/requeue-linked', internalOnly, async (req, res) => {
+  const resetDryRunBaseline = req.body?.resetDryRunBaseline === true;
+  if (resetDryRunBaseline && env.syncMode !== 'dry_run') {
+    res.status(400).json({ error: 'resetDryRunBaseline is only allowed in dry run' });
+    return;
+  }
+  try {
+    const result = await requeueLinked(db, { resetDryRunBaseline });
+    log.info('requeue-linked', result);
+    void drain();
+    res.json(result);
+  } catch (e) {
     res.status(502).json({ error: errMessage(e) });
   }
 });

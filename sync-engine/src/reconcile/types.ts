@@ -45,6 +45,12 @@ export interface MondayItemSnapshot {
   statusLabelId: number | null; // presales.status
   quotedPrice: number | null; // presales.quoted_price
   engineerUserIds: string[]; // presales.presales_engineer
+  /**
+   * Current raw monday values of the Salesforce-owned columns, by semantic key.
+   * When present, a field whose value monday ALREADY has is not re-written
+   * (the baseline still advances). Absent → unknown → write as usual.
+   */
+  fieldValues?: Record<string, string | null>;
 }
 
 // ── Link rows ───────────────────────────────────────────────────────────────

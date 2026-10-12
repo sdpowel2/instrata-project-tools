@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createTestDb, type TestDb } from './helpers/pglite.mts';
 import { fakeSalesforce } from './helpers/fakes.mts';
 import { runSweep, SWEEP_WATERMARK } from '../src/schedule/sweep.ts';
-import { getWatermark, openTask, setWatermark } from '../src/db/store.ts';
+import { getWatermark, insertLink, openTask, setWatermark } from '../src/db/store.ts';
+import { requeueLinked } from '../src/schedule/requeue.ts';
 
 let db: TestDb;
 beforeEach(async () => { db = await createTestDb(); });
@@ -38,6 +39,20 @@ test('sweep: re-queues opportunities behind open unmapped-value tasks (mapping f
   assert.equal(r.mappingRetries, 2, 'every member of the grouped task');
   const ids = (await db.query<any>(`select payload->>'opportunity_id' as id from webhook_inbox order by 1`)).rows.map((x) => x.id);
   assert.deepEqual(ids, ['006Y', '006Z']);
+});
+
+test('requeue-linked: one row per linked opportunity; dry-run reset touches only the dry baseline', async () => {
+  await insertLink(db, { mondayItemId: '1', sfOpportunityId: '006A', sfLineItemId: '00kA', baseline: { 'sf.stage': 'Engineering' } }, 'live');
+  await insertLink(db, { mondayItemId: '2', sfOpportunityId: '006B', sfLineItemId: '00kB', baseline: { 'sf.stage': 'Rebid' } }, 'live');
+  await db.query(`update sf_link set dry_run_synced_values = '{"sf.stage":"Engineering","presales.quote_number":"Q-1"}', last_synced_values = last_synced_values || '{"presales.quote_number":"LIVE"}'`);
+  await db.query(`update sf_link set link_state = 'archived' where monday_item_id = 2`);
+
+  const r = await requeueLinked(db, { resetDryRunBaseline: true });
+  assert.equal(r.queued, 1, 'archived links are skipped');
+  assert.equal(r.reset, 1);
+  const link = (await db.query<any>('select last_synced_values l, dry_run_synced_values d from sf_link where monday_item_id = 1')).rows[0];
+  assert.deepEqual(link.d, { 'sf.stage': 'Engineering' }, 'dry baseline back to stage-only');
+  assert.equal(link.l['presales.quote_number'], 'LIVE', 'live baseline untouched');
 });
 
 test('sweep: a Salesforce failure leaves the watermark where it was', async () => {

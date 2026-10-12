@@ -48,6 +48,7 @@ import {
   missKey,
   type SfFieldKey,
 } from './normalize.ts';
+import { mondayValueMatches } from '../monday/encode.ts';
 
 const FIELD_META: Record<SfFieldKey, { label: string; mondayColumn: string; map?: keyof Omit<PlannerMaps, 'stageAction'>; table?: string }> = {
   'presales.due_date': { label: 'Due Date', mondayColumn: 'Due Date' },
@@ -146,7 +147,7 @@ function toMondayValue(ctx: Ctx, key: SfFieldKey, sfValue: string): MondayValue 
 
 // ── Field sync (§4.4) ───────────────────────────────────────────────────────
 /** Mutates `baseline` and `writes`. Returns true when Win % became a confirmed-to-win value (→ Won). */
-function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef: string): boolean {
+function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef: string, current?: Record<string, string | null>): boolean {
   const sf = extractSfFields(ctx.opp);
   let wonTriggered = false;
 
@@ -210,6 +211,14 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
         openUnmapped(ctx, key, cur, itemRef);
         baseline[missKey(key)] = cur;
       }
+      continue;
+    }
+
+    // monday already shows this value (typed by hand, or by the old Zap): record
+    // it as synced without a write — no API call, no activity-log noise.
+    if (current && Object.prototype.hasOwnProperty.call(current, key) && mondayValueMatches(value, current[key])) {
+      baseline[key] = cur;
+      resolveMiss();
       continue;
     }
 
@@ -534,7 +543,7 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   }
 
   const fx: ItemEffects = { writes: [] };
-  const wonFromWinPct = syncFields(ctx, baseline, fx.writes, item.id);
+  const wonFromWinPct = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues);
   syncStage(ctx, baseline, item, fx, wonFromWinPct);
 
   // Cutover step 3: linked items parked in Pre-Engineering go to New Requests the

@@ -509,5 +509,30 @@ section('34. Two opportunities missing the same value share ONE task');
   check('different members', ka?.member?.id === OPP && kb?.member?.id === '006BBB000000002');
 }
 
+section('35. Backfilled item whose monday values already match Salesforce: no writes, baseline catches up');
+{
+  // Stage-only baseline, like the backfill seeds.
+  const st: State = {
+    links: [{ mondayItemId: ITEM, sfOpportunityId: OPP, sfLineItemId: LINE, linkState: 'active', baseline: { 'sf.stage': 'Engineering' } }],
+    items: { [ITEM]: item({ fieldValues: {
+      'presales.due_date': '{"date":"2026-10-15","time":"18:00:00","changed_at":"2026-10-01T00:00:00Z"}',
+      'presales.quote_number': '"Q-1001"',
+      'presales.win_pct': '{"ids":[2]}',
+      'presales.business_unit': '{"ids":[4]}',
+      'presales.sales_person': '{"ids":[1]}',
+    } }) },
+  };
+  const o = opp();
+  const p = run(o, st);
+  check('nothing written — monday already has every value', writesOf(p).length === 0, writeKeys(writesOf(p)));
+  check('no field_changed events (nothing changed)', !p.events.some((e) => e.eventType === 'field_changed'));
+  check('baseline now holds all five fields', ['presales.due_date', 'presales.quote_number', 'presales.win_pct', 'presales.business_unit', 'presales.sales_person'].every((k) => k in p.items[0].baseline));
+  idempotent(p, st, o);
+
+  const stale: State = { ...st, items: { [ITEM]: item({ fieldValues: { ...st.items[ITEM].fieldValues!, 'presales.quote_number': '"Q-OLD"', 'presales.due_date': null } }) } };
+  const p2 = run(o, stale);
+  check('only the stale fields are written (quote number, empty due date)', writeKeys(writesOf(p2)) === 'presales.due_date,presales.quote_number', writeKeys(writesOf(p2)));
+}
+
 console.log(`\n${cases} cases, ${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

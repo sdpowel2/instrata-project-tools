@@ -1,0 +1,66 @@
+<#
+  Calls the sync engine's internal admin endpoints. Reads ENGINE_INTERNAL_SECRET
+  from the CLIPBOARD (copy it from your password manager first), so the secret
+  is never typed, shown, or saved in PowerShell history.
+
+  Usage (from the repo folder):
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 status
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 backfill-preview
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 backfill
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 requeue-linked
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 measure-diff    (dry run: reset dry baseline, re-check all)
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 sweep
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 reconcile 006XXXXXXXXXXXXXXX
+
+  Add -App instrata-sync-engine to target production (default: staging).
+#>
+param(
+  [Parameter(Mandatory = $true, Position = 0)]
+  [ValidateSet('status', 'backfill-preview', 'backfill', 'requeue-linked', 'measure-diff', 'sweep', 'reconcile')]
+  [string]$Command,
+  [Parameter(Position = 1)]
+  [string]$OpportunityId,
+  [string]$App = 'instrata-sync-engine-staging'
+)
+
+$ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 doesn't offer TLS 1.2 by default; Fly requires it.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$base = "https://$App.fly.dev"
+
+[void](Read-Host "Copy ENGINE_INTERNAL_SECRET for $App to the clipboard, then press Enter")
+$secret = (Get-Clipboard -Raw)
+if ($null -eq $secret) { $secret = '' }
+$secret = $secret.Trim()
+if ($secret -notmatch '^[0-9a-f]{64}$') { throw 'Clipboard does not hold a 64-character ENGINE_INTERNAL_SECRET. Copy it and run again.' }
+Set-Clipboard -Value ' '
+Write-Host "  got it - clipboard cleared" -ForegroundColor Green
+$headers = @{ 'x-internal-secret' = $secret }
+
+function Call([string]$method, [string]$path, $body) {
+  $request = @{ Method = $method; Uri = "$base$path"; Headers = $headers; TimeoutSec = 300 }
+  if ($null -ne $body) { $request.Body = ($body | ConvertTo-Json -Compress); $request.ContentType = 'application/json' }
+  try {
+    return Invoke-RestMethod @request
+  } catch {
+    $msg = $_.ErrorDetails.Message
+    if (-not $msg) { $msg = $_.Exception.Message }
+    throw "Engine call failed: $msg"
+  }
+}
+
+switch ($Command) {
+  'status'           { $r = Call 'GET' '/status' $null }
+  'backfill-preview' { Write-Host 'Previewing backfill (nothing is saved)...'; $r = Call 'POST' '/admin/backfill' @{ preview = $true } }
+  'backfill'         { Write-Host 'Running backfill (saves links + problem tasks, queues reconciles)...'; $r = Call 'POST' '/admin/backfill' @{ preview = $false } }
+  'requeue-linked'   { $r = Call 'POST' '/admin/requeue-linked' @{} }
+  'measure-diff'     { Write-Host 'Resetting the DRY-RUN baseline and re-checking every linked item...'; $r = Call 'POST' '/admin/requeue-linked' @{ resetDryRunBaseline = $true } }
+  'sweep'            { $r = Call 'POST' '/admin/sweep' @{} }
+  'reconcile' {
+    if ($OpportunityId -notmatch '^006[a-zA-Z0-9]{12}([a-zA-Z0-9]{3})?$') { throw 'Give an opportunity id: engine.ps1 reconcile 006...' }
+    $r = Call 'POST' "/admin/reconcile/$OpportunityId" @{}
+  }
+}
+
+$r | ConvertTo-Json -Depth 8
