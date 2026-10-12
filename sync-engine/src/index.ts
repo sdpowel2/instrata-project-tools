@@ -10,6 +10,7 @@
  *   POST /admin/sweep                  internal — run the safety sweep now
  *   POST /admin/backfill               internal — link existing board items ({preview})
  *   POST /admin/requeue-linked         internal — re-check every linked opportunity
+ *   GET  /admin/diff-report            internal — monday-now vs Salesforce, per field (?format=csv)
  *
  * Background: inbox drain (every 2 s, and immediately on ingest), Salesforce
  * safety sweep (hourly), label drift check (hourly), monday webhook
@@ -35,6 +36,7 @@ import { inboxStats } from './worker/inbox.ts';
 import { runSweep, type SweepResult } from './schedule/sweep.ts';
 import { runBackfill } from './backfill/run.ts';
 import { requeueLinked } from './schedule/requeue.ts';
+import { buildDiffReport, reportCsv } from './report/run.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -184,6 +186,21 @@ app.post('/admin/requeue-linked', internalOnly, async (req, res) => {
     void drain();
     res.json(result);
   } catch (e) {
+    res.status(502).json({ error: errMessage(e) });
+  }
+});
+
+// Field-by-field "monday now vs Salesforce says" over every linked item (live, read-only).
+app.get('/admin/diff-report', internalOnly, async (req, res) => {
+  try {
+    const report = await buildDiffReport({ db, monday, salesforce, cfg: await getConfig(), salesforceLoginUrl: env.salesforce.loginUrl });
+    if (req.query.format === 'csv') {
+      res.type('text/csv').send(reportCsv(report));
+      return;
+    }
+    res.json(report);
+  } catch (e) {
+    log.error('diff report failed', { error: errMessage(e) });
     res.status(502).json({ error: errMessage(e) });
   }
 });

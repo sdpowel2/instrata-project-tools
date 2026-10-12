@@ -136,20 +136,37 @@ function openConfigMissing(ctx: Ctx, key: string, itemRef: string): void {
   );
 }
 
-/** SF value → monday value. null = unmappable. */
-function toMondayValue(ctx: Ctx, key: SfFieldKey, sfValue: string): MondayValue | null {
+/** SF value → monday value. null = unmappable. Shared with the diff report. */
+export function mapSfValue(maps: PlannerMaps, key: SfFieldKey, sfValue: string): MondayValue | null {
   const meta = FIELD_META[key];
   if (key === 'presales.due_date') return { type: 'datetime', iso: sfValue };
   if (!meta.map) return { type: 'text', text: sfValue };
-  const id = ctx.maps[meta.map][sfValue];
+  const id = maps[meta.map][sfValue];
   return id === undefined || id === null ? null : { type: 'dropdown', labelIds: [id] };
+}
+
+function toMondayValue(ctx: Ctx, key: SfFieldKey, sfValue: string): MondayValue | null {
+  return mapSfValue(ctx.maps, key, sfValue);
+}
+
+/** Human field names (shared with the diff report). */
+export function fieldLabel(key: SfFieldKey): string {
+  return FIELD_META[key].mondayColumn;
 }
 
 // ── Field sync (§4.4) ───────────────────────────────────────────────────────
 /** Mutates `baseline` and `writes`. Returns true when Win % became a confirmed-to-win value (→ Won). */
-function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef: string, current?: Record<string, string | null>): boolean {
+function syncFields(
+  ctx: Ctx,
+  baseline: Baseline,
+  writes: ColumnWrite[],
+  itemRef: string,
+  current: Record<string, string | null> | undefined,
+  opts: { firstLinkReview: boolean },
+): { wonTriggered: boolean; wonReview: boolean } {
   const sf = extractSfFields(ctx.opp);
   let wonTriggered = false;
+  let wonReview = false;
 
   for (const key of SF_FIELD_KEYS) {
     const cur = sf[key];
@@ -183,7 +200,12 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
     // they're the status action Won (§3.2, §4.6).
     const confirmed = ctx.config.confirmedWinPcts;
     if (key === 'presales.win_pct' && confirmed.includes(cur)) {
-      if (last === undefined || last === null || !confirmed.includes(last)) {
+      if (!has && opts.firstLinkReview) {
+        // First look at a freshly linked (backfilled) item: Salesforce may have
+        // been at 99/100% for months. Don't fire Won (post-sales copy + leadership
+        // email) on history — ask a human instead (Seth 2026-10-12).
+        wonReview = true;
+      } else if (last === undefined || last === null || !confirmed.includes(last)) {
         wonTriggered = true;
         ctx.events.push(sfEvent(ctx, { eventType: 'field_changed', field: key, oldValue: last ?? null, newValue: cur, details: { applied_as: 'status_won' } }));
       }
@@ -228,7 +250,7 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
     resolveMiss();
   }
 
-  return wonTriggered;
+  return { wonTriggered, wonReview };
 }
 
 /** One task per (field, missing value) — not per opportunity (Seth 2026-10-12). */
@@ -460,7 +482,8 @@ function planCreate(ctx: Ctx, lineItemId: string): CreatePlan {
 
   ctx.events.push(engineEvent(CREATED_ITEM, { eventType: 'created', details: { sf_opportunity_id: ctx.opp.Id, sf_line_item_id: lineItemId, name: ctx.opp.Name } }));
 
-  const wonFromWinPct = syncFields(ctx, baseline, columnWrites, CREATED_ITEM);
+  // A brand-new item has no history: confirmed-to-win → Won straight away.
+  const { wonTriggered: wonFromWinPct } = syncFields(ctx, baseline, columnWrites, CREATED_ITEM, undefined, { firstLinkReview: false });
 
   if (writability(ctx.config, 'presales.sf_id') === 'ok') {
     columnWrites.push({ semanticKey: 'presales.sf_id', value: { type: 'text', text: lineItemId } });
@@ -543,8 +566,9 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   }
 
   const fx: ItemEffects = { writes: [] };
-  const wonFromWinPct = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues);
+  const { wonTriggered: wonFromWinPct, wonReview } = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues, { firstLinkReview: true });
   syncStage(ctx, baseline, item, fx, wonFromWinPct);
+  reviewConfirmedWin(ctx, baseline, item, wonReview);
 
   // Cutover step 3: linked items parked in Pre-Engineering go to New Requests the
   // first time they reach a creation-set stage — the one group move the sync makes.
@@ -556,6 +580,52 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   }
 
   return done(fx, moveToGroupKey ? { moveToGroupKey } : {});
+}
+
+// ── First-pass review of Confirmed-to-Win items (Seth 2026-10-12) ───────────
+const REVIEW_MARK = 'review:won';
+
+function humanStatus(cfg: PlannerConfig, id: number | null): string {
+  if (id === null) return 'blank';
+  const hit = Object.entries(cfg.labels).find(([k, v]) => k.startsWith('presales.status.') && v === id);
+  if (!hit) return `label ${id}`;
+  return hit[0].slice('presales.status.'.length).split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+}
+
+/**
+ * Open (on first sight) and later close the "Confirmed to Win in Salesforce,
+ * not Won in monday" review task for a linked item. It stays open while both
+ * hold; it closes once monday is Won, Salesforce drops below confirmed, or the
+ * deal reaches a terminal stage.
+ */
+function reviewConfirmedWin(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, firstSight: boolean): void {
+  const key = failureKey('confirmed_win_review', item.id, 'status');
+  const wonId = ctx.config.labels['presales.status.won'];
+  const row = ctx.maps.stageAction[ctx.opp.StageName];
+  const sfWin = extractSfFields(ctx.opp)['presales.win_pct'];
+  const applies = sfWin !== null && ctx.config.confirmedWinPcts.includes(sfWin)
+    && item.statusLabelId !== wonId && !(row && TERMINAL_ACTIONS.has(row.action));
+
+  if (firstSight && applies) {
+    ctx.tasks.push({
+      op: 'open',
+      taskType: 'sync_failure',
+      dedupeKey: key,
+      title: `Confirmed to Win in Salesforce, not Won in monday: ${ctx.opp.Name}`,
+      details:
+        `Salesforce Win % is ${sfWin} (Confirmed to Win), but the pre-sales item's status is ${humanStatus(ctx.config, item.statusLabelId)}. ` +
+        'The sync did not change it because this item was only just linked and may already have been handled by hand. ' +
+        'If the deal is confirmed, set the status to Won in monday — that triggers the Post-Sales copy and the leadership notification. ' +
+        'If not, the Win % in Salesforce needs correcting. This task closes itself once the item is Won.',
+      sourceRef: { board_key: 'presales', monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id },
+    });
+    baseline[REVIEW_MARK] = '1';
+    return;
+  }
+  if (baseline[REVIEW_MARK] && !applies) {
+    closeTask(ctx, key);
+    delete baseline[REVIEW_MARK];
+  }
 }
 
 // ── Helpers for the executor and tests ──────────────────────────────────────

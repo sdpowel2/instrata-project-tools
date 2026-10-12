@@ -534,5 +534,45 @@ section('35. Backfilled item whose monday values already match Salesforce: no wr
   check('only the stale fields are written (quote number, empty due date)', writeKeys(writesOf(p2)) === 'presales.due_date,presales.quote_number', writeKeys(writesOf(p2)));
 }
 
+section('36. First look at a backfilled item at 99%/100%: review task for Hope, NO automatic Won');
+{
+  const cfg = makeConfig({ confirmedWinPcts: ['99%', '100%'] });
+  const backfilled = (status = S.follow_up): State => ({
+    links: [{ mondayItemId: ITEM, sfOpportunityId: OPP, sfLineItemId: LINE, linkState: 'active', baseline: { 'sf.stage': 'Engineering' } }],
+    items: { [ITEM]: item({ statusLabelId: status }) },
+  });
+  const o = opp({ Win_Likelihood__c: '99%' });
+  const reviewKey = `sync_failure:confirmed_win_review:${ITEM}:status`;
+
+  const p = run(o, backfilled(), cfg);
+  check('status NOT written', statusWrite(writesOf(p)) === undefined);
+  check('no won_handoff / open_job', !opens(p).some((t) => t.taskType === 'won_handoff' || t.taskType === 'open_job'));
+  const review = opens(p).find((t) => t.dedupeKey === reviewKey);
+  check('review task opened', !!review);
+  check('details name the current monday status', /status is Follow Up/.test(review?.details ?? ''), review?.details);
+  check('Win % recorded in the baseline', p.items[0].baseline['presales.win_pct'] === '99%');
+  idempotent(p, backfilled(), o, cfg);
+
+  // Hope sets Won in monday → next reconcile closes the task.
+  const st2 = apply(p, backfilled());
+  st2.items[ITEM] = { ...st2.items[ITEM], statusLabelId: S.won };
+  const p2 = run(o, st2, cfg);
+  check('closes once monday is Won', p2.tasks.some((t) => t.op === 'close' && t.dedupeKey === reviewKey));
+  check('…without writing anything', writesOf(p2).length === 0);
+
+  // Or Salesforce drops back below confirmed → closes too.
+  const p3 = run(opp({ Win_Likelihood__c: '75%' }), apply(p, backfilled()), cfg);
+  check('closes when Salesforce drops to 75%', p3.tasks.some((t) => t.op === 'close' && t.dedupeKey === reviewKey));
+
+  // Already Won in monday → nothing to review.
+  const p4 = run(o, backfilled(S.won), cfg);
+  check('already Won → no task', !opens(p4).some((t) => t.dedupeKey === reviewKey));
+
+  // After the first look, a NEW move to confirmed does fire Won as designed.
+  const st5 = apply(run(opp({ Win_Likelihood__c: '75%' }), backfilled(), cfg), backfilled());
+  const p5 = run(o, st5, cfg);
+  check('later 75% → 99% sets Won automatically', statusWrite(writesOf(p5)) === S.won);
+}
+
 console.log(`\n${cases} cases, ${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

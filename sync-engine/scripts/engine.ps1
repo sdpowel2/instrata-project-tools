@@ -9,6 +9,7 @@
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 backfill
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 requeue-linked
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 measure-diff    (dry run: reset dry baseline, re-check all)
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 diff-report     (CSV to Desktop: monday now vs Salesforce)
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 sweep
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 reconcile 006XXXXXXXXXXXXXXX
 
@@ -16,7 +17,7 @@
 #>
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('status', 'backfill-preview', 'backfill', 'requeue-linked', 'measure-diff', 'sweep', 'reconcile')]
+  [ValidateSet('status', 'backfill-preview', 'backfill', 'requeue-linked', 'measure-diff', 'diff-report', 'sweep', 'reconcile')]
   [string]$Command,
   [Parameter(Position = 1)]
   [string]$OpportunityId,
@@ -56,6 +57,18 @@ switch ($Command) {
   'backfill'         { Write-Host 'Running backfill (saves links + problem tasks, queues reconciles)...'; $r = Call 'POST' '/admin/backfill' @{ preview = $false } }
   'requeue-linked'   { $r = Call 'POST' '/admin/requeue-linked' @{} }
   'measure-diff'     { Write-Host 'Resetting the DRY-RUN baseline and re-checking every linked item...'; $r = Call 'POST' '/admin/requeue-linked' @{ resetDryRunBaseline = $true } }
+  'diff-report' {
+    Write-Host 'Building the review report from live monday + Salesforce data (read-only)...'
+    $csv = Call 'GET' '/admin/diff-report?format=csv' $null
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $path = Join-Path $desktop ("sync-review-{0}-{1}.csv" -f $App, (Get-Date -Format 'yyyyMMdd-HHmm'))
+    # UTF-8 with BOM so Excel shows names with accents and the em dashes correctly.
+    [IO.File]::WriteAllText($path, $csv, (New-Object System.Text.UTF8Encoding $true))
+    $lines = ($csv -split "`r`n" | Where-Object { $_ -ne '' }).Count - 1
+    Write-Host ("Saved {0} rows to {1}" -f $lines, $path) -ForegroundColor Green
+    Invoke-Item $path
+    return
+  }
   'sweep'            { $r = Call 'POST' '/admin/sweep' @{} }
   'reconcile' {
     if ($OpportunityId -notmatch '^006[a-zA-Z0-9]{12}([a-zA-Z0-9]{3})?$') { throw 'Give an opportunity id: engine.ps1 reconcile 006...' }
