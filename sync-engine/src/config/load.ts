@@ -59,12 +59,15 @@ export async function loadRuntimeConfig(
       return [`${l.semantic_key}.${l.label_key}`, l.monday_label_id];
     })),
     creationStages: [],
+    confirmedWinPcts: [],
     blockedColumns: drift.blockedColumns,
   };
 
   const settingsMap = Object.fromEntries(settings.rows.map((s) => [s.key, s.value]));
   const cs = settingsMap.creation_stages;
   planner.creationStages = Array.isArray(cs) ? cs.map(String) : [];
+  const cw = settingsMap.confirmed_win_pcts;
+  planner.confirmedWinPcts = Array.isArray(cw) && cw.length > 0 ? cw.map(String) : ['100%'];
 
   const dead = new Set(drift.deadMapRows.map((d) => `${d.table}|${d.sfValue}`));
   const maps: PlannerMaps = { businessUnit: {}, winPct: {}, salesRep: {}, stageAction: {} };

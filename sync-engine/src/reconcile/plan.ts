@@ -49,12 +49,12 @@ import {
   type SfFieldKey,
 } from './normalize.ts';
 
-const FIELD_META: Record<SfFieldKey, { label: string; map?: keyof Omit<PlannerMaps, 'stageAction'>; table?: string }> = {
-  'presales.due_date': { label: 'Due Date' },
-  'presales.quote_number': { label: 'Quote Number' },
-  'presales.win_pct': { label: 'Win %', map: 'winPct', table: 'map_win_pct' },
-  'presales.business_unit': { label: 'Business Unit', map: 'businessUnit', table: 'map_business_unit' },
-  'presales.sales_person': { label: 'Sales Rep', map: 'salesRep', table: 'map_sales_rep' },
+const FIELD_META: Record<SfFieldKey, { label: string; mondayColumn: string; map?: keyof Omit<PlannerMaps, 'stageAction'>; table?: string }> = {
+  'presales.due_date': { label: 'Due Date', mondayColumn: 'Due Date' },
+  'presales.quote_number': { label: 'Quote Number', mondayColumn: 'Quote Number' },
+  'presales.win_pct': { label: 'Win %', mondayColumn: 'Win Percentage', map: 'winPct', table: 'map_win_pct' },
+  'presales.business_unit': { label: 'Business Unit', mondayColumn: 'Business Unit', map: 'businessUnit', table: 'map_business_unit' },
+  'presales.sales_person': { label: 'Sales Rep', mondayColumn: 'Sales Person', map: 'salesRep', table: 'map_sales_rep' },
 };
 
 /** Stage actions that end the opportunity — a Win % of 100 is ignored while in one. */
@@ -145,7 +145,7 @@ function toMondayValue(ctx: Ctx, key: SfFieldKey, sfValue: string): MondayValue 
 }
 
 // ── Field sync (§4.4) ───────────────────────────────────────────────────────
-/** Mutates `baseline` and `writes`. Returns true when Win % reached 100% (→ Won). */
+/** Mutates `baseline` and `writes`. Returns true when Win % became a confirmed-to-win value (→ Won). */
 function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef: string): boolean {
   const sf = extractSfFields(ctx.opp);
   let wonTriggered = false;
@@ -154,10 +154,18 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
     const cur = sf[key];
     const has = Object.prototype.hasOwnProperty.call(baseline, key);
     const last = has ? baseline[key] : undefined;
-    const unmappedKey = failureKey('unmapped_value', ctx.opp.Id, key);
+    const prevMiss = baseline[missKey(key)];
+
+    /** This opportunity no longer waits on the value it last failed to map. */
+    const resolveMiss = () => {
+      if (prevMiss !== undefined && prevMiss !== null) {
+        ctx.tasks.push({ op: 'close', dedupeKey: unmappedValueKey(key, prevMiss), memberId: ctx.opp.Id });
+      }
+      delete baseline[missKey(key)];
+    };
 
     if (has && cur === last) {
-      closeTask(ctx, unmappedKey);
+      resolveMiss();
       continue;
     }
 
@@ -166,20 +174,20 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
     if (cur === null) {
       if (has) ctx.events.push(sfEvent(ctx, { eventType: 'field_changed', field: key, oldValue: last, newValue: null, applied: false }));
       baseline[key] = null;
-      delete baseline[missKey(key)];
-      closeTask(ctx, unmappedKey);
+      resolveMiss();
       continue;
     }
 
-    // 100% isn't a label — it's the status action Won (§3.2, §4.6).
-    if (key === 'presales.win_pct' && cur === '100%') {
-      if (last !== '100%') {
+    // Confirmed-to-win percentages (99% and 100% at Instrata) aren't labels —
+    // they're the status action Won (§3.2, §4.6).
+    const confirmed = ctx.config.confirmedWinPcts;
+    if (key === 'presales.win_pct' && confirmed.includes(cur)) {
+      if (last === undefined || last === null || !confirmed.includes(last)) {
         wonTriggered = true;
         ctx.events.push(sfEvent(ctx, { eventType: 'field_changed', field: key, oldValue: last ?? null, newValue: cur, details: { applied_as: 'status_won' } }));
       }
       baseline[key] = cur;
-      delete baseline[missKey(key)];
-      closeTask(ctx, unmappedKey);
+      resolveMiss();
       continue;
     }
 
@@ -192,16 +200,14 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
 
     const value = toMondayValue(ctx, key, cur);
     if (!value) {
-      // Leave the field (and its baseline) untouched so it's retried; only raise
-      // the failure when this particular value hasn't already been reported.
-      if (baseline[missKey(key)] !== cur) {
-        const meta = FIELD_META[key];
-        openFailure(
-          ctx, 'unmapped_value', ctx.opp.Id, key,
-          `Unmapped ${meta.label}: ${cur}`,
-          `Salesforce ${meta.label} "${cur}" on "${ctx.opp.Name}" has no monday label. Add it to ${meta.table} in Sync Admin → Mappings.`,
-          { mondayItemId: itemRef === CREATED_ITEM ? undefined : itemRef, mappingTable: meta.table },
-        );
+      // Leave the field (and its baseline) untouched so it's retried. Join the
+      // ONE task for this missing value (grouped across opportunities); leave
+      // the task for a value it previously missed on, if that changed.
+      if (prevMiss !== cur) {
+        if (prevMiss !== undefined && prevMiss !== null) {
+          ctx.tasks.push({ op: 'close', dedupeKey: unmappedValueKey(key, prevMiss), memberId: ctx.opp.Id });
+        }
+        openUnmapped(ctx, key, cur, itemRef);
         baseline[missKey(key)] = cur;
       }
       continue;
@@ -210,11 +216,34 @@ function syncFields(ctx: Ctx, baseline: Baseline, writes: ColumnWrite[], itemRef
     writes.push({ semanticKey: key, value });
     ctx.events.push(sfEvent(ctx, { eventType: 'field_changed', field: key, oldValue: last ?? null, newValue: cur, details: { monday_item_id: itemRef } }));
     baseline[key] = cur;
-    delete baseline[missKey(key)];
-    closeTask(ctx, unmappedKey);
+    resolveMiss();
   }
 
   return wonTriggered;
+}
+
+/** One task per (field, missing value) — not per opportunity (Seth 2026-10-12). */
+export function unmappedValueKey(field: string, value: string): string {
+  return `sync_failure:unmapped_value:${field}:${value}`;
+}
+
+function openUnmapped(ctx: Ctx, key: SfFieldKey, value: string, itemRef: string): void {
+  const meta = FIELD_META[key];
+  const dedupeKey = unmappedValueKey(key, value);
+  const where = `monday item ${itemRef}`; // the executor rewrites a CREATED_ITEM ref
+  ctx.tasks.push({
+    op: 'open',
+    taskType: 'sync_failure',
+    dedupeKey,
+    title: `Unmapped ${meta.label}: ${value}`,
+    details:
+      `Salesforce ${meta.label} "${value}" has no matching monday "${meta.mondayColumn}" label, so that field was left unchanged. ` +
+      `Add the label in monday if it's missing, then map "${value}" to it in Sync Admin → Mappings (${meta.table}). ` +
+      `The affected opportunities re-sync on their own within the hour.`,
+    sourceRef: { board_key: 'presales', mapping_table: meta.table },
+    member: { id: ctx.opp.Id, label: `${ctx.opp.Name} (Salesforce ${ctx.opp.Id}; ${where})` },
+  });
+  ctx.events.push(sfEvent(ctx, { eventType: 'sync_failure', field: key, applied: false, details: { kind: 'unmapped_value', dedupe_key: dedupeKey, value } }));
 }
 
 // ── Stage actions (§4.6) ────────────────────────────────────────────────────

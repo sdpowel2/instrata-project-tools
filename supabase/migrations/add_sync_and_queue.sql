@@ -570,6 +570,7 @@ insert into config_settings (key, value, description) values
   ('cleanliness_excluded_groups', '{"presales": ["new_requests", "lost", "declined_to_bid", "pre_engineering"]}',
    'Groups whose items never count as data-cleanliness exceptions (spec §7).'),
   ('writeback_debounce_seconds', '30', 'Per-item debounce before pushing price / GM% to Salesforce (spec §5).'),
+  ('confirmed_win_pcts', '["99%", "100%"]', 'Win % values that mean Confirmed to Win: the sync sets status Won and writes no Win % label.'),
   ('report_pm_weekly',       '{"weekday": 4, "due_time": "17:00", "tz": "America/New_York"}', 'Thursday 5 pm ET.'),
   ('report_presales_weekly', 'null', 'Day of week — open item O-6. Generator stays off while null.'),
   ('report_avss_monthly',    'null', 'Which business day — open item O-7. Generator stays off while null.'),
@@ -581,7 +582,7 @@ insert into map_win_pct (sf_value, monday_label_id, notes) values
   ('25%', 1,    ''),
   ('50%', 2,    ''),
   ('75%', 3,    ''),
-  ('99%', null, 'Add the "99%" label in monday (Build Guide §1.1), then pick it here')
+  ('99%', null, '99% = Confirmed to Win (status Won) via config_settings.confirmed_win_pcts, not a label')
 on conflict (sf_value) do nothing;
 
 insert into map_business_unit (sf_value, monday_label_id, notes) values
@@ -616,11 +617,11 @@ insert into map_sales_rep (sf_value, monday_label_id, notes) values
   ('Mark Lawing', 57, ''), ('Paul Steudler', 58, ''), ('RB Dawson', 59, ''), ('Robi Hullner', 60, ''),
   ('Max Jaeger', 61, ''), ('Deron Powers', 62, ''), ('Dave Halpin', 63, ''), ('Alan Cherry', 64, ''),
   ('Joe Kirkner', 65, ''), ('Adam Martin', 66, ''),
-  ('Johnny Price',    null, 'Add to monday Sales Person, then map'),
-  ('Scott Woodlief',  null, 'Add to monday Sales Person, then map'),
-  ('Jerry Bates',     null, 'Add to monday Sales Person, then map'),
-  ('David Poore',     null, 'Add to monday Sales Person, then map'),
-  ('Rithom Success',  null, 'Add to monday Sales Person, then map')
+  -- Labels 67–79 added to both pre-sales boards 2026-10-12 (sync_confirmed_win_and_new_reps.sql)
+  ('Johnny Price', 67, ''), ('Jerry Bates', 68, ''), ('Scott Woodlief', 69, ''), ('David Poore', 70, ''),
+  ('Rithom Success', 71, ''), ('Gilbert Romo', 72, ''), ('Mike Schaffer', 73, ''), ('Dave Jobe', 74, ''),
+  ('Jim McKenna', 75, ''), ('Joe Collis', 76, ''), ('Tanner Duren', 77, ''), ('Paul Norris', 78, ''),
+  ('Robert Lewis', 79, '')
 on conflict (sf_value) do nothing;
 
 insert into map_stage_action (stage, action, params, notes) values

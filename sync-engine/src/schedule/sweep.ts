@@ -38,8 +38,9 @@ export async function runSweep(deps: { db: Db; salesforce: SalesforceClient }, n
   const changed = new Set<string>([...opps.map((o) => o.Id), ...lines.map((l) => l.OpportunityId), ...deleted.map((d) => d.OpportunityId)]);
 
   const { rows: retry } = await deps.db.query<{ opp: string }>(
-    `select distinct source_ref->>'sf_opportunity_id' as opp from task
-      where dedupe_key like 'sync_failure:unmapped_value:%' and status <> 'done' and source_ref ? 'sf_opportunity_id'`);
+    `select distinct m->>'id' as opp
+       from task, jsonb_array_elements(coalesce(source_ref->'members', '[]'::jsonb)) as m
+      where dedupe_key like 'sync_failure:unmapped_value:%' and status <> 'done'`);
   const all = new Set([...changed, ...retry.map((r) => r.opp).filter(Boolean)]);
 
   let enqueued = 0;

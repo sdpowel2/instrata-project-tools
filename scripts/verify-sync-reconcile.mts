@@ -33,6 +33,7 @@ function makeConfig(over: Partial<PlannerConfig> = {}): PlannerConfig {
     },
     labels: Object.fromEntries(Object.entries(S).map(([k, v]) => [`presales.status.${k}`, v])),
     creationStages: ['Engineering', 'Budget', 'Rebid', 'Delivered to Customer', 'Contract In House'],
+    confirmedWinPcts: ['100%'],
     blockedColumns: [],
     ...over,
   };
@@ -229,7 +230,8 @@ section('8. Mapping miss: one field fails, the rest still write, retried until m
   check('quote number still written', writeKeys(writesOf(p)) === 'presales.quote_number', writeKeys(writesOf(p)));
   const t = opens(p);
   check('one unmapped_value task naming the mapping table',
-    t.length === 1 && t[0].dedupeKey === `sync_failure:unmapped_value:${OPP}:presales.business_unit` && t[0].sourceRef.mapping_table === 'map_business_unit');
+    t.length === 1 && t[0].dedupeKey === 'sync_failure:unmapped_value:presales.business_unit:Louisiana' && t[0].sourceRef.mapping_table === 'map_business_unit');
+  check('task carries this opportunity as a member', t[0]?.member?.id === OPP && /Acme HQ/.test(t[0]?.member?.label ?? ''), JSON.stringify(t[0]?.member));
   check('sync_failure event logged', p.events.some((e) => e.eventType === 'sync_failure'));
   const st2 = apply(p, st);
   check('BU baseline left unchanged (so it is retried)', st2.links[0].baseline['presales.business_unit'] === 'Northeast');
@@ -238,7 +240,7 @@ section('8. Mapping miss: one field fails, the rest still write, retried until m
   const fixed = makeMaps(); fixed.businessUnit.Louisiana = 7;
   const p3 = run(o, st2, makeConfig(), fixed);
   check('after Hope maps it: BU written', writeKeys(writesOf(p3)) === 'presales.business_unit');
-  check('after Hope maps it: failure task closed', p3.tasks.some((x) => x.op === 'close' && x.dedupeKey === `sync_failure:unmapped_value:${OPP}:presales.business_unit`));
+  check('after Hope maps it: this opportunity leaves the task', p3.tasks.some((x) => x.op === 'close' && x.dedupeKey === 'sync_failure:unmapped_value:presales.business_unit:Louisiana' && x.memberId === OPP));
   idempotent(p3, st2, o, makeConfig(), fixed);
 }
 
@@ -248,7 +250,8 @@ section('9. Unmapped value on create: item still created without that field');
   const p = run(o, empty());
   check('create planned', !!p.create);
   check('sales person not written', !p.create?.columnWrites.some((w) => w.semanticKey === 'presales.sales_person'));
-  check('unmapped_value task opened', opens(p).some((t) => t.dedupeKey.endsWith(':presales.sales_person')));
+  check('unmapped_value task opened, keyed by the missing value', opens(p).some((t) => t.dedupeKey === 'sync_failure:unmapped_value:presales.sales_person:Johnny Price'));
+  check('member label points at the not-yet-created item (executor rewrites it)', opens(p).some((t) => t.op === 'open' && !!t.member?.label.includes('monday item ' + CREATED_ITEM)));
 }
 
 section('10. Sales rep: blank → House, Salesforce spelling translated');
@@ -468,6 +471,42 @@ section('31. Win 100% while Closed Lost → Lost wins, no Won');
   const p = run(opp({ StageName: 'Closed Lost', Win_Likelihood__c: '100%' }), linked(opp()));
   check('status → Lost, not Won', statusWrite(writesOf(p)) === S.lost);
   check('no won tasks', !opens(p).some((t) => t.taskType === 'won_handoff'));
+}
+
+section('32. Instrata setting: 99% AND 100% are Confirmed to Win → status Won, no label, no re-trigger between them');
+{
+  const cfg = makeConfig({ confirmedWinPcts: ['99%', '100%'] });
+  const st = linked(opp(), {}, cfg);
+  const p = run(opp({ Win_Likelihood__c: '99%' }), st, cfg);
+  check('99% → status Won', statusWrite(writesOf(p)) === S.won);
+  check('win_pct dropdown not written', !writesOf(p).some((w) => w.semanticKey === 'presales.win_pct'));
+  check('no unmapped-99% task', !opens(p).some((t) => t.dedupeKey.includes('99%')));
+  const st2 = apply(p, st);
+  const p2 = run(opp({ Win_Likelihood__c: '100%' }), st2, cfg);
+  check('99% → 100% does not re-trigger Won', statusWrite(writesOf(p2)) === undefined && !opens(p2).some((t) => t.taskType === 'won_handoff'));
+  const p3 = run(opp({ Win_Likelihood__c: '99%' }), linked(opp()));
+  check('with the default setting (100% only), 99% is just an unmapped label', opens(p3).some((t) => t.dedupeKey === 'sync_failure:unmapped_value:presales.win_pct:99%'));
+}
+
+section("33. Missing value changes (A → B): joins B's task, leaves A's");
+{
+  const st = linked(opp());
+  const p1 = run(opp({ Business_Unit__c: 'Louisiana' }), st);
+  const st2 = apply(p1, st);
+  const p2 = run(opp({ Business_Unit__c: 'Texas' }), st2);
+  check('joins Texas', opens(p2).some((t) => t.dedupeKey === 'sync_failure:unmapped_value:presales.business_unit:Texas' && t.member?.id === OPP));
+  check('leaves Louisiana', p2.tasks.some((t) => t.op === 'close' && t.dedupeKey === 'sync_failure:unmapped_value:presales.business_unit:Louisiana' && t.memberId === OPP));
+  idempotent(p2, st2, opp({ Business_Unit__c: 'Texas' }));
+}
+
+section('34. Two opportunities missing the same value share ONE task');
+{
+  const a = run(opp({ Sales_Rep__r: { Name: 'Johnny Price' } }), empty());
+  const b = run(opp({ Id: '006BBB000000002', Name: 'Other Job', Sales_Rep__r: { Name: 'Johnny Price' } }), empty());
+  const ka = opens(a).find((t) => t.dedupeKey.includes('Johnny Price'));
+  const kb = opens(b).find((t) => t.dedupeKey.includes('Johnny Price'));
+  check('same dedupe key', !!ka && ka.dedupeKey === kb?.dedupeKey);
+  check('different members', ka?.member?.id === OPP && kb?.member?.id === '006BBB000000002');
 }
 
 console.log(`\n${cases} cases, ${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`);

@@ -31,10 +31,13 @@ test('sweep: unions changed opps, changed lines and deleted lines; enqueues one 
 
 test('sweep: re-queues opportunities behind open unmapped-value tasks (mapping fixes get picked up)', async () => {
   const sf = fakeSalesforce();
-  await openTask(db, { op: 'open', taskType: 'sync_failure', dedupeKey: 'sync_failure:unmapped_value:006Z:presales.business_unit', title: 't', details: 'd', sourceRef: { sf_opportunity_id: '006Z' } }, null);
+  const open = (id: string) => openTask(db, { op: 'open', taskType: 'sync_failure', dedupeKey: 'sync_failure:unmapped_value:presales.business_unit:Louisiana', title: 't', details: 'd', sourceRef: {}, member: { id, label: id } }, null);
+  await open('006Y');
+  await open('006Z');
   const r = await runSweep({ db, salesforce: sf.client }, new Date());
-  assert.equal(r.mappingRetries, 1);
-  assert.equal((await db.query<any>(`select payload->>'opportunity_id' as id from webhook_inbox`)).rows[0].id, '006Z');
+  assert.equal(r.mappingRetries, 2, 'every member of the grouped task');
+  const ids = (await db.query<any>(`select payload->>'opportunity_id' as id from webhook_inbox order by 1`)).rows.map((x) => x.id);
+  assert.deepEqual(ids, ['006Y', '006Z']);
 });
 
 test('sweep: a Salesforce failure leaves the watermark where it was', async () => {

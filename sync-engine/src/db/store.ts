@@ -5,7 +5,7 @@
  */
 import type { Queryable } from './pool.ts';
 import type { SyncMode } from '../env.ts';
-import type { Baseline, EventIntent, LinkRow, TaskIntent } from '../reconcile/types.ts';
+import type { Baseline, EventIntent, LinkRow, TaskIntent, TaskMember } from '../reconcile/types.ts';
 
 /** In dry run the engine reads and advances its own baseline, never the live one. */
 const baselineColumn = (mode: SyncMode) => (mode === 'live' ? 'last_synced_values' : 'dry_run_synced_values');
@@ -110,7 +110,7 @@ export async function appendEvents(q: Queryable, events: EventRow[], correlation
 }
 
 // ── task (spec §6.1 open / reopen / close semantics) ────────────────────────
-export type TaskOutcome = 'opened' | 'reopened' | 'unchanged' | 'closed';
+export type TaskOutcome = 'opened' | 'reopened' | 'unchanged' | 'closed' | 'shrunk';
 
 type OpenIntent = Extract<TaskIntent, { op: 'open' }>;
 
@@ -118,18 +118,52 @@ type OpenIntent = Extract<TaskIntent, { op: 'open' }>;
  * Create the task, or reopen the SAME row if it was closed (reopen_count + 1,
  * open_since = now). An already-open task only has its text refreshed.
  */
+/**
+ * Grouped tasks (one per missing mapping value) keep their member opportunities
+ * in source_ref.members and their base text in source_ref.title_base /
+ * details_base; the visible title and details are rendered from those.
+ */
+export function renderGrouped(base: { title: string; details: string }, members: TaskMember[]): { title: string; details: string } {
+  const n = members.length;
+  return {
+    title: n > 1 ? `${base.title} (${n} opportunities)` : base.title,
+    details: n > 0 ? `${base.details}\n\nOpportunities to check:\n${members.map((m) => `• ${m.label}`).join('\n')}` : base.details,
+  };
+}
+
+interface TaskRow {
+  id: string;
+  status: string;
+  title: string;
+  details: string;
+  source_ref: Record<string, any>;
+}
+
 export async function openTask(q: Queryable, t: OpenIntent, correlationId: string | null, dueAt: string | null = null): Promise<TaskOutcome> {
-  const { rows } = await q.query<{ id: string; status: string; title: string; details: string }>(
-    'select id, status, title, details from task where dedupe_key = $1 for update', [t.dedupeKey]);
+  const { rows } = await q.query<TaskRow>(
+    'select id, status, title, details, source_ref from task where dedupe_key = $1 for update', [t.dedupeKey]);
   const existing = rows[0];
+
+  let title = t.title;
+  let details = t.details;
+  let sourceRef: Record<string, unknown> = t.sourceRef;
+  if (t.member) {
+    // A reopened task starts a fresh member list; an open one gains this member.
+    const members: TaskMember[] = existing && existing.status !== 'done' ? [...(existing.source_ref?.members ?? [])] : [];
+    const at = members.findIndex((m) => m.id === t.member!.id);
+    if (at >= 0) members[at] = t.member;
+    else members.push(t.member);
+    sourceRef = { ...t.sourceRef, title_base: t.title, details_base: t.details, members };
+    ({ title, details } = renderGrouped(t, members));
+  }
 
   if (!existing) {
     const ins = await q.query<{ id: string }>(
       `insert into task (task_type, dedupe_key, title, details, source_ref, status, synced_status, due_at, open_since, monday_dirty)
        values ($1, $2, $3, $4, $5::jsonb, 'not_started', 'not_started', $6::timestamptz, now(), true)
        returning id`,
-      [t.taskType, t.dedupeKey, t.title, t.details, JSON.stringify(t.sourceRef), dueAt]);
-    await appendEvents(q, [taskEvent(ins.rows[0].id, 'task_opened', t.dedupeKey, { task_type: t.taskType })], correlationId);
+      [t.taskType, t.dedupeKey, title, details, JSON.stringify(sourceRef), dueAt]);
+    await appendEvents(q, [taskEvent(ins.rows[0].id, 'task_opened', t.dedupeKey, { task_type: t.taskType, ...(t.member ? { member: t.member.id } : {}) })], correlationId);
     return 'opened';
   }
 
@@ -140,19 +174,42 @@ export async function openTask(q: Queryable, t: OpenIntent, correlationId: strin
               open_since = now(), closed_at = null, close_mode = null,
               title = $2, details = $3, source_ref = $4::jsonb, monday_dirty = true
         where id = $1`,
-      [existing.id, t.title, t.details, JSON.stringify(t.sourceRef)]);
-    await appendEvents(q, [taskEvent(existing.id, 'task_reopened', t.dedupeKey, { task_type: t.taskType })], correlationId);
+      [existing.id, title, details, JSON.stringify(sourceRef)]);
+    await appendEvents(q, [taskEvent(existing.id, 'task_reopened', t.dedupeKey, { task_type: t.taskType, ...(t.member ? { member: t.member.id } : {}) })], correlationId);
     return 'reopened';
   }
 
-  if (existing.title !== t.title || existing.details !== t.details) {
-    await q.query('update task set title = $2, details = $3, monday_dirty = true where id = $1', [existing.id, t.title, t.details]);
+  if (existing.title !== title || existing.details !== details) {
+    await q.query('update task set title = $2, details = $3, source_ref = $4::jsonb, monday_dirty = true where id = $1',
+      [existing.id, title, details, JSON.stringify(sourceRef)]);
   }
   return 'unchanged';
 }
 
-/** Close if open; accumulate open time. No-op for a missing or already-closed task. */
-export async function closeTask(q: Queryable, dedupeKey: string, mode: 'auto' | 'manual', correlationId: string | null): Promise<TaskOutcome> {
+/**
+ * Close if open; accumulate open time. No-op for a missing or already-closed task.
+ * With `memberId`, only that member leaves a grouped task; the task closes when
+ * the last one does ('shrunk' = members remain).
+ */
+export async function closeTask(q: Queryable, dedupeKey: string, mode: 'auto' | 'manual', correlationId: string | null, memberId?: string): Promise<TaskOutcome> {
+  if (memberId !== undefined) {
+    const { rows } = await q.query<TaskRow>(
+      'select id, status, title, details, source_ref from task where dedupe_key = $1 for update', [dedupeKey]);
+    const row = rows[0];
+    if (!row || row.status === 'done') return 'unchanged';
+    const before: TaskMember[] = row.source_ref?.members ?? [];
+    const members = before.filter((m) => m.id !== memberId);
+    if (members.length === before.length) return 'unchanged';
+    if (members.length > 0) {
+      const base = { title: String(row.source_ref.title_base ?? row.title), details: String(row.source_ref.details_base ?? row.details) };
+      const r = renderGrouped(base, members);
+      await q.query('update task set title = $2, details = $3, source_ref = $4::jsonb, monday_dirty = true where id = $1',
+        [row.id, r.title, r.details, JSON.stringify({ ...row.source_ref, members })]);
+      return 'shrunk';
+    }
+    await q.query('update task set source_ref = $2::jsonb where id = $1', [row.id, JSON.stringify({ ...row.source_ref, members })]);
+  }
+
   const { rows } = await q.query<{ id: string }>(
     `update task
         set status = 'done', synced_status = 'done', close_mode = $2, closed_at = now(),

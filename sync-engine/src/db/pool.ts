@@ -25,16 +25,38 @@ export interface Db extends Queryable {
 
 export function createDb(databaseUrl: string, schema: string): Db {
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 5 });
+
   // Unqualified table names resolve to the engine's schema (public or sync_sandbox).
-  pool.on('connect', (client) => {
-    client.query(`set search_path to ${schema}, public`).catch(() => undefined);
-  });
+  // search_path is set — and awaited — the first time each pooled connection is
+  // handed out. (Firing it from pool.on('connect') raced the caller's first query:
+  // pg queued it, but warned that concurrent client.query() is deprecated.)
+  const initialized = new WeakSet<pg.PoolClient>();
+  async function acquire(): Promise<pg.PoolClient> {
+    const client = await pool.connect();
+    if (!initialized.has(client)) {
+      try {
+        await client.query(`set search_path to ${schema}, public`);
+      } catch (e) {
+        client.release(e as Error);
+        throw e;
+      }
+      initialized.add(client);
+    }
+    return client;
+  }
 
   return {
-    query: async (text, params) => (await pool.query(text, params as any[])) as any,
+    async query(text, params) {
+      const client = await acquire();
+      try {
+        return (await client.query(text, params as any[])) as any;
+      } finally {
+        client.release();
+      }
+    },
 
     async tx(fn) {
-      const client = await pool.connect();
+      const client = await acquire();
       try {
         await client.query('begin');
         const out = await fn(client);
@@ -49,7 +71,7 @@ export function createDb(databaseUrl: string, schema: string): Db {
     },
 
     async withLock(name, fn) {
-      const client = await pool.connect();
+      const client = await acquire();
       try {
         const { rows } = await client.query<{ ok: boolean }>(
           'select pg_try_advisory_lock(hashtext($1)) as ok', [`sync-engine:${schema}:${name}`]);

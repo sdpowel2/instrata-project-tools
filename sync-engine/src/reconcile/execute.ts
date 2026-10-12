@@ -80,6 +80,8 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   // ── Persist ──
   const itemRef = createdId ?? `pending:${plan.opportunityId}`;
   const resolve = (s: string) => s.split(CREATED_ITEM).join(itemRef);
+  // Task-member labels read 'monday item <id>'; for a not-yet-created item say so in words.
+  const resolveItemLabel = (s: string) => s.split(`monday item ${CREATED_ITEM}`).join(createdId ? `monday item ${createdId}` : 'not on the board yet');
 
   const events: EventRow[] = plan.events
     .filter((e) => live || e.eventType === 'sync_failure')
@@ -116,9 +118,10 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
     for (const t of plan.tasks.filter(keepTask)) {
       if (t.op === 'open') {
         const ref = { ...t.sourceRef, ...(t.sourceRef.monday_item_id ? { monday_item_id: resolve(t.sourceRef.monday_item_id) } : {}) };
-        await openTask(q, { ...t, dedupeKey: resolve(t.dedupeKey), sourceRef: ref }, correlationId);
+        const member = t.member ? { ...t.member, label: resolveItemLabel(t.member.label) } : undefined;
+        await openTask(q, { ...t, dedupeKey: resolve(t.dedupeKey), sourceRef: ref, ...(member ? { member } : {}) }, correlationId);
       } else {
-        await closeTask(q, resolve(t.dedupeKey), 'auto', correlationId);
+        await closeTask(q, resolve(t.dedupeKey), 'auto', correlationId, t.memberId);
       }
     }
   });

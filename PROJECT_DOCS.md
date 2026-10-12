@@ -832,6 +832,13 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-12 — Sync engine on staging; 99%/100% = Confirmed to Win; grouped failure tasks
+- **Staging live (dry run).** `instrata-sync-engine-staging` on Fly (one machine, `sync_sandbox` schema, Salesforce `partial` sandbox via the "AVSS Project Tools" External Client App, monday sandbox board `18435017528`). First sweep reconciled 92 sandbox opportunities with no errors. Secrets are set with `sync-engine/scripts/set-secrets.ps1`, which reads from the clipboard (Windows PowerShell 5.1 adds a BOM to piped stdin, which broke `fly secrets import`).
+- **Decision (Seth): Win % 99% and 100% both mean Confirmed to Win.** The sync sets status Won and writes no Win % label; there is no "99%" label in monday. Driven by `config_settings.confirmed_win_pcts`.
+- **Decision (Seth): one failure task per missing value**, not per opportunity. Tasks keep a member list (`source_ref.members`), render "Opportunities to check" in the details, and close when the last member syncs.
+- **monday labels:** 13 reps (found by comparing production Salesforce reps on AV opportunities against monday) added to the Sales Person dropdown on both pre-sales boards, ids 67–79, existing labels untouched. Mapped by `sync_confirmed_win_and_new_reps.sql`, which also updates both schemas.
+- **monday API:** `settings_str` is gone in current versions (use `settings`). Edge functions still pin the unsupported `2024-10`; flagged as a separate task.
+
 ### 2026-10-11 — Salesforce ↔ monday sync + Hope's Queue: schema + reconcile planner
 First slice of `Product Spec/project-tools-sync-and-queue-spec.md` (plan: `Product Spec/sync-and-queue-implementation-plan.md`). Nothing talks to Salesforce or monday yet.
 

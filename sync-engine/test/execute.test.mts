@@ -126,7 +126,7 @@ test('live unmapped value: failure task with mapping table, retried until Hope m
   await h.run();
   const create = h.monday.writes[0].args[3] as Record<string, unknown>;
   assert.equal(create.dropdown2, undefined, 'unmapped BU not written');
-  const key = `sync_failure:unmapped_value:${OPP}:presales.business_unit`;
+  const key = 'sync_failure:unmapped_value:presales.business_unit:Louisiana';
   const task = (await rows('select status, source_ref from task where dedupe_key = $1', [key]))[0];
   assert.equal(task.status, 'not_started');
   assert.equal(task.source_ref.mapping_table, 'map_business_unit');
@@ -169,7 +169,7 @@ test('live Canceled with no price: @mention update, then archive, link archived'
 test('dry run keeps failure tasks but not won / stage-check tasks', async () => {
   await insertLink(db, { mondayItemId: '778', sfOpportunityId: OPP, sfLineItemId: LINE, baseline: { 'sf.stage': 'Engineering' } }, 'live');
   await db.query(`update sf_link set dry_run_synced_values = last_synced_values`);
-  const h = harness('dry_run', opp({ StageName: 'Closed Won', Sales_Rep__r: { Name: 'Johnny Price' } }));
+  const h = harness('dry_run', opp({ StageName: 'Closed Won', Sales_Rep__r: { Name: 'Not A Real Rep' } }));
   h.monday.items.set('778', { id: '778', name: 'x', state: 'active', group: { id: 'new_group12986' }, column_values: [] });
   await h.run();
   const types = (await rows('select task_type from task order by task_type')).map((r) => r.task_type);

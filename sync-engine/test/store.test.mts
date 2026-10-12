@@ -57,6 +57,40 @@ test('an open task gets its text refreshed, not duplicated', async () => {
   assert.equal(rows[0].title, 'Unmapped Sales Rep: Johnny Price');
 });
 
+test('grouped task: one row per missing value; members join and leave; closes when empty', async () => {
+  const key = 'sync_failure:unmapped_value:presales.sales_person:Jim McKenna';
+  const grouped = (id: string, name: string) => ({
+    op: 'open' as const, taskType: 'sync_failure' as const, dedupeKey: key,
+    title: 'Unmapped Sales Rep: Jim McKenna', details: 'Add the label, then map it.',
+    sourceRef: { mapping_table: 'map_sales_rep' }, member: { id, label: `${name} (Salesforce ${id})` },
+  });
+  const task = async () => (await db.query<any>('select status, title, details, source_ref, reopen_count from task where dedupe_key = $1', [key])).rows[0];
+
+  assert.equal(await openTask(db, grouped('006C1', 'Aritzia- Cherry Hill Mall'), null), 'opened');
+  assert.equal((await task()).title, 'Unmapped Sales Rep: Jim McKenna', 'one opportunity: no count');
+  assert.equal(await openTask(db, grouped('006C2', 'Aritzia- Menlo Park, NJ'), null), 'unchanged');
+  assert.equal(await openTask(db, grouped('006C2', 'Aritzia- Menlo Park, NJ'), null), 'unchanged', 'joining twice is a no-op');
+  let t = await task();
+  assert.equal((await db.query<any>('select count(*)::int n from task where dedupe_key = $1', [key])).rows[0].n, 1, 'still one row');
+  assert.equal(t.title, 'Unmapped Sales Rep: Jim McKenna (2 opportunities)');
+  assert.equal(t.details, 'Add the label, then map it.\n\nOpportunities to check:\n• Aritzia- Cherry Hill Mall (Salesforce 006C1)\n• Aritzia- Menlo Park, NJ (Salesforce 006C2)');
+
+  assert.equal(await closeTask(db, key, 'auto', null, '006C1'), 'shrunk');
+  t = await task();
+  assert.equal(t.status, 'not_started');
+  assert.equal(t.title, 'Unmapped Sales Rep: Jim McKenna');
+  assert.deepEqual(t.source_ref.members.map((m: any) => m.id), ['006C2']);
+  assert.equal(await closeTask(db, key, 'auto', null, '006C1'), 'unchanged', 'leaving twice is a no-op');
+
+  assert.equal(await closeTask(db, key, 'auto', null, '006C2'), 'closed', 'last member out closes it');
+  assert.equal((await task()).status, 'done');
+
+  assert.equal(await openTask(db, grouped('006C9', 'New Job'), null), 'reopened');
+  t = await task();
+  assert.equal(t.reopen_count, 1);
+  assert.deepEqual(t.source_ref.members.map((m: any) => m.id), ['006C9'], 'reopened with a fresh member list');
+});
+
 test('events: batch insert keeps value types; event_log is append-only for the engine', async () => {
   await appendEvents(db, [
     { source: 'salesforce', entity_type: 'opportunity', entity_id: '006E', event_type: 'field_changed', field: 'presales.quote_number', old_value: null, new_value: 'Q-1', actor: '005U' },

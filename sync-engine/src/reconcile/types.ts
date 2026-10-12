@@ -93,6 +93,12 @@ export interface PlannerConfig {
   /** '<semantic_key>.<label_key>' → monday label id (null = not configured). */
   labels: Record<string, number | null>;
   creationStages: string[];
+  /**
+   * Win % values that mean "Confirmed to Win" → status action Won, never a
+   * dropdown label (config_settings.confirmed_win_pcts; Seth 2026-10-12:
+   * 99% and 100%). Normalized 'N%' strings.
+   */
+  confirmedWinPcts: string[];
   /** Semantic keys write-blocked by the config-drift check (spec §2.2). */
   blockedColumns: string[];
 }
@@ -137,6 +143,15 @@ export type TaskType =
   | 'sync_failure' | 'writeback_no_link' | 'writeback_quantity'
   | 'stage_check_delivered' | 'stage_check_contract' | 'won_handoff' | 'open_job';
 
+/**
+ * One opportunity waiting on a grouped task. Grouped tasks (one per missing
+ * mapping value) keep a list of members; the task closes when the list empties.
+ */
+export interface TaskMember {
+  id: string; // Salesforce opportunity id
+  label: string; // what Hope sees in the task details
+}
+
 export type TaskIntent =
   | {
       op: 'open';
@@ -145,8 +160,15 @@ export type TaskIntent =
       title: string;
       details: string;
       sourceRef: { board_key?: string; monday_item_id?: string; sf_opportunity_id?: string; mapping_table?: string };
+      /** Present → grouped task: add this member (title/details become the base text). */
+      member?: TaskMember;
     }
-  | { op: 'close'; dedupeKey: string };
+  | {
+      op: 'close';
+      dedupeKey: string;
+      /** Present → only remove this member; the task closes when none remain. */
+      memberId?: string;
+    };
 
 export interface EventIntent {
   source: 'salesforce' | 'engine';
