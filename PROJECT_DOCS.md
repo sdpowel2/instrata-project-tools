@@ -832,6 +832,11 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-13 — Sync first pass: skip closed groups, keep monday's Due Date when the day differs
+- **Diff report reviewed.** 602 differences on 392 linked sandbox items; 24 sampled rows matched production Salesforce exactly, so the drift is real, not a stale sandbox. Quote #, Sales Person and BU: Salesforce is right (typos, old `INSTR-` numbers, "House"). Due Date: monday is usually about a week **later** than `Estimate_Due_Date_Time__c`, and no other Opportunity date field matches.
+- **Decision (Seth): the first pass over a linked item in Won / Lost / Declined to Bid writes nothing** (410 of the 602 changes). The baseline still records Salesforce's values, so later edits sync.
+- **Decision (Seth): the first pass keeps monday's Due Date when the ET day differs.** Those items join one grouped review task (`sync_failure:due_date_differs:…`, members listed with both dates), which they leave once the dates agree or Salesforce changes the date. Same-day and blank dates still write. Marker `review:due_date` in the baseline. The diff report notes both rules. Planner cases 37–38.
+
 ### 2026-10-12 — Sync engine on staging; 99%/100% = Confirmed to Win; grouped failure tasks
 - **Staging live (dry run).** `instrata-sync-engine-staging` on Fly (one machine, `sync_sandbox` schema, Salesforce `partial` sandbox via the "AVSS Project Tools" External Client App, monday sandbox board `18435017528`). First sweep reconciled 92 sandbox opportunities with no errors. Secrets are set with `sync-engine/scripts/set-secrets.ps1`, which reads from the clipboard (Windows PowerShell 5.1 adds a BOM to piped stdin, which broke `fly secrets import`).
 - **Decision (Seth): Win % 99% and 100% both mean Confirmed to Win.** The sync sets status Won and writes no Win % label; there is no "99%" label in monday. Driven by `config_settings.confirmed_win_pcts`.

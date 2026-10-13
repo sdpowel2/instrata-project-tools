@@ -86,6 +86,22 @@ export function readText(raw: string | null | undefined): string | null {
   return null;
 }
 
+/** The calendar date an Eastern-time viewer sees for a UTC instant, as YYYY-MM-DD. */
+export function etDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+/**
+ * The calendar date a date column shows an ET viewer, as YYYY-MM-DD. A date
+ * with a time is a UTC instant; a date without one is already a calendar date.
+ * Blank or unparseable → null.
+ */
+export function readEtDate(raw: string | null | undefined): string | null {
+  const j = parseJson(raw);
+  if (!j || typeof j.date !== 'string' || j.date === '') return null;
+  return typeof j.time === 'string' && j.time !== '' ? etDate(`${j.date}T${j.time}Z`) : j.date;
+}
+
 /**
  * Does monday already hold this value? Compares the intended write with the
  * column's current raw value. Unknown or unparseable → false (write it).

@@ -10,7 +10,9 @@
  *
  * Each link's baseline is ONLY the opportunity's current stage. Empty field keys
  * mean the first live reconcile writes every non-blank Salesforce value that
- * differs from monday (the "fix stale data" outcome); the seeded stage stops
+ * differs from monday (the "fix stale data" outcome) — except on items in a
+ * closed group, and Due Dates on a different day, which it leaves for review
+ * (reconcile/plan.ts syncFields, Seth 2026-10-13); the seeded stage stops
  * historical stage actions (archiving old canceled items, @mentions, stage-check
  * tasks for old deals) from replaying.
  */

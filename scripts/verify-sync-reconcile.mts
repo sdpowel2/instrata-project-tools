@@ -574,5 +574,74 @@ section('36. First look at a backfilled item at 99%/100%: review task for Hope, 
   check('later 75% → 99% sets Won automatically', statusWrite(writesOf(p5)) === S.won);
 }
 
+// Backfilled link: stage-only baseline, monday values as given.
+const backfilledWith = (fieldValues: Record<string, string | null>, itemOver: Partial<MondayItemSnapshot> = {}): State => ({
+  links: [{ mondayItemId: ITEM, sfOpportunityId: OPP, sfLineItemId: LINE, linkState: 'active', baseline: { 'sf.stage': 'Engineering' } }],
+  items: { [ITEM]: item({ fieldValues, ...itemOver }) },
+});
+const STALE = {
+  'presales.due_date': '{"date":"2026-10-22"}', // Salesforce: Oct 15
+  'presales.quote_number': '"Q-OLD"',
+  'presales.win_pct': '{"ids":[1]}',
+  'presales.business_unit': '{"ids":[2]}',
+  'presales.sales_person': '{"ids":[25]}',
+};
+
+section('37. First look at an item in Won / Lost / Declined: nothing written, later changes sync');
+for (const [name, groupId] of [['Won', G.won], ['Lost', G.lost], ['Declined to Bid', G.declined]] as const) {
+  const st = backfilledWith(STALE, { groupId });
+  const o = opp();
+  const p = run(o, st);
+  check(`${name}: no writes`, writesOf(p).length === 0, writeKeys(writesOf(p)));
+  check(`${name}: no tasks`, opens(p).length === 0, JSON.stringify(opens(p)));
+  check(`${name}: baseline records all five Salesforce values`, ['presales.due_date', 'presales.quote_number', 'presales.win_pct', 'presales.business_unit', 'presales.sales_person'].every((k) => k in p.items[0].baseline));
+  idempotent(p, st, o);
+  const p2 = run(opp({ Estimate_Number__c: 'Q-NEW' }), apply(p, st));
+  check(`${name}: a later Salesforce edit is written`, writeKeys(writesOf(p2)) === 'presales.quote_number', writeKeys(writesOf(p2)));
+}
+{
+  const p = run(opp({ Business_Unit__c: 'Louisiana' }), backfilledWith(STALE, { groupId: G.lost }));
+  check('closed item with an unmapped value: no failure task on the first look', opens(p).length === 0);
+}
+
+section("38. First look, Due Date on a different day: keep monday's, one grouped review task");
+{
+  const st = backfilledWith(STALE, { groupId: G.follow_up });
+  const o = opp();
+  const p = run(o, st);
+  check('other stale fields still written', writeKeys(writesOf(p)) === 'presales.business_unit,presales.quote_number,presales.sales_person,presales.win_pct', writeKeys(writesOf(p)));
+  const t = opens(p).find((x) => x.dedupeKey === 'sync_failure:due_date_differs:presales:presales.due_date');
+  check('review task opened with this opportunity as a member', t?.member?.id === OPP, JSON.stringify(opens(p)));
+  check('member label shows both dates', /monday 2026-10-22, Salesforce 2026-10-15/.test(t?.member?.label ?? ''), t?.member?.label);
+  check('baseline records Salesforce date', p.items[0].baseline['presales.due_date'] === '2026-10-15T18:00:00Z');
+  idempotent(p, st, o);
+
+  // Hope fixes monday → member leaves the task, nothing written.
+  const st2 = apply(p, st);
+  st2.items[ITEM] = { ...st2.items[ITEM], fieldValues: { ...STALE, 'presales.due_date': '{"date":"2026-10-15","time":"18:00:00"}' } };
+  const p2 = run(o, st2);
+  check('monday made to match → leaves the review', p2.tasks.some((x) => x.op === 'close' && x.dedupeKey === t?.dedupeKey && x.memberId === OPP));
+  check('…without writing the due date', !writesOf(p2).some((w) => w.semanticKey === 'presales.due_date'));
+  idempotent(p2, st2, o);
+
+  // Or Salesforce moves the date → written, and leaves the review.
+  const o3 = opp({ Estimate_Due_Date_Time__c: '2026-10-29T16:00:00.000+0000' });
+  const p3 = run(o3, apply(p, st));
+  check('Salesforce changes the date → written', writesOf(p3).some((w) => w.semanticKey === 'presales.due_date'));
+  check('…and leaves the review', p3.tasks.some((x) => x.op === 'close' && x.dedupeKey === t?.dedupeKey && x.memberId === OPP));
+}
+{
+  const p = run(opp(), backfilledWith({ ...STALE, 'presales.due_date': '{"date":"2026-10-15"}' }, { groupId: G.follow_up }));
+  check('same day, no time → time added (written), no review', writesOf(p).some((w) => w.semanticKey === 'presales.due_date') && !opens(p).some((x) => x.dedupeKey.includes('due_date_differs')));
+  const p2 = run(opp(), backfilledWith({ ...STALE, 'presales.due_date': null }, { groupId: G.follow_up }));
+  check('monday blank → filled in, no review', writesOf(p2).some((w) => w.semanticKey === 'presales.due_date') && !opens(p2).some((x) => x.dedupeKey.includes('due_date_differs')));
+  const p3 = run(opp({ Estimate_Due_Date_Time__c: '2026-10-16T01:30:00.000+0000' }), backfilledWith({ ...STALE, 'presales.due_date': '{"date":"2026-10-15"}' }, { groupId: G.follow_up }));
+  check('9:30 PM ET on the 15th counts as the same day (ET, not UTC)', !opens(p3).some((x) => x.dedupeKey.includes('due_date_differs')));
+  const st4 = linked(opp());
+  st4.items[ITEM] = { ...st4.items[ITEM], fieldValues: { 'presales.due_date': '{"date":"2026-11-30"}' } };
+  const p4 = run(opp({ Estimate_Due_Date_Time__c: '2026-10-20T14:30:00.000+0000' }), st4);
+  check('after the first look, a Salesforce date change overwrites monday as before', writesOf(p4).some((w) => w.semanticKey === 'presales.due_date') && !opens(p4).some((x) => x.dedupeKey.includes('due_date_differs')));
+}
+
 console.log(`\n${cases} cases, ${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

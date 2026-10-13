@@ -58,7 +58,14 @@ test('readable rows: labels by name, dates in ET, and a note saying what kind of
   assert.equal(by['Quote Number'].mondayNow, '(blank)');
 
   const moved = diffItem(opp(), snap({ ...allMatch, 'presales.due_date': '{"date":"2026-10-20"}' }), cfg, maps, labelText);
-  assert.equal(moved[0].note, 'Date differs');
+  assert.match(moved[0].note, /^Date differs: first pass keeps monday's date/);
+});
+
+test('items in a closed group are flagged as left alone by the first pass', () => {
+  const closedCfg = { ...cfg, groups: { 'presales.lost': 'g' } } as PlannerConfig;
+  const rows = diffItem(opp({ Business_Unit__c: 'Louisiana' }), snap({ ...allMatch, 'presales.quote_number': '"Q-OLD"' }), closedCfg, maps, labelText);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((r) => r.note === 'Closed group: first pass leaves it'), JSON.stringify(rows));
 });
 
 test('unmapped values are listed, not hidden', () => {

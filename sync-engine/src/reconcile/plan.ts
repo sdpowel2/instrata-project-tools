@@ -48,7 +48,7 @@ import {
   missKey,
   type SfFieldKey,
 } from './normalize.ts';
-import { mondayValueMatches } from '../monday/encode.ts';
+import { etDate, mondayValueMatches, readEtDate } from '../monday/encode.ts';
 
 const FIELD_META: Record<SfFieldKey, { label: string; mondayColumn: string; map?: keyof Omit<PlannerMaps, 'stageAction'>; table?: string }> = {
   'presales.due_date': { label: 'Due Date', mondayColumn: 'Due Date' },
@@ -155,18 +155,36 @@ export function fieldLabel(key: SfFieldKey): string {
 }
 
 // ── Field sync (§4.4) ───────────────────────────────────────────────────────
-/** Mutates `baseline` and `writes`. Returns true when Win % became a confirmed-to-win value (→ Won). */
+/** Groups that hold finished deals. The first pass over a linked item there writes nothing. */
+const CLOSED_GROUP_KEYS = ['presales.won', 'presales.lost', 'presales.declined_to_bid'];
+
+export function isClosedGroup(config: PlannerConfig, groupId: string | null): boolean {
+  return groupId !== null && CLOSED_GROUP_KEYS.some((k) => config.groups[k] === groupId);
+}
+
+/**
+ * Mutates `baseline` and `writes`. Returns true when Win % became a confirmed-to-win value (→ Won).
+ *
+ * `firstLink`: a linked item's first reconcile (field keys absent from the
+ * baseline — how the backfill seeds links). On that first look (Seth 2026-10-13):
+ *   - an item in a closed group (Won / Lost / Declined to Bid) gets no writes;
+ *   - a Due Date whose DAY differs from Salesforce keeps monday's date and joins
+ *     a grouped review task (monday is often a week later; people move it there).
+ * Either way the baseline records the Salesforce value, so later Salesforce
+ * changes sync normally.
+ */
 function syncFields(
   ctx: Ctx,
   baseline: Baseline,
   writes: ColumnWrite[],
   itemRef: string,
   current: Record<string, string | null> | undefined,
-  opts: { firstLinkReview: boolean },
+  opts: { firstLink: boolean; closedGroup: boolean },
 ): { wonTriggered: boolean; wonReview: boolean } {
   const sf = extractSfFields(ctx.opp);
   let wonTriggered = false;
   let wonReview = false;
+  let wroteDueDate = false;
 
   for (const key of SF_FIELD_KEYS) {
     const cur = sf[key];
@@ -200,7 +218,7 @@ function syncFields(
     // they're the status action Won (§3.2, §4.6).
     const confirmed = ctx.config.confirmedWinPcts;
     if (key === 'presales.win_pct' && confirmed.includes(cur)) {
-      if (!has && opts.firstLinkReview) {
+      if (!has && opts.firstLink) {
         // First look at a freshly linked (backfilled) item: Salesforce may have
         // been at 99/100% for months. Don't fire Won (post-sales copy + leadership
         // email) on history — ask a human instead (Seth 2026-10-12).
@@ -211,6 +229,12 @@ function syncFields(
       }
       baseline[key] = cur;
       resolveMiss();
+      continue;
+    }
+
+    // First look at a finished deal: record Salesforce's value, write nothing.
+    if (!has && opts.firstLink && opts.closedGroup) {
+      baseline[key] = cur;
       continue;
     }
 
@@ -244,13 +268,56 @@ function syncFields(
       continue;
     }
 
+    // First look, Due Date on a different day: keep monday's, ask Hope.
+    if (key === 'presales.due_date' && !has && opts.firstLink) {
+      const mondayDay = readEtDate(current?.[key]);
+      if (mondayDay !== null && mondayDay !== etDate(cur)) {
+        openDueDateReview(ctx, itemRef, mondayDay, cur);
+        baseline[key] = cur;
+        baseline[DUE_REVIEW_MARK] = '1';
+        continue;
+      }
+    }
+
     writes.push({ semanticKey: key, value });
     ctx.events.push(sfEvent(ctx, { eventType: 'field_changed', field: key, oldValue: last ?? null, newValue: cur, details: { monday_item_id: itemRef } }));
     baseline[key] = cur;
+    if (key === 'presales.due_date') wroteDueDate = true;
     resolveMiss();
   }
 
+  // The item leaves the Due Date review once the dates agree: Salesforce's
+  // date was written, or someone made monday match.
+  if (baseline[DUE_REVIEW_MARK]) {
+    const sfDue = sf['presales.due_date'];
+    const mondayDay = readEtDate(current?.['presales.due_date']);
+    if (wroteDueDate || (sfDue !== null && mondayDay !== null && mondayDay === etDate(sfDue))) {
+      ctx.tasks.push({ op: 'close', dedupeKey: DUE_REVIEW_KEY, memberId: ctx.opp.Id });
+      delete baseline[DUE_REVIEW_MARK];
+    }
+  }
+
   return { wonTriggered, wonReview };
+}
+
+// ── First-pass Due Date review (Seth 2026-10-13) ────────────────────────────
+const DUE_REVIEW_MARK = 'review:due_date';
+export const DUE_REVIEW_KEY = 'sync_failure:due_date_differs:presales:presales.due_date';
+
+function openDueDateReview(ctx: Ctx, itemRef: string, mondayDay: string, sfIso: string): void {
+  ctx.tasks.push({
+    op: 'open',
+    taskType: 'sync_failure',
+    dedupeKey: DUE_REVIEW_KEY,
+    title: 'Due Date differs from Salesforce',
+    details:
+      'When these items were first linked, monday\'s Due Date was a different day from the Salesforce Estimate Due Date. ' +
+      'The sync kept the monday date. Check each one and fix whichever side is wrong; if Salesforce is right, update its date ' +
+      'and the sync writes it to monday. An item drops off this list once the two dates agree.',
+    sourceRef: { board_key: 'presales' },
+    member: { id: ctx.opp.Id, label: `${ctx.opp.Name}: monday ${mondayDay}, Salesforce ${etDate(sfIso)} (Salesforce ${ctx.opp.Id}; monday item ${itemRef})` },
+  });
+  ctx.events.push(sfEvent(ctx, { eventType: 'field_changed', field: 'presales.due_date', oldValue: null, newValue: sfIso, applied: false, details: { reason: 'first_link_date_differs', monday_date: mondayDay, monday_item_id: itemRef } }));
 }
 
 /** One task per (field, missing value) — not per opportunity (Seth 2026-10-12). */
@@ -483,7 +550,7 @@ function planCreate(ctx: Ctx, lineItemId: string): CreatePlan {
   ctx.events.push(engineEvent(CREATED_ITEM, { eventType: 'created', details: { sf_opportunity_id: ctx.opp.Id, sf_line_item_id: lineItemId, name: ctx.opp.Name } }));
 
   // A brand-new item has no history: confirmed-to-win → Won straight away.
-  const { wonTriggered: wonFromWinPct } = syncFields(ctx, baseline, columnWrites, CREATED_ITEM, undefined, { firstLinkReview: false });
+  const { wonTriggered: wonFromWinPct } = syncFields(ctx, baseline, columnWrites, CREATED_ITEM, undefined, { firstLink: false, closedGroup: false });
 
   if (writability(ctx.config, 'presales.sf_id') === 'ok') {
     columnWrites.push({ semanticKey: 'presales.sf_id', value: { type: 'text', text: lineItemId } });
@@ -566,7 +633,7 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   }
 
   const fx: ItemEffects = { writes: [] };
-  const { wonTriggered: wonFromWinPct, wonReview } = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues, { firstLinkReview: true });
+  const { wonTriggered: wonFromWinPct, wonReview } = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues, { firstLink: true, closedGroup: isClosedGroup(ctx.config, item.groupId) });
   syncStage(ctx, baseline, item, fx, wonFromWinPct);
   reviewConfirmedWin(ctx, baseline, item, wonReview);
 

@@ -53,6 +53,8 @@ It registered its own 3 monday webhooks on the sandbox board. The backfill ran: 
 4. **Sound masking etc.:** an AV line is `isAVProduct__c = true OR Technology__c = 'AV'`, as in the spec. 22 lines have AV ticked with another Technology. *(Never explicitly answered — keep the spec rule unless Seth says otherwise.)*
 5. Architecture as recommended: a separate Fly app, the `sync_engine` login role, a `sync_sandbox` schema for staging, Hope gets `profiles.is_ops_coordinator`, and tasks are editable from both monday and Project Tools.
 6. Erik Benson's Pre-Sales owner role was removed intentionally. Ignore it.
+7. **First pass skips closed groups** (Oct 13). A newly linked item in Won / Lost / Declined to Bid gets no writes and no failure tasks; the baseline records Salesforce's values, so later Salesforce edits sync.
+8. **First pass keeps monday's Due Date when the DAY differs** (Oct 13). It joins one grouped review task ("Due Date differs from Salesforce"). Same day (adds the time) or blank still writes. An item leaves the task once the dates agree, or when Salesforce changes the date (that writes as usual). Why: monday is usually ~a week later than `Estimate_Due_Date_Time__c` and no other Salesforce date field matches; people move the date in monday.
 
 ## 5. Operating the engine (from the repo folder, in PowerShell)
 
@@ -71,8 +73,8 @@ powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 <command
 
 ## 6. Next steps (in order)
 
-1. **Review the diff report** (Step 19, in progress when this was written). Seth opens the CSV and reports anything surprising. Adjust the sync rules if needed.
-2. **Optional:** run `measure-diff` once more, so the sandbox queue gets the first-pass "Confirmed to Win" review task (the earlier pass predates that feature).
+1. ~~Review the diff report~~ Done Oct 13: 24 sampled rows matched production Salesforce exactly (sandbox is current, drift is real). Led to decisions 7 and 8.
+2. **Deploy + `measure-diff` + `diff-report`** to confirm the new first-pass rules on staging (and get the Confirmed-to-Win review task into the sandbox queue).
 3. **Salesforce Flows in the sandbox:** guide Part C (C1–C6). Walk Seth through it step by step, then test edit → webhook → reconcile, OLI delete behavior, the non-admin user callout, and **GM% percent units** on one record.
 4. **Flip staging to LIVE** (`fly secrets set SYNC_MODE=live -a instrata-sync-engine-staging`, then restart) so Seth can watch real writes land on the **sandbox board**. Test writeback by editing Quoted Price / GM% on the sandbox board.
 5. **Daily dry-run comparison vs Zapier** (plan A11). It needs the monday user ID the three Zaps act as (plan M-8, not yet given).

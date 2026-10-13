@@ -6,8 +6,8 @@
  * date right now" and can run any time, in dry run or live.
  */
 import { extractSfFields, SF_FIELD_KEYS, type SfFieldKey } from '../reconcile/normalize.ts';
-import { fieldLabel, mapSfValue } from '../reconcile/plan.ts';
-import { mondayValueMatches, readDropdownIds, readText } from '../monday/encode.ts';
+import { fieldLabel, isClosedGroup, mapSfValue } from '../reconcile/plan.ts';
+import { etDate, mondayValueMatches, readDropdownIds, readText } from '../monday/encode.ts';
 import type { MondayItemSnapshot, PlannerConfig, PlannerMaps, SfOpportunity } from '../reconcile/types.ts';
 
 export interface DiffRow {
@@ -45,10 +45,7 @@ function readableMonday(key: SfFieldKey, raw: string | null | undefined, labelTe
   return ids.length === 0 ? '(blank)' : ids.map((id) => labelText(key, id)).join(', ');
 }
 
-/** The calendar date an ET viewer sees for a UTC instant, as YYYY-MM-DD. */
-export function etDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-CA', { timeZone: TZ });
-}
+export { etDate };
 
 /**
  * monday holds dates only today; Salesforce holds date + time. Say whether the
@@ -61,7 +58,7 @@ function dueDateNote(raw: string | null | undefined, sfIso: string): string {
     const j = JSON.parse(raw);
     if (!j?.date) return 'monday blank — fills it in';
     if (j.date === etDate(sfIso)) return j.time ? 'Time differs' : 'Same date — adds the time of day';
-    return 'Date differs';
+    return "Date differs: first pass keeps monday's date and lists it for Hope";
   } catch {
     return '';
   }
@@ -82,6 +79,9 @@ export function diffItem(
   const sf = extractSfFields(opp);
   const current = item.fieldValues ?? {};
   const terminal = ['lost', 'declined', 'canceled'].includes(maps.stageAction[opp.StageName]?.action ?? '');
+  // A first pass over an item in Won / Lost / Declined to Bid writes nothing (Seth 2026-10-13).
+  const closed = isClosedGroup(cfg, item.groupId);
+  const CLOSED_NOTE = 'Closed group: first pass leaves it';
 
   for (const key of SF_FIELD_KEYS) {
     const value = sf[key];
@@ -104,11 +104,11 @@ export function diffItem(
 
     const mv = mapSfValue(maps, key, value);
     if (!mv) {
-      rows.push({ field: fieldLabel(key), mondayNow: now, salesforce: readableSalesforce(key, value), note: `Unmapped — "${value}" has no monday label; field left unchanged` });
+      rows.push({ field: fieldLabel(key), mondayNow: now, salesforce: readableSalesforce(key, value), note: closed ? CLOSED_NOTE : `Unmapped — "${value}" has no monday label; field left unchanged` });
       continue;
     }
     if (mondayValueMatches(mv, current[key])) continue;
-    rows.push({ field: fieldLabel(key), mondayNow: now, salesforce: readableSalesforce(key, value), note: key === 'presales.due_date' ? dueDateNote(current[key], value) : '' });
+    rows.push({ field: fieldLabel(key), mondayNow: now, salesforce: readableSalesforce(key, value), note: closed ? CLOSED_NOTE : key === 'presales.due_date' ? dueDateNote(current[key], value) : '' });
   }
   return rows;
 }
