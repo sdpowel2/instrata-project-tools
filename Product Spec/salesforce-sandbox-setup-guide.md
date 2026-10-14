@@ -235,34 +235,33 @@ On the **Named Credentials** tab, click **New**.
 
 1. Quick Find **Permission Sets**, then New. **Label:** `AVSS ProjectTools Callout` (no license). Save.
 2. Open **External Credential Principal Access**, then Edit. Add **AVSS_ProjectTools - AVSS_Principal**. Save.
-3. Assign it to **yourself** for now. Step C6 checks whether it also needs to go to every user who edits Opportunities.
+3. Assign it to **yourself and the integration user** (the engine's writebacks fire the Flows as that user). Step C6 checks whether it also needs to go to every user who edits Opportunities.
 
 ### C4. Flow: `AVSS_Opportunity_Changed`
 
-1. Quick Find **Flows**, then **New Flow**, then **Record-Triggered Flow**.
-2. **Object:** Opportunity · **Trigger:** A record is created or updated · **Entry conditions:** None · **Optimize for:** Actions and Related Records.
-3. Tick **Include a Run Asynchronously path to access an external system after the original transaction for the triggering record is successfully committed.**
-4. On the **Run Asynchronously** path, click **+**, then **Action**, then **Create HTTP Callout**.
-   - **Name:** `AVSS Webhook` · **Named Credential:** `AVSS_ProjectTools`
-   - **Action Label:** `Notify Project Tools` · **Method:** POST · **URL Path:** `/webhooks/salesforce`
-   - **Sample request (JSON):**
-     `{"object":"Opportunity","record_id":"006000000000000AAA","opportunity_id":"006000000000000AAA"}`
-   - **Sample response:** choose to provide it manually: `{"ok":true}`
-5. Map the body:
-   - `object` = `Opportunity`
-   - `record_id` = `{!$Record.Id}`
-   - `opportunity_id` = `{!$Record.Id}`
-6. Save as **AVSS Opportunity Changed** (API name `AVSS_Opportunity_Changed`), then **Activate**.
+*(Rewritten Oct 14 after the sandbox build; this is what actually activates.)*
+
+1. Quick Find **Flows**, then **New Flow → Start From Scratch → Record-Triggered Flow**.
+2. **Object:** Opportunity · **Trigger:** A record is created or updated · **Optimize for:** Actions and Related Records · tick the **Run Asynchronously** path.
+3. **Entry conditions (required):** Salesforce won't activate an async path on "created or updated" unless every condition uses **Is Changed**. Use *Any Condition Is Met (OR)*, each row `Is Changed = True`, on: `StageName`, `Estimate_Due_Date_Time__c`, `Estimate_Number__c`, `Win_Likelihood__c`, `Business_Unit__c`, `Sales_Rep__c`, `Lost_Reason__c`, `Other_lost_reason__c`, `Lost_To__c`, `Amount`. **Amount** is what catches product adds and deletes. When to run: every time a record is updated and meets the conditions.
+4. On the async path, **Action → Create HTTP Callout**:
+   - External Service name: `AVSSWebhook` (**alphanumeric only**, no spaces or underscores) · Named Credential `AVSS_ProjectTools`.
+   - Invocable action: Label `Notify Project Tools`, POST, URL Path `/webhooks/salesforce`. **Next** → request body sample `{"object":"Opportunity","record_id":"006000000000000AAA","opportunity_id":"006000000000000AAA"}` → **Next** → response entered manually `{"ok":true}`, 200.
+   - If the canvas box still says "Action 1", the action wasn't attached: open it → **External Services → AVSSWebhook → Notify Project Tools**. The panel has no Done button; changes apply as you make them.
+5. In the action, body **Value → + New Resource**: API Name `oppBody` (type Apex-Defined, class auto-filled).
+6. Add an **Assignment** `Build Body` *before* the action: `oppBody.object` = `Opportunity`, `oppBody.record_id` = `{!$Record.Id}`, `oppBody.opportunity_id` = `{!$Record.Id}`.
+7. Save as **AVSS Opportunity Changed** (`AVSS_Opportunity_Changed`), **Activate**.
 
 ### C5. Flow: `AVSS_OppProduct_Changed`
 
-Same as C4, with these differences:
-- **Object:** Opportunity Product.
-- Reuse the **Notify Project Tools** action from C4.
-- Map the body as `object` = `OpportunityLineItem`, `record_id` = `{!$Record.Id}`, `opportunity_id` = `{!$Record.OpportunityId}`.
-- Save as `AVSS_OppProduct_Changed`, then **Activate**.
+- **Object:** Opportunity Product · **Trigger: A record is created** (create only; "only when a record is updated to meet the condition requirements" does **not** fire on new records) · conditions *Any (OR)*: `isAVProduct__c` Equals True, `Technology__c` Equals AV (Flow Builder shows them by label: isAVProduct, Technology). Run Asynchronously path ticked.
+- The org's existing before-save flow sets `isAVProduct__c` from `Product2.Type__c` on create, so the condition sees the final value.
+- Action: **External Services → AVSSWebhook → Notify Project Tools** (reuse), body → new resource `oppBody`; `Build Body`: `object` = `OpportunityLineItem`, `record_id` = `{!$Record.Id}` (Line Item ID), `opportunity_id` = `{!$Record.OpportunityId}`.
+- A product that later becomes / stops being AV is caught by the hourly sweep.
 
-**No delete Flow.** Delete-triggered Flows can't make callouts. The engine catches deletes another way, and C6 checks that.
+**No delete Flow.** Delete-triggered Flows can't make callouts. A delete changes the opportunity's Amount, which fires C4 (verified Oct 14).
+
+**A Flow treats any HTTP reply as success**, including a 400/401 from the engine: no error email, no failed interview. The engine logs `salesforce webhook rejected` for those. Use Flow Builder **Debug** (run as Created, pick a record) to see the response code.
 
 ### C6. Tests (with Claude watching the engine logs)
 

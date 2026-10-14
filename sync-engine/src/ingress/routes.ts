@@ -32,12 +32,17 @@ export function ingressRouter(deps: IngressDeps): Router {
   const r = express.Router();
 
   r.post('/webhooks/salesforce', async (req: Request, res: Response) => {
+    // A Flow treats any HTTP reply as success (no error email, no failed
+    // interview), so a rejected callout is only visible here — log it.
     if (!safeEqual(req.header('x-avss-secret') ?? '', deps.salesforceSecret)) {
+      log.warn('salesforce webhook rejected', { reason: 'bad secret', hasHeader: req.header('x-avss-secret') !== undefined });
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
     const ev = parseSalesforceEvent(req.body);
     if (!ev) {
+      const b = req.body && typeof req.body === 'object' ? req.body : {};
+      log.warn('salesforce webhook rejected', { reason: 'bad body', keys: Object.keys(b), object: b.object, opportunity_id: b.opportunity_id });
       res.status(400).json({ error: 'expected {object, record_id, opportunity_id}' });
       return;
     }

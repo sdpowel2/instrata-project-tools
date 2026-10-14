@@ -37,7 +37,7 @@ It registered its own 3 monday webhooks on the sandbox board. The backfill ran: 
 |---|---|
 | Supabase project ref | `zeuceafbaufpuwpczcth` (session pooler, port 5432; user `sync_engine.zeuceafbaufpuwpczcth`) |
 | monday prod Pre-Sales / Post-Sales | `3477536693` / `3523133226` (account slug `premiere5`) |
-| monday sandbox board | `18435017528` (same column + group IDs as prod; no Project ID column) |
+| monday sandbox board | `18435017528` (same column + group IDs as prod; no Project ID column). **Private, owners-only edit** since Oct 13 (owners: Seth, AV Integrations). Erik Benson had edited a real item on it by mistake (Pre-Sales workspace owners could edit it while it was public). |
 | monday integration user | "AV Integrations" `119228546` (avsfintegration@instrata.com); member of both prod boards + sandbox; in `fly.toml [env]` |
 | monday API version | `2026-07` (current). Edge functions still pin unsupported `2024-10`; a side task was spawned |
 | Salesforce prod | `https://instrata.my.salesforce.com`, API v66.0. Opportunity sharing is Public Read/Write |
@@ -75,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 <command
 
 1. ~~Review the diff report~~ Done Oct 13: 24 sampled rows matched production Salesforce exactly (sandbox is current, drift is real). Led to decisions 7 and 8.
 2. **Deploy + `measure-diff` + `diff-report`** to confirm the new first-pass rules on staging (and get the Confirmed-to-Win review task into the sandbox queue).
-3. **Salesforce Flows in the sandbox:** guide Part C (C1–C6). Walk Seth through it step by step, then test edit → webhook → reconcile, OLI delete behavior, the non-admin user callout, and **GM% percent units** on one record.
+3. **Salesforce Flows in the sandbox:** C1–C5 built and active Oct 14 (guide Part C rewritten to match). Verified: Opportunity edit → webhook → reconcile; product add → OppProduct webhook + Amount webhook → multi-AV task; product delete → Amount webhook → task closed. **Still to test:** the non-admin user callout (C6.2) and **GM% percent units** (with step 4, live).
 4. **Flip staging to LIVE** (`fly secrets set SYNC_MODE=live -a instrata-sync-engine-staging`, then restart) so Seth can watch real writes land on the **sandbox board**. Test writeback by editing Quoted Price / GM% on the sandbox board.
 5. **Daily dry-run comparison vs Zapier** (plan A11). It needs the monday user ID the three Zaps act as (plan M-8, not yet given).
 6. **Project Tools UI:** Hope's Dashboard (`/ops-queue`) + Sync Admin (mappings, cleanliness rules, schedules, activity, the diff report). It needs the small `sync-admin` edge function to reach the engine. Plan §6.
@@ -88,6 +88,7 @@ powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 <command
 - **monday API:** `Column.settings_str` is gone, use `settings`. Dropdown label edits (`update_dropdown_column`) take the **full** label list, so re-send every existing label with its id (sandbox first, verify after). Date column "Include time" is `settings.show_time_by_default`. `create_update` supports `mentions_list`.
 - **Windows PowerShell 5.1:** script files must be **ASCII** (an en-dash becomes a smart quote and breaks parsing). Piping to a native exe **prepends a BOM** even with a no-BOM encoding, so pass arguments instead. Ctrl+V types one character into `Read-Host -AsSecureString`. Don't name variables `$args`. Enable TLS 1.2 for `Invoke-RestMethod`.
 - **Claude's shell:** never put backticks or `${}` inside `node -e "…"`. Bash runs them as commands. Edit code with the Edit tool. Validate `.ps1` files with the PowerShell parser before handing them over.
+- **Salesforce Flow (Oct 14):** an async path on "created or updated" activates only if every entry condition is **Is Changed**; "only when updated to meet the condition requirements" does **not** fire on create (use a create-only trigger); External Service names are alphanumeric only; a Flow callout treats any HTTP status as success (watch `salesforce webhook rejected` in the engine log). The engine logs a reconcile only when it plans a monday write; check `webhook_inbox` for silent ones.
 - **The Salesforce "Developer Console"** now opens the VS Code-style Web Console, which has no query editor.
 - **Supabase SQL Editor** shows a false "RLS not enabled" warning on migrations that enable RLS in a `DO` loop.
 - **Fly** creates two machines on a first deploy. Use `--ha=false` / `fly scale count 1`.
