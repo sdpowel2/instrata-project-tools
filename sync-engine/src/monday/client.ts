@@ -54,6 +54,23 @@ export interface MondayClient {
   createWebhook(boardId: string, url: string, event: string, config?: Record<string, unknown>): Promise<string>;
 }
 
+/**
+ * columns_mapping for move_item_to_board. monday rejects a mapping that leaves out
+ * any source column ("Columns mapping is not in the expected format"), so every
+ * source column is listed: same id on the target → kept, missing → target null
+ * (dropped; e.g. the sandbox Pre-Sales board has no Project ID column). Formula
+ * columns recompute and name / subitems move with the item, so they're skipped.
+ */
+export function columnMappingFor(
+  source: { id: string; type: string }[],
+  target: { id: string; type: string }[],
+): { source: string; target: string | null }[] {
+  const onTarget = new Set(target.map((c) => c.id));
+  return source
+    .filter((c) => !['name', 'subtasks', 'formula'].includes(c.type))
+    .map((c) => ({ source: c.id, target: onTarget.has(c.id) ? c.id : null }));
+}
+
 export function createMondayClient(opts: { token: string; apiVersion: string; fetchImpl?: typeof fetch }): MondayClient {
   const doFetch = opts.fetchImpl ?? fetch;
 
@@ -161,11 +178,7 @@ export function createMondayClient(opts: { token: string; apiVersion: string; fe
       const data = await query<{ boards: { id: string; columns: { id: string; type: string }[] }[] }>(
         `query ($ids: [ID!]) { boards(ids: $ids) { id columns { id type } } }`, { ids: [fromBoardId, toBoardId] });
       const colsOf = (id: string) => data.boards.find((b) => String(b.id) === String(id))?.columns ?? [];
-      const target = new Set(colsOf(toBoardId).map((c) => c.id));
-      // Formula columns can't be mapped (they recompute); name and subitems move with the item.
-      const mapping = colsOf(fromBoardId)
-        .filter((c) => target.has(c.id) && !['name', 'subtasks', 'formula'].includes(c.type))
-        .map((c) => ({ source: c.id, target: c.id }));
+      const mapping = columnMappingFor(colsOf(fromBoardId), colsOf(toBoardId));
       await query(
         `mutation ($itemId: ID!, $boardId: ID!, $groupId: ID!, $mapping: [ColumnMappingInput!]) {
            move_item_to_board(item_id: $itemId, board_id: $boardId, group_id: $groupId, columns_mapping: $mapping) { id } }`,

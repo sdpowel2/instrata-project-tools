@@ -95,3 +95,16 @@ test('builds planner snapshots from raw items', () => {
     cfg, { presales: '18435017528', prequal: '18435527458', triage: '18435527768' });
   assert.equal(onTriage.boardKey, 'triage');
 });
+
+test('move_item_to_board mapping lists every source column (missing on target → null)', async () => {
+  const { columnMappingFor } = await import('../src/monday/client.ts');
+  const triage = [
+    { id: 'name', type: 'name' }, { id: 'subitems', type: 'subtasks' }, { id: 'status9', type: 'status' },
+    { id: 'formula__1', type: 'formula' }, { id: 'text_mm2rcnav', type: 'text' },
+  ];
+  const presalesSandbox = [{ id: 'name', type: 'name' }, { id: 'status9', type: 'status' }, { id: 'formula__1', type: 'formula' }];
+  assert.deepEqual(columnMappingFor(triage, presalesSandbox), [
+    { source: 'status9', target: 'status9' },
+    { source: 'text_mm2rcnav', target: null }, // the sandbox Pre-Sales board has no Project ID column
+  ]);
+});
