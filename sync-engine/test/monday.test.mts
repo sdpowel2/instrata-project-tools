@@ -88,5 +88,10 @@ test('builds planner snapshots from raw items', () => {
       { id: 'person', value: '{"personsAndTeams":[{"id":42,"kind":"person"}]}', text: 'Someone' },
     ],
   }, cfg);
-  assert.deepEqual(snap, { id: '13092716583', state: 'active', groupId: 'new_group66048', statusLabelId: 6, quotedPrice: 98000, engineerUserIds: ['42'], fieldValues: {} });
+  assert.deepEqual(snap, { id: '13092716583', state: 'active', boardKey: null, groupId: 'new_group66048', statusLabelId: 6, quotedPrice: 98000, engineerUserIds: ['42'], fieldValues: {} });
+
+  // The board is resolved to its config key (group ids repeat across boards, the board doesn't).
+  const onTriage = toSnapshot({ id: '1', name: 'x', state: 'active', group: { id: 'new_group66048' }, board: { id: '18435527768' }, column_values: [] },
+    cfg, { presales: '18435017528', prequal: '18435527458', triage: '18435527768' });
+  assert.equal(onTriage.boardKey, 'triage');
 });

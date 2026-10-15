@@ -34,6 +34,7 @@ export interface WriteGate {
     /** Returns the new item id, or null in dry run. */
     createItem(boardId: string, groupId: string | null, name: string, values: Record<string, unknown>): Promise<string | null>;
     moveItemToGroup(itemId: string, groupId: string): Promise<void>;
+    moveItemToBoard(itemId: string, fromBoardId: string, toBoardId: string, groupId: string): Promise<void>;
     archiveItem(itemId: string): Promise<void>;
     createUpdate(itemId: string, body: string, mentionUserIds?: string[]): Promise<void>;
     createNotification(userId: string, itemId: string, text: string): Promise<void>;
@@ -70,6 +71,10 @@ export function createWriteGate(mode: SyncMode, monday: MondayClient, salesforce
       async moveItemToGroup(itemId, groupId) {
         record({ system: 'monday', op: 'move_item_to_group', target: itemId, payload: { groupId } });
         if (live) await monday.moveItemToGroup(itemId, groupId);
+      },
+      async moveItemToBoard(itemId, fromBoardId, toBoardId, groupId) {
+        record({ system: 'monday', op: 'move_item_to_board', target: itemId, payload: { fromBoardId, toBoardId, groupId } });
+        if (live) await monday.moveItemToBoard(itemId, fromBoardId, toBoardId, groupId);
       },
       async archiveItem(itemId) {
         record({ system: 'monday', op: 'archive_item', target: itemId, payload: {} });

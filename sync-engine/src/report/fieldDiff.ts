@@ -80,7 +80,7 @@ export function diffItem(
   const current = item.fieldValues ?? {};
   const terminal = ['lost', 'declined', 'canceled'].includes(maps.stageAction[opp.StageName]?.action ?? '');
   // A first pass over an item in Won / Lost / Declined to Bid writes nothing (Seth 2026-10-13).
-  const closed = isClosedGroup(cfg, item.groupId);
+  const closed = isClosedGroup(cfg, item.boardKey ?? 'presales', item.groupId);
   const CLOSED_NOTE = 'Closed group: first pass leaves it';
 
   for (const key of SF_FIELD_KEYS) {

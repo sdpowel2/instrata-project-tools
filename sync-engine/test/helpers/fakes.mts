@@ -32,10 +32,19 @@ export function fakeMonday() {
     async createItem(boardId, groupId, name, values) {
       const id = String(nextId++);
       writes.push({ op: 'create', args: [boardId, groupId, name, values] });
-      items.set(id, { id, name, state: 'active', group: { id: groupId ?? '' }, column_values: [] });
+      items.set(id, { id, name, state: 'active', group: { id: groupId ?? '' }, board: { id: String(boardId) }, column_values: [] });
       return id;
     },
-    async moveItemToGroup(itemId, groupId) { writes.push({ op: 'move', args: [itemId, groupId] }); },
+    async moveItemToGroup(itemId, groupId) {
+      writes.push({ op: 'move', args: [itemId, groupId] });
+      const it = items.get(itemId);
+      if (it) it.group = { id: groupId };
+    },
+    async moveItemToBoard(itemId, fromBoardId, toBoardId, groupId) {
+      writes.push({ op: 'move_board', args: [itemId, fromBoardId, toBoardId, groupId] });
+      const it = items.get(itemId);
+      if (it) { it.board = { id: String(toBoardId) }; it.group = { id: groupId }; }
+    },
     async archiveItem(itemId) {
       writes.push({ op: 'archive', args: [itemId] });
       const it = items.get(itemId);

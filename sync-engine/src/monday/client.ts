@@ -17,6 +17,7 @@ export interface MondayItemRaw {
   name: string;
   state: 'active' | 'archived' | 'deleted';
   group: { id: string } | null;
+  board?: { id: string } | null;
   column_values: { id: string; value: string | null; text: string | null }[];
 }
 
@@ -40,6 +41,12 @@ export interface MondayClient {
   changeColumnValues(boardId: string, itemId: string, values: Record<string, unknown>): Promise<void>;
   createItem(boardId: string, groupId: string | null, name: string, values: Record<string, unknown>): Promise<string>;
   moveItemToGroup(itemId: string, groupId: string): Promise<void>;
+  /**
+   * Move to another board (keeps the item id). Columns with the same id on both
+   * boards are mapped one-to-one so no value is dropped — the intake boards are
+   * duplicates of the Pre-Sales board.
+   */
+  moveItemToBoard(itemId: string, fromBoardId: string, toBoardId: string, groupId: string): Promise<void>;
   archiveItem(itemId: string): Promise<void>;
   /** Item update; mentionUserIds become real @mentions (mentions_list). */
   createUpdate(itemId: string, body: string, mentionUserIds?: string[]): Promise<void>;
@@ -74,7 +81,7 @@ export function createMondayClient(opts: { token: string; apiVersion: string; fe
     throw new Error('monday GraphQL: retries exhausted');
   }
 
-  const ITEM_FIELDS = `id name state group { id } column_values(ids: $columnIds) { id value text }`;
+  const ITEM_FIELDS = `id name state group { id } board { id } column_values(ids: $columnIds) { id value text }`;
 
   return {
     query,
@@ -148,6 +155,21 @@ export function createMondayClient(opts: { token: string; apiVersion: string; fe
 
     async moveItemToGroup(itemId, groupId) {
       await query(`mutation ($itemId: ID!, $groupId: String!) { move_item_to_group(item_id: $itemId, group_id: $groupId) { id } }`, { itemId, groupId });
+    },
+
+    async moveItemToBoard(itemId, fromBoardId, toBoardId, groupId) {
+      const data = await query<{ boards: { id: string; columns: { id: string; type: string }[] }[] }>(
+        `query ($ids: [ID!]) { boards(ids: $ids) { id columns { id type } } }`, { ids: [fromBoardId, toBoardId] });
+      const colsOf = (id: string) => data.boards.find((b) => String(b.id) === String(id))?.columns ?? [];
+      const target = new Set(colsOf(toBoardId).map((c) => c.id));
+      // Formula columns can't be mapped (they recompute); name and subitems move with the item.
+      const mapping = colsOf(fromBoardId)
+        .filter((c) => target.has(c.id) && !['name', 'subtasks', 'formula'].includes(c.type))
+        .map((c) => ({ source: c.id, target: c.id }));
+      await query(
+        `mutation ($itemId: ID!, $boardId: ID!, $groupId: ID!, $mapping: [ColumnMappingInput!]) {
+           move_item_to_board(item_id: $itemId, board_id: $boardId, group_id: $groupId, columns_mapping: $mapping) { id } }`,
+        { itemId, boardId: toBoardId, groupId, mapping });
     },
 
     async archiveItem(itemId) {

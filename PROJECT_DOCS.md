@@ -832,6 +832,10 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-14 — Sync: staging live; intake boards (Pre-Qualification + Triage)
+- **Staging live** on the monday sandbox board + Salesforce `partial` sandbox. Salesforce Flows built and tested (edit, product add/delete, non-admin user); writeback + GM% units verified (35 → 35.00%). Production prerequisites found: integration user needs **Edit Opportunity Product Sales Price**; every Opportunity-editor profile needs principal access to the `AVSS_ProjectTools` credential (setup guide A3, C3.4).
+- **New intake flow (Seth + Lee).** New AV opportunities start on two new private boards in the "Pre-Qualification" workspace, duplicated from the Pre-Sales board (same column + label ids, group ids reused with different meanings): **Pre-Qualification** (Lead / Qualified Opportunity groups) and **Triage** (Triage → Bid/No-Bid → New Assignment). The engine creates there (still only with an AV product), moves items on stage changes (R3, EC1, Lead ↔ Qualified), moves early losses to the Pre-Sales board's Lost / Declined to Bid, raises the EC2 task (estimate due date while pre-engineering), and follows items across all three boards. No-Bid in monday never writes to Salesforce. Migration `sync_intake_boards.sql`; `create_items` setting is the creation off switch.
+
 ### 2026-10-13 — Sync first pass: skip closed groups, keep monday's Due Date when the day differs
 - **Diff report reviewed.** 602 differences on 392 linked sandbox items; 24 sampled rows matched production Salesforce exactly, so the drift is real, not a stale sandbox. Quote #, Sales Person and BU: Salesforce is right (typos, old `INSTR-` numbers, "House"). Due Date: monday is usually about a week **later** than `Estimate_Due_Date_Time__c`, and no other Opportunity date field matches.
 - **Decision (Seth): the first pass over a linked item in Won / Lost / Declined to Bid writes nothing** (410 of the 602 changes). The baseline still records Salesforce's values, so later edits sync.

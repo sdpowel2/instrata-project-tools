@@ -41,6 +41,12 @@ export interface SfOpportunity {
 export interface MondayItemSnapshot {
   id: string;
   state: 'active' | 'archived' | 'deleted';
+  /**
+   * The config_boards key the item is on: 'presales', 'prequal' or 'triage'.
+   * Absent = the pre-sales board (legacy callers). Group ids are reused across
+   * the three boards with different meanings, so every group check is per board.
+   */
+  boardKey?: string | null;
   groupId: string | null;
   statusLabelId: number | null; // presales.status
   quotedPrice: number | null; // presales.quoted_price
@@ -98,7 +104,20 @@ export interface PlannerConfig {
   groups: Record<string, string | null>;
   /** '<semantic_key>.<label_key>' → monday label id (null = not configured). */
   labels: Record<string, number | null>;
+  /** Open stages from Engineering on: create on Triage (intake) or New Requests (legacy). */
   creationStages: string[];
+  /**
+   * Pre-engineering stages (Lead, Qualified Opportunity): create on Pre-Qualification.
+   * Only used in intake mode (config_settings.prequal_stages).
+   */
+  prequalStages: string[];
+  /** false = never create items (config_settings.create_items); everything else still syncs. */
+  createItems: boolean;
+  /**
+   * Intake mode (Seth + Lee, 2026-10-14): Pre-Qualification and Triage boards are
+   * configured, so new items start there instead of on the Pre-Sales Summary.
+   */
+  intake: boolean;
   /**
    * Win % values that mean "Confirmed to Win" → status action Won, never a
    * dropdown label (config_settings.confirmed_win_pcts; Seth 2026-10-12:
@@ -193,7 +212,9 @@ export interface EventIntent {
 export interface CreatePlan {
   sfLineItemId: string;
   itemName: string; // written once, never updated
-  groupKey: 'new_requests';
+  /** Board and group the item is created in ('presales'/'new_requests', 'prequal'/'lead', 'triage'/'triage', …). */
+  boardKey: string;
+  groupKey: string;
   /** Field values sent with create_item. */
   columnWrites: ColumnWrite[];
   /**
@@ -208,7 +229,10 @@ export interface ItemPlan {
   mondayItemId: string;
   /** All column writes for this item — sent as ONE change_multiple_column_values. */
   columnWrites: ColumnWrite[];
-  moveToGroupKey?: string;
+  /** The board the item is on now (writes go there). Absent = 'presales'. */
+  boardKey?: string;
+  /** Move after the column writes: same board → move_item_to_group, other board → move_item_to_board. */
+  moveTo?: { boardKey: string; groupKey: string };
   postUpdate?: { mentionUserIds: string[]; body: string };
   archive?: boolean;
   newLinkState?: 'archived';

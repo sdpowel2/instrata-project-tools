@@ -43,7 +43,7 @@ export async function reconcileOpportunities(deps: ReconcileDeps, ids: string[])
   const items: Record<string, MondayItemSnapshot> = {};
   if (itemIds.length > 0) {
     for (const raw of await deps.monday.getItems(itemIds, snapshotColumnIds(cfg.planner))) {
-      items[String(raw.id)] = toSnapshot(raw, cfg.planner);
+      items[String(raw.id)] = toSnapshot(raw, cfg.planner, cfg.boards);
     }
   }
 

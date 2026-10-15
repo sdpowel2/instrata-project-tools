@@ -13,14 +13,18 @@ export function snapshotColumnIds(cfg: PlannerConfig): string[] {
   return [...SNAPSHOT_KEYS, ...FIELD_VALUE_KEYS].map((k) => cfg.columns[k]?.columnId).filter((x): x is string => !!x);
 }
 
-export function toSnapshot(raw: MondayItemRaw, cfg: PlannerConfig): MondayItemSnapshot {
+/** `boards` (config_boards key → monday board id) resolves which board the item is on. */
+export function toSnapshot(raw: MondayItemRaw, cfg: PlannerConfig, boards: Record<string, string | null> = {}): MondayItemSnapshot {
   const value = (key: string) => {
     const id = cfg.columns[key]?.columnId;
     return id ? raw.column_values.find((c) => c.id === id)?.value ?? null : null;
   };
+  const boardId = raw.board?.id ? String(raw.board.id) : null;
+  const boardKey = boardId ? Object.entries(boards).find(([, id]) => id !== null && String(id) === boardId)?.[0] ?? null : null;
   return {
     id: String(raw.id),
     state: raw.state,
+    boardKey,
     groupId: raw.group?.id ?? null,
     statusLabelId: readStatusLabelId(value('presales.status')),
     quotedPrice: readNumber(value('presales.quoted_price')),

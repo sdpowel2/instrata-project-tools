@@ -32,6 +32,9 @@ export type MondayOutcome = { kind: 'done'; note: string } | { kind: 'defer'; un
 
 const WRITEBACK_KEYS = ['presales.quoted_price', 'presales.gm_pct'];
 
+/** config_boards keys whose items mirror Salesforce opportunities. */
+export const PRESALES_BOARD_KEYS = ['presales', 'prequal', 'triage'] as const;
+
 /** column id on the pre-sales board → semantic key */
 function semanticKeyFor(cfg: RuntimeConfig, columnId: string): string | null {
   for (const [key, col] of Object.entries(cfg.planner.columns)) {
@@ -43,7 +46,9 @@ function semanticKeyFor(cfg: RuntimeConfig, columnId: string): string | null {
 export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): Promise<MondayOutcome> {
   const ev = parseMondayEvent(row.payload);
   if (!ev) return { kind: 'done', note: 'unparseable' };
-  if (ev.boardId !== deps.cfg.boards.presales) return { kind: 'done', note: 'not the pre-sales board' };
+  // The Pre-Sales Summary plus the intake boards (same column ids on all three).
+  const salesBoards = PRESALES_BOARD_KEYS.map((k) => deps.cfg.boards[k]).filter((id): id is string => !!id).map(String);
+  if (!ev.boardId || !salesBoards.includes(String(ev.boardId))) return { kind: 'done', note: 'not a pre-sales board' };
   if (ev.userId === deps.integrationUserId) return { kind: 'done', note: 'own echo' };
   if (!ev.itemId) return { kind: 'done', note: 'no item' };
 

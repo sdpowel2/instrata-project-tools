@@ -25,6 +25,7 @@ import { runDriftCheck } from './config/driftRunner.ts';
 import type { DriftResult } from './config/drift.ts';
 import { createMondayClient } from './monday/client.ts';
 import { ensurePresalesWebhooks } from './monday/webhooks.ts';
+import { PRESALES_BOARD_KEYS } from './worker/mondayEvents.ts';
 import { createSalesforceClient } from './salesforce/client.ts';
 import { assertSfId } from './salesforce/soql.ts';
 import { createWriteGate } from './writeGate.ts';
@@ -225,11 +226,13 @@ async function main() {
 
   // monday sends a challenge to the URL during registration, so register after listen().
   const cfg = await getConfig();
-  if (cfg.boards.presales) {
-    const url = `${env.publicBaseUrl}/webhooks/monday/${env.monday.webhookPathSecret}`;
-    ensurePresalesWebhooks(db, monday, cfg.boards.presales, url)
-      .then((r) => log.info('monday webhooks', r))
-      .catch((e) => log.error('monday webhook registration failed', { error: errMessage(e) }));
+  const url = `${env.publicBaseUrl}/webhooks/monday/${env.monday.webhookPathSecret}`;
+  for (const key of PRESALES_BOARD_KEYS) {
+    const boardId = cfg.boards[key];
+    if (!boardId) continue;
+    ensurePresalesWebhooks(db, monday, boardId, url)
+      .then((r) => log.info('monday webhooks', { board: key, ...r }))
+      .catch((e) => log.error('monday webhook registration failed', { board: key, error: errMessage(e) }));
   }
 
   timers.push(every(2_000, 'inbox drain', drain));

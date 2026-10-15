@@ -74,7 +74,7 @@ export async function buildDiffReport(deps: {
     const opp = opps.get(link.opp);
     const r = items.get(link.item);
     if (!opp || !r || r.state !== 'active') continue;
-    const snap = toSnapshot(r, cfg.planner);
+    const snap = toSnapshot(r, cfg.planner, cfg.boards);
     for (const d of diffItem(opp, snap, cfg.planner, cfg.maps, labelText)) {
       out.push({
         group: groups.get(r.group?.id ?? '') ?? r.group?.id ?? '',

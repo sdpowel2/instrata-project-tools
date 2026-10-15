@@ -44,15 +44,26 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   const gate = deps.gate.fork();
   const live = gate.mode === 'live';
   const correlationId = randomUUID();
-  const boardId = cfg.boards.presales;
-  if (!boardId) throw new Error('config_boards.presales has no monday board id');
+  // The three pre-sales boards share column ids, so column config is board-agnostic;
+  // only the board (and group) differ.
+  const boardIdOf = (key: string | undefined) => {
+    const id = cfg.boards[key ?? 'presales'];
+    if (!id) throw new Error(`config_boards.${key ?? 'presales'} has no monday board id`);
+    return id;
+  };
+  const groupIdOf = (boardKey: string, groupKey: string) => {
+    const id = cfg.planner.groups[`${boardKey}.${groupKey}`];
+    if (!id) throw new Error(`No monday group configured for ${boardKey}.${groupKey}`);
+    return id;
+  };
   const columnIdFor = (k: string) => cfg.planner.columns[k]?.columnId;
   // ── Outbound writes ──
   let createdId: string | null = null;
   if (plan.create) {
     const c = plan.create;
+    const boardId = boardIdOf(c.boardKey);
     createdId = await gate.monday.createItem(
-      boardId, cfg.planner.groups['presales.new_requests'] ?? null, c.itemName, encodeColumnValues(c.columnWrites, columnIdFor));
+      boardId, groupIdOf(c.boardKey, c.groupKey), c.itemName, encodeColumnValues(c.columnWrites, columnIdFor));
     if (createdId) {
       const { [STAGE_KEY]: _stage, ...preStage } = c.baseline;
       await insertLink(db, { mondayItemId: createdId, sfOpportunityId: plan.opportunityId, sfLineItemId: c.sfLineItemId, baseline: preStage }, gate.mode);
@@ -63,13 +74,15 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   }
 
   for (const ip of plan.items) {
+    const boardKey = ip.boardKey ?? 'presales';
+    // Column writes land on the board the item is on now, before any move.
     if (ip.columnWrites.length > 0) {
-      await gate.monday.changeColumnValues(boardId, ip.mondayItemId, encodeColumnValues(ip.columnWrites, columnIdFor));
+      await gate.monday.changeColumnValues(boardIdOf(boardKey), ip.mondayItemId, encodeColumnValues(ip.columnWrites, columnIdFor));
     }
-    if (ip.moveToGroupKey) {
-      const groupId = cfg.planner.groups[`presales.${ip.moveToGroupKey}`];
-      if (!groupId) throw new Error(`No monday group configured for presales.${ip.moveToGroupKey}`);
-      await gate.monday.moveItemToGroup(ip.mondayItemId, groupId);
+    if (ip.moveTo) {
+      const groupId = groupIdOf(ip.moveTo.boardKey, ip.moveTo.groupKey);
+      if (ip.moveTo.boardKey === boardKey) await gate.monday.moveItemToGroup(ip.mondayItemId, groupId);
+      else await gate.monday.moveItemToBoard(ip.mondayItemId, boardIdOf(boardKey), boardIdOf(ip.moveTo.boardKey), groupId);
     }
     if (ip.postUpdate) await gate.monday.createUpdate(ip.mondayItemId, ip.postUpdate.body, ip.postUpdate.mentionUserIds);
     if (ip.archive) await gate.monday.archiveItem(ip.mondayItemId);

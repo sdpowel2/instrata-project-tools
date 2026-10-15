@@ -79,6 +79,35 @@ function writability(config: PlannerConfig, key: string): Writability {
   return config.columns[key]?.columnId ? 'ok' : 'unconfigured';
 }
 
+// ── Boards (intake mode, Seth + Lee 2026-10-14) ──────────────────────────────
+// Pre-Qualification and Triage are duplicates of the Pre-Sales board (same
+// column and label ids) but REUSE its group ids with different meanings, so a
+// group check must always match the board too.
+const boardOf = (item: MondayItemSnapshot): string => item.boardKey ?? 'presales';
+const isIntakeBoard = (item: MondayItemSnapshot): boolean => ['prequal', 'triage'].includes(boardOf(item));
+const BOARD_TITLE: Record<string, string> = { presales: 'Pre-Sales Summary', prequal: 'Pre-Qualification', triage: 'Triage' };
+
+/** Is the item in group '<board>.<group>'? */
+function inGroup(config: PlannerConfig, item: MondayItemSnapshot, key: string): boolean {
+  const id = config.groups[key];
+  return !!id && boardOf(item) === key.split('.')[0] && item.groupId === id;
+}
+
+/** Pre-Qualification has one group per stage: 'Lead' → lead, 'Qualified Opportunity' → qualified_opportunity. */
+function prequalGroupKey(stage: string): string {
+  return stage.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+/** Where a new item for an opportunity at this stage is created; null = not at a creation stage. */
+export function createTargetFor(config: PlannerConfig, stage: string): { boardKey: string; groupKey: string } | null {
+  if (config.intake) {
+    if (config.prequalStages.includes(stage)) return { boardKey: 'prequal', groupKey: prequalGroupKey(stage) };
+    if (config.creationStages.includes(stage)) return { boardKey: 'triage', groupKey: 'triage' };
+    return null;
+  }
+  return config.creationStages.includes(stage) ? { boardKey: 'presales', groupKey: 'new_requests' } : null;
+}
+
 function sfEvent(ctx: Ctx, e: Omit<EventIntent, 'source' | 'entityType' | 'entityId' | 'actor'>): EventIntent {
   return {
     source: 'salesforce',
@@ -158,8 +187,8 @@ export function fieldLabel(key: SfFieldKey): string {
 /** Groups that hold finished deals. The first pass over a linked item there writes nothing. */
 const CLOSED_GROUP_KEYS = ['presales.won', 'presales.lost', 'presales.declined_to_bid'];
 
-export function isClosedGroup(config: PlannerConfig, groupId: string | null): boolean {
-  return groupId !== null && CLOSED_GROUP_KEYS.some((k) => config.groups[k] === groupId);
+export function isClosedGroup(config: PlannerConfig, boardKey: string, groupId: string | null): boolean {
+  return boardKey === 'presales' && groupId !== null && CLOSED_GROUP_KEYS.some((k) => config.groups[k] === groupId);
 }
 
 /**
@@ -347,6 +376,7 @@ function openUnmapped(ctx: Ctx, key: SfFieldKey, value: string, itemRef: string)
 // ── Stage actions (§4.6) ────────────────────────────────────────────────────
 interface ItemEffects {
   writes: ColumnWrite[];
+  moveTo?: { boardKey: string; groupKey: string };
   postUpdate?: { mentionUserIds: string[]; body: string };
   archive?: boolean;
   newLinkState?: 'archived';
@@ -381,7 +411,64 @@ function writeNotes(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects, text: s
   fx.writes.push({ semanticKey: key, value: { type: 'long_text', text } });
 }
 
+/** Plan a move (after this pass's column writes). Unconfigured group → config task, no move. */
+function moveItem(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects, boardKey: string, groupKey: string): void {
+  const key = `${boardKey}.${groupKey}`;
+  if (!ctx.config.groups[key]) {
+    openConfigMissing(ctx, `group ${key}`, item.id);
+    return;
+  }
+  fx.moveTo = { boardKey, groupKey };
+  ctx.events.push(engineEvent(item.id, {
+    eventType: 'group_moved', oldValue: boardOf(item), newValue: key,
+    details: { from_board: boardOf(item), from_group: item.groupId, to_board: boardKey, to_group: groupKey, sf_stage: ctx.opp.StageName },
+  }));
+}
+
+/**
+ * Stage-driven moves on the intake boards, run when StageName changes:
+ *   R3   Pre-Qualification → Triage / Triage when the stage reaches Engineering or later
+ *   EC1  Triage → Pre-Qualification when the stage goes back to Lead / Qualified Opportunity
+ *        (wherever on Triage the item is)
+ *   and Lead ↔ Qualified Opportunity between Pre-Qualification's two groups.
+ */
+function intakeMove(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects): void {
+  const stage = ctx.opp.StageName;
+  const board = boardOf(item);
+  if (board === 'prequal') {
+    if (ctx.config.creationStages.includes(stage)) {
+      moveItem(ctx, item, fx, 'triage', 'triage');
+    } else if (ctx.config.prequalStages.includes(stage) && !inGroup(ctx.config, item, `prequal.${prequalGroupKey(stage)}`)) {
+      moveItem(ctx, item, fx, 'prequal', prequalGroupKey(stage));
+    }
+  } else if (board === 'triage' && ctx.config.prequalStages.includes(stage)) {
+    moveItem(ctx, item, fx, 'prequal', prequalGroupKey(stage));
+  }
+}
+
+/**
+ * Won (Closed Won or Confirmed to Win) while the item is still on Pre-Qualification
+ * or Triage. Not decided whether that should skip straight to the Pre-Sales
+ * board's Won (which fires the Post-Sales copy + leadership email), so ask Hope.
+ */
+function wonOnIntake(ctx: Ctx, item: MondayItemSnapshot): void {
+  const where = BOARD_TITLE[boardOf(item)];
+  ctx.tasks.push({
+    op: 'open', taskType: 'sync_failure', dedupeKey: failureKey('won_on_intake', item.id, 'status'),
+    title: `Won in Salesforce, still on ${where}: ${ctx.opp.Name}`,
+    details:
+      `Salesforce says "${ctx.opp.Name}" is won (stage ${ctx.opp.StageName}), but its item is still on the ${where} board. ` +
+      'The sync did not move it or set Won. If the deal is won, move the item to the Pre-Sales Summary and set its status to Won there ' +
+      '(that triggers the Post-Sales copy and the leadership notification).',
+    sourceRef: { board_key: boardOf(item), monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id },
+  });
+}
+
 function applyWon(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects): void {
+  if (isIntakeBoard(item)) {
+    wonOnIntake(ctx, item);
+    return;
+  }
   // Won-triggered tasks fire only when the ENGINE moves the status. If a human
   // already set Won, the monday status webhook raised them (and re-raising here
   // would reopen tasks Hope already closed).
@@ -393,7 +480,42 @@ function applyWon(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects): void {
   );
 }
 
+/**
+ * Stage actions while the item is on Pre-Qualification or Triage. A finished deal
+ * moves to the Pre-Sales Summary's Lost / Declined to Bid group with its status and
+ * notes (Seth 2026-10-14); the stage checks don't apply on Hope's boards.
+ */
+function applyIntakeStageAction(ctx: Ctx, row: StageActionRow, item: MondayItemSnapshot, fx: ItemEffects): void {
+  switch (row.action) {
+    case 'set_status':
+      if (row.params.label_key) setStatus(ctx, item, fx, row.params.label_key);
+      return;
+    case 'won':
+      wonOnIntake(ctx, item);
+      return;
+    case 'lost':
+    case 'canceled': {
+      const notes = buildWinLossNotes(ctx.opp);
+      writeNotes(ctx, item, fx, row.action === 'canceled' ? (notes ? `CANCELED — ${notes}` : 'CANCELED') : notes);
+      setStatus(ctx, item, fx, 'lost');
+      moveItem(ctx, item, fx, 'presales', 'lost');
+      return;
+    }
+    case 'declined':
+      writeNotes(ctx, item, fx, buildWinLossNotes(ctx.opp));
+      setStatus(ctx, item, fx, 'declined_to_bid');
+      moveItem(ctx, item, fx, 'presales', 'declined_to_bid');
+      return;
+    default:
+      return; // none, stage_check_delivered, stage_check_contract
+  }
+}
+
 function applyStageAction(ctx: Ctx, row: StageActionRow, item: MondayItemSnapshot, fx: ItemEffects): void {
+  if (isIntakeBoard(item)) {
+    applyIntakeStageAction(ctx, row, item, fx);
+    return;
+  }
   const ref = { board_key: 'presales', monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id };
   switch (row.action) {
     case 'none':
@@ -404,7 +526,7 @@ function applyStageAction(ctx: Ctx, row: StageActionRow, item: MondayItemSnapsho
       return;
 
     case 'stage_check_delivered':
-      if (item.groupId !== ctx.config.groups['presales.follow_up']) {
+      if (!inGroup(ctx.config, item, 'presales.follow_up')) {
         ctx.tasks.push({
           op: 'open', taskType: 'stage_check_delivered', dedupeKey: `stage_check_delivered:${item.id}`,
           title: `Delivered, not in Follow Up: ${ctx.opp.Name}`,
@@ -461,13 +583,14 @@ function applyStageAction(ctx: Ctx, row: StageActionRow, item: MondayItemSnapsho
 /**
  * Stage change (or first sight) + Win-100% → Won. Mutates baseline and fx.
  */
-function syncStage(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, fx: ItemEffects, wonFromWinPct: boolean): void {
+function syncStage(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, fx: ItemEffects, wonFromWinPct: boolean): boolean {
   const cur = ctx.opp.StageName;
   const has = Object.prototype.hasOwnProperty.call(baseline, STAGE_KEY);
   const row = ctx.maps.stageAction[cur];
   let ranWon = false;
+  const changed = !has || baseline[STAGE_KEY] !== cur;
 
-  if (!has || baseline[STAGE_KEY] !== cur) {
+  if (changed) {
     if (has) ctx.events.push(sfEvent(ctx, { eventType: 'stage_changed', field: 'StageName', oldValue: baseline[STAGE_KEY], newValue: cur }));
     baseline[STAGE_KEY] = cur;
     if (!row) {
@@ -486,6 +609,7 @@ function syncStage(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, fx: I
   if (wonFromWinPct && !ranWon && !(row && TERMINAL_ACTIONS.has(row.action))) {
     applyWon(ctx, item, fx);
   }
+  return changed;
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
@@ -509,7 +633,8 @@ export function planReconcile(input: ReconcileInput): ReconcilePlan {
 
   const ctx: Ctx = { opp, config, maps, tasks: plan.tasks, events: plan.events };
   const avLines = opp.lineItems.filter(isAvLineItem);
-  const eligibleStage = config.creationStages.includes(opp.StageName);
+  const target = createTargetFor(config, opp.StageName);
+  const eligibleStage = target !== null;
   const multiKey = failureKey('multi_av_product', opp.Id, 'line_items');
   const openMulti = (count: number) =>
     openFailure(
@@ -533,17 +658,18 @@ export function planReconcile(input: ReconcileInput): ReconcilePlan {
   }
 
   // ── No link yet: create? (§4.3) ──
-  if (avLines.length === 0 || !eligibleStage) return plan;
+  if (avLines.length === 0 || !target) return plan;
   if (avLines.length > 1) {
     openMulti(avLines.length);
     return plan;
   }
   closeTask(ctx, multiKey);
-  plan.create = planCreate(ctx, avLines[0].Id);
+  if (!config.createItems) return plan; // creation switched off (config_settings.create_items)
+  plan.create = planCreate(ctx, avLines[0].Id, target);
   return plan;
 }
 
-function planCreate(ctx: Ctx, lineItemId: string): CreatePlan {
+function planCreate(ctx: Ctx, lineItemId: string, target: { boardKey: string; groupKey: string }): CreatePlan {
   const baseline: Baseline = {};
   const columnWrites: ColumnWrite[] = [];
 
@@ -558,19 +684,21 @@ function planCreate(ctx: Ctx, lineItemId: string): CreatePlan {
     openConfigMissing(ctx, 'presales.sf_id', CREATED_ITEM);
   }
 
-  // A brand-new item: in New Requests, default status, no price, no engineer.
+  // A brand-new item: in its creation group, default status, no price, no engineer.
   const fresh: MondayItemSnapshot = {
     id: CREATED_ITEM,
     state: 'active',
-    groupId: ctx.config.groups['presales.new_requests'] ?? null,
+    boardKey: target.boardKey,
+    groupId: ctx.config.groups[`${target.boardKey}.${target.groupKey}`] ?? null,
     statusLabelId: null,
     quotedPrice: null,
     engineerUserIds: [],
   };
   const fx: ItemEffects = { writes: [] };
   syncStage(ctx, baseline, fresh, fx, wonFromWinPct);
+  reviewEstimateDue(ctx, baseline, fresh, target.boardKey);
 
-  return { sfLineItemId: lineItemId, itemName: ctx.opp.Name, groupKey: 'new_requests', columnWrites, stageWrites: fx.writes, baseline };
+  return { sfLineItemId: lineItemId, itemName: ctx.opp.Name, boardKey: target.boardKey, groupKey: target.groupKey, columnWrites, stageWrites: fx.writes, baseline };
 }
 
 function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayItemSnapshot | undefined, linePresent: boolean): ItemPlan | null {
@@ -579,7 +707,9 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   const baseline: Baseline = { ...link.baseline };
   const done = (fx: ItemEffects, extra: Partial<ItemPlan> = {}): ItemPlan => ({
     mondayItemId: link.mondayItemId,
+    boardKey: item ? boardOf(item) : 'presales',
     columnWrites: fx.writes,
+    ...(fx.moveTo ? { moveTo: fx.moveTo } : {}),
     ...(fx.postUpdate ? { postUpdate: fx.postUpdate } : {}),
     ...(fx.archive ? { archive: true } : {}),
     ...(fx.newLinkState ? { newLinkState: fx.newLinkState } : {}),
@@ -633,20 +763,55 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   }
 
   const fx: ItemEffects = { writes: [] };
-  const { wonTriggered: wonFromWinPct, wonReview } = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues, { firstLink: true, closedGroup: isClosedGroup(ctx.config, item.groupId) });
-  syncStage(ctx, baseline, item, fx, wonFromWinPct);
+  const { wonTriggered: wonFromWinPct, wonReview } = syncFields(ctx, baseline, fx.writes, item.id, item.fieldValues, { firstLink: true, closedGroup: isClosedGroup(ctx.config, boardOf(item), item.groupId) });
+  const stageChanged = syncStage(ctx, baseline, item, fx, wonFromWinPct);
   reviewConfirmedWin(ctx, baseline, item, wonReview);
 
-  // Cutover step 3: linked items parked in Pre-Engineering go to New Requests the
-  // first time they reach a creation-set stage — the one group move the sync makes.
-  let moveToGroupKey: string | undefined;
-  const preEng = ctx.config.groups['presales.pre_engineering'];
-  if (!fx.archive && preEng && item.groupId === preEng && ctx.config.creationStages.includes(ctx.opp.StageName)) {
-    moveToGroupKey = 'new_requests';
+  // Intake boards: R3 / EC1 / Lead ↔ Qualified moves follow a StageName change,
+  // never a standing mismatch, so Hope's hand moves aren't fought.
+  if (!fx.archive && !fx.moveTo && stageChanged && isIntakeBoard(item)) intakeMove(ctx, item, fx);
+  if (ctx.config.intake && !isIntakeBoard(item)) closeTask(ctx, failureKey('won_on_intake', item.id, 'status'));
+
+  // Legacy (no intake boards): linked items parked in the Pre-Sales board's
+  // Pre-Engineering group go to New Requests on reaching a creation-set stage.
+  if (!fx.archive && !fx.moveTo && inGroup(ctx.config, item, 'presales.pre_engineering') && ctx.config.creationStages.includes(ctx.opp.StageName)) {
+    fx.moveTo = { boardKey: 'presales', groupKey: 'new_requests' };
     ctx.events.push(engineEvent(item.id, { eventType: 'group_moved', oldValue: 'pre_engineering', newValue: 'new_requests', details: { sf_stage: ctx.opp.StageName } }));
   }
 
-  return done(fx, moveToGroupKey ? { moveToGroupKey } : {});
+  reviewEstimateDue(ctx, baseline, item, fx.moveTo?.boardKey ?? boardOf(item));
+  return done(fx);
+}
+
+// ── EC2: estimate due date on a pre-engineering opportunity (Seth 2026-10-14) ──
+const ESTIMATE_DUE_MARK = 'review:prequal_due';
+
+/**
+ * While an item sits on Pre-Qualification at a pre-engineering stage with an
+ * Estimate Due Date/Time, Hope gets a task to check with the salesperson whether
+ * it belongs in Engineering. It closes itself when the stage reaches Engineering
+ * (the item moves to Triage) or the date is cleared. `boardAfter` = the item's
+ * board once this pass's move (if any) is done.
+ */
+function reviewEstimateDue(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, boardAfter: string): void {
+  const key = failureKey('prequal_estimate_due', item.id, 'due_date');
+  const due = extractSfFields(ctx.opp)['presales.due_date'];
+  const applies = boardAfter === 'prequal' && ctx.config.prequalStages.includes(ctx.opp.StageName) && due !== null;
+  if (applies && !baseline[ESTIMATE_DUE_MARK]) {
+    ctx.tasks.push({
+      op: 'open', taskType: 'sync_failure', dedupeKey: key,
+      title: `Estimate due date on a pre-engineering opportunity: ${ctx.opp.Name}`,
+      details:
+        `"${ctx.opp.Name}" is at ${ctx.opp.StageName} in Salesforce but has an Estimate Due Date/Time (${etDate(due!)}). ` +
+        'Check with the salesperson whether it should be in Engineering. If yes, move the stage to Engineering (the item moves to Triage); ' +
+        'if not, clear the estimate due date. This task closes itself either way.',
+      sourceRef: { board_key: 'prequal', monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id },
+    });
+    baseline[ESTIMATE_DUE_MARK] = '1';
+  } else if (!applies && baseline[ESTIMATE_DUE_MARK]) {
+    closeTask(ctx, key);
+    delete baseline[ESTIMATE_DUE_MARK];
+  }
 }
 
 // ── First-pass review of Confirmed-to-Win items (Seth 2026-10-12) ───────────
@@ -702,6 +867,6 @@ export function planHasEffects(plan: ReconcilePlan): boolean {
   if (plan.events.length > 0) return true;
   if (plan.tasks.some((t) => t.op === 'open')) return true;
   return plan.items.some(
-    (i) => i.columnWrites.length > 0 || i.moveToGroupKey || i.postUpdate || i.archive || i.newLinkState,
+    (i) => i.columnWrites.length > 0 || i.moveTo || i.postUpdate || i.archive || i.newLinkState,
   );
 }

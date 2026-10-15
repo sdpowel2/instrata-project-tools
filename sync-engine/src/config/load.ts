@@ -59,6 +59,9 @@ export async function loadRuntimeConfig(
       return [`${l.semantic_key}.${l.label_key}`, l.monday_label_id];
     })),
     creationStages: [],
+    prequalStages: [],
+    createItems: true,
+    intake: false,
     confirmedWinPcts: [],
     blockedColumns: drift.blockedColumns,
   };
@@ -66,6 +69,12 @@ export async function loadRuntimeConfig(
   const settingsMap = Object.fromEntries(settings.rows.map((s) => [s.key, s.value]));
   const cs = settingsMap.creation_stages;
   planner.creationStages = Array.isArray(cs) ? cs.map(String) : [];
+  const ps = settingsMap.prequal_stages;
+  planner.prequalStages = Array.isArray(ps) ? ps.map(String) : [];
+  planner.createItems = settingsMap.create_items !== false;
+  // Intake mode needs both boards configured (sandbox and production each have their own).
+  const boardIds = Object.fromEntries(boards.rows.map((b) => [b.board_key, b.monday_board_id]));
+  planner.intake = !!boardIds.prequal && !!boardIds.triage;
   const cw = settingsMap.confirmed_win_pcts;
   planner.confirmedWinPcts = Array.isArray(cw) && cw.length > 0 ? cw.map(String) : ['100%'];
 
