@@ -66,6 +66,7 @@ For other orgs: Quick Find **Sharing Settings**. Under **Organization-Wide Defau
    | **Products** | Read | Read |
    | **Price Books** | Read | Read |
 
+   - **System Permissions:** tick **Edit Opportunity Product Sales Price**. Without it Salesforce rejects every Sales Price write with `FIELD_INTEGRITY_EXCEPTION: User may not specify unit price different from list price`, and the whole PATCH (GM % too) fails (found Oct 14).
 3. **API Enabled** comes from the **Minimum Access - API Only Integrations** profile set in A2, not from this permission set. To confirm, open the user's **Profile**: **API Enabled** is checked under System Permissions. If the permission set's **Find Settings** box does find "API Enabled", ticking it there too is harmless.
 4. Back on the integration user: **Permission Set Assignments**, then **Edit Assignments**. Add **AVSS ProjectTools Integration** and Save.
 5. **Instrata: SKIP.** Checked Oct 12, 2026: Opportunity sharing is **Public Read/Write**, so no group or rule is needed. For orgs where A1 is *Private* or *Public Read Only* (in the group's member picker, switch the **Search** dropdown to "Users" to add one person): the user can read every opportunity (View All) but can't edit their products yet. Editing a product needs write access to its parent opportunity. Grant it with a sharing rule:
@@ -235,7 +236,8 @@ On the **Named Credentials** tab, click **New**.
 
 1. Quick Find **Permission Sets**, then New. **Label:** `AVSS ProjectTools Callout` (no license). Save.
 2. Open **External Credential Principal Access**, then Edit. Add **AVSS_ProjectTools - AVSS_Principal**. Save.
-3. Assign it to **yourself and the integration user** (the engine's writebacks fire the Flows as that user). Step C6 checks whether it also needs to go to every user who edits Opportunities.
+3. Assign it to **yourself and the integration user** (the engine's writebacks fire the Flows as that user).
+4. **Every Opportunity editor needs principal access too** (verified Oct 14: a non-admin's edit saved fine but the callout silently never left Salesforce). Add **External Credential Principal Access → `AVSS_ProjectTools - AVSS_Principal`** to the profiles **Instrata Standard User**, **Instrata Standard User - SSO Opt**, **Standard User** and **System Administrator** (production's Opportunity editors over the last 90 days, Oct 14). Profiles, not the permission set, so new hires are covered.
 
 ### C4. Flow: `AVSS_Opportunity_Changed`
 
