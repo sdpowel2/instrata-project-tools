@@ -7,6 +7,8 @@
  *   - Salesforce-owned field or status changed by a person → logged for rework
  *     analysis (spec §4.5, §8). The sync does not fight hand edits.
  *   - Item archived / deleted → its link is archived.
+ *   - Pre-Sales Engineer or (Triage) Bid Decision changed → Triage moves R5 / R7
+ *     and the Estimator writeback, debounced (src/assign; Seth 2026-10-15).
  */
 import type { Db } from '../db/pool.ts';
 import { appendEvents } from '../db/store.ts';
@@ -16,6 +18,8 @@ import type { MondayClient } from '../monday/client.ts';
 import type { SalesforceClient } from '../salesforce/client.ts';
 import type { WriteGate } from '../writeGate.ts';
 import { runWriteback } from '../writeback/run.ts';
+import { assignColumnIds, runAssignment } from '../assign/run.ts';
+import { log } from '../log.ts';
 import type { InboxRow } from './inbox.ts';
 
 export interface MondayEventDeps {
@@ -25,6 +29,8 @@ export interface MondayEventDeps {
   salesforce: SalesforceClient;
   cfg: RuntimeConfig;
   integrationUserId: string;
+  /** Salesforce login URL, for links in the Estimator rep email. */
+  salesforceLoginUrl?: string;
   now?: () => Date;
 }
 
@@ -64,6 +70,14 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
   }
 
   if (!ev.columnId) return { kind: 'done', note: 'no column' };
+
+  // Pre-Sales Engineer (any of the three boards) or Bid Decision (Triage) → Triage
+  // moves + Estimator writeback, debounced like the price writeback.
+  const assign = assignColumnIds(deps.cfg);
+  const onTriage = deps.cfg.boards.triage !== null && String(deps.cfg.boards.triage) === String(ev.boardId);
+  const isBid = assign.bid !== null && ev.columnId === assign.bid && onTriage;
+  if (ev.columnId === assign.engineer || isBid) return assignment(deps, row, ev, isBid);
+
   const key = semanticKeyFor(deps.cfg, ev.columnId);
   if (!key) return { kind: 'done', note: 'untracked column' };
 
@@ -80,6 +94,37 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
     return { kind: 'done', note: 'logged' };
   }
   return { kind: 'done', note: 'monday-owned column' };
+}
+
+async function assignment(deps: MondayEventDeps, row: InboxRow, ev: MondayEvent, isBid: boolean): Promise<MondayOutcome> {
+  const debounceSec = Number(deps.cfg.settings.writeback_debounce_seconds ?? 30) || 30;
+  const due = new Date(new Date(row.received_at).getTime() + debounceSec * 1000);
+  const now = deps.now?.() ?? new Date();
+  if (due > now) return { kind: 'defer', until: due };
+
+  // The decision itself is kept even though the column drops off at the move (Seth 2026-10-15).
+  if (isBid) {
+    await appendEvents(deps.db, [{
+      source: 'monday', entity_type: 'monday_item', entity_id: ev.itemId!, event_type: 'field_changed',
+      field: 'triage.bid_decision', old_value: ev.previousValue, new_value: ev.value, actor: ev.userId,
+      details: { column_id: ev.columnId },
+    }], null);
+  }
+
+  const { engineer, bid } = assignColumnIds(deps.cfg);
+  const cols = [engineer, bid].filter(Boolean);
+  const { rows } = await deps.db.query<{ n: number }>(
+    `select count(*)::int as n from webhook_inbox
+      where source = 'monday' and status = 'pending' and id > $1::bigint
+        and payload->'event'->>'pulseId' = $2 and payload->'event'->>'columnId' = any($3::text[])`,
+    [row.id, ev.itemId, cols]);
+  if (rows[0].n > 0) return { kind: 'done', note: 'superseded by a newer edit' };
+
+  const r = await runAssignment({ ...deps, salesforceLoginUrl: deps.salesforceLoginUrl ?? '' }, ev.itemId!, ev.userId);
+  if (r.triage || r.estimator === 'patch' || r.estimator === 'task') {
+    log.info('assignment', { itemId: ev.itemId, mode: deps.gate.mode, triage: r.triage, estimator: r.estimator, note: r.note });
+  }
+  return { kind: 'done', note: r.note };
 }
 
 /**

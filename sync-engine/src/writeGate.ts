@@ -10,7 +10,7 @@
  */
 import type { SyncMode } from './env.ts';
 import type { MondayClient } from './monday/client.ts';
-import type { SalesforceClient } from './salesforce/client.ts';
+import type { EmailMessage, LineItemPatch, SalesforceClient } from './salesforce/client.ts';
 
 export interface JournalEntry {
   system: 'monday' | 'salesforce';
@@ -40,7 +40,8 @@ export interface WriteGate {
     createNotification(userId: string, itemId: string, text: string): Promise<void>;
   };
   salesforce: {
-    patchLineItem(id: string, values: Record<string, number>): Promise<void>;
+    patchLineItem(id: string, values: LineItemPatch): Promise<void>;
+    sendEmail(msg: EmailMessage): Promise<void>;
   };
 }
 
@@ -93,6 +94,10 @@ export function createWriteGate(mode: SyncMode, monday: MondayClient, salesforce
       async patchLineItem(id, values) {
         record({ system: 'salesforce', op: 'patch_line_item', target: id, payload: { values } });
         if (live) await salesforce.patchLineItem(id, values);
+      },
+      async sendEmail(msg) {
+        record({ system: 'salesforce', op: 'send_email', target: msg.relatedRecordId ?? msg.to, payload: { to: msg.to, subject: msg.subject } });
+        if (live) await salesforce.sendEmail(msg);
       },
     },
   };

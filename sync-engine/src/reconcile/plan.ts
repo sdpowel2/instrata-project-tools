@@ -464,6 +464,13 @@ function wonOnIntake(ctx: Ctx, item: MondayItemSnapshot): void {
   });
 }
 
+/** Salesforce says Won now: a 'won' stage (Closed Won) or a confirmed-to-win Win %. */
+function sfSaysWon(ctx: Ctx): boolean {
+  if (ctx.maps.stageAction[ctx.opp.StageName]?.action === 'won') return true;
+  const pct = extractSfFields(ctx.opp)['presales.win_pct'];
+  return pct !== null && ctx.config.confirmedWinPcts.includes(pct);
+}
+
 function applyWon(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects): void {
   if (isIntakeBoard(item)) {
     wonOnIntake(ctx, item);
@@ -770,7 +777,9 @@ function planLink(ctx: Ctx, link: ReconcileInput['links'][number], item: MondayI
   // Intake boards: R3 / EC1 / Lead ↔ Qualified moves follow a StageName change,
   // never a standing mismatch, so Hope's hand moves aren't fought.
   if (!fx.archive && !fx.moveTo && stageChanged && isIntakeBoard(item)) intakeMove(ctx, item, fx);
-  if (ctx.config.intake && !isIntakeBoard(item)) closeTask(ctx, failureKey('won_on_intake', item.id, 'status'));
+  // The won_on_intake task closes once the item leaves the intake boards, or when
+  // Salesforce stops saying Won (a rep's early 99% taken back; Seth 2026-10-15).
+  if (ctx.config.intake && (!isIntakeBoard(item) || !sfSaysWon(ctx))) closeTask(ctx, failureKey('won_on_intake', item.id, 'status'));
 
   // Legacy (no intake boards): linked items parked in the Pre-Sales board's
   // Pre-Engineering group go to New Requests on reaching a creation-set stage.

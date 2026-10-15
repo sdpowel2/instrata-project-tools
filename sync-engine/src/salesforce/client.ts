@@ -4,7 +4,7 @@
  *
  * patchLineItem is a WRITE and must only be called through the writeGate.
  */
-import { LINE_ITEM_MARGIN_FIELD, assertSfId, lineItemQuery, mapOpportunity, opportunityQuery } from './soql.ts';
+import { LINE_ITEM_MARGIN_FIELD, activeUsersByNameQuery, assertSfId, estimatorContextQuery, lineItemQuery, mapOpportunity, opportunityQuery } from './soql.ts';
 import type { SfOpportunity } from '../reconcile/types.ts';
 
 export interface SfLineItemState {
@@ -15,15 +15,49 @@ export interface SfLineItemState {
   Sold_in_Margin__c: number | null;
 }
 
+/** An AV line's Estimator and the opportunity facts the Estimator writeback needs. */
+export interface SfEstimatorContext {
+  lineItemId: string;
+  opportunityId: string;
+  opportunityName: string;
+  opportunityClosed: boolean;
+  estimatorId: string | null;
+  estimatorName: string | null;
+  rep: { id: string; name: string | null; email: string | null } | null;
+}
+
+export interface SfUser {
+  Id: string;
+  Name: string;
+  Email: string | null;
+}
+
+/** Fields the engine may PATCH on an OpportunityLineItem (writeGate only). */
+export type LineItemPatch = { UnitPrice?: number; [LINE_ITEM_MARGIN_FIELD]?: number; Estimator__c?: string | null };
+
+export interface EmailMessage {
+  to: string;
+  subject: string;
+  body: string;
+  /** Logs the email as an activity on this record (the opportunity). */
+  relatedRecordId?: string;
+}
+
 export interface SalesforceClient {
   query<T = any>(soql: string): Promise<T[]>;
   queryAll<T = any>(soql: string): Promise<T[]>;
   /** Opportunities by id (any count; batched). Ids that don't come back are deleted / invisible. */
   getOpportunities(ids: string[]): Promise<Map<string, SfOpportunity>>;
   getLineItem(id: string): Promise<SfLineItemState | null>;
+  /** By line item id (any count; batched). Ids that don't come back are deleted / invisible. */
+  getEstimatorContexts(lineItemIds: string[]): Promise<Map<string, SfEstimatorContext>>;
+  /** Active users by exact name. A name that matches two users maps to both (caller decides). */
+  findActiveUsersByName(names: string[]): Promise<SfUser[]>;
   picklistValues(object: string, field: string): Promise<string[]>;
-  // Write — writeGate only
-  patchLineItem(id: string, values: { UnitPrice?: number; [LINE_ITEM_MARGIN_FIELD]?: number }): Promise<void>;
+  // Writes — writeGate only
+  patchLineItem(id: string, values: LineItemPatch): Promise<void>;
+  /** Salesforce's standard Send Email action (the one the org's Flows use). */
+  sendEmail(msg: EmailMessage): Promise<void>;
 }
 
 interface Token {
@@ -120,6 +154,39 @@ export function createSalesforceClient(opts: {
         : null;
     },
 
+    async getEstimatorContexts(lineItemIds) {
+      const unique = [...new Set(lineItemIds)];
+      const out = new Map<string, SfEstimatorContext>();
+      for (let i = 0; i < unique.length; i += 200) {
+        for (const r of await runQuery<any>('query', estimatorContextQuery(unique.slice(i, i + 200)))) {
+          const rep = r.Opportunity?.Sales_Rep__c
+            ? { id: r.Opportunity.Sales_Rep__c, name: r.Opportunity.Sales_Rep__r?.Name ?? null, email: r.Opportunity.Sales_Rep__r?.Email ?? null }
+            : null;
+          out.set(r.Id, {
+            lineItemId: r.Id,
+            opportunityId: r.OpportunityId,
+            opportunityName: r.Opportunity?.Name ?? '',
+            opportunityClosed: r.Opportunity?.IsClosed === true,
+            estimatorId: r.Estimator__c ?? null,
+            estimatorName: r.Estimator__r?.Name ?? null,
+            rep,
+          });
+        }
+      }
+      return out;
+    },
+
+    async findActiveUsersByName(names) {
+      const unique = [...new Set(names.filter(Boolean))];
+      const out: SfUser[] = [];
+      for (let i = 0; i < unique.length; i += 200) {
+        for (const r of await runQuery<any>('query', activeUsersByNameQuery(unique.slice(i, i + 200)))) {
+          out.push({ Id: r.Id, Name: r.Name, Email: r.Email ?? null });
+        }
+      }
+      return out;
+    },
+
     async picklistValues(object, field) {
       const res = await request(`/services/data/v${opts.apiVersion}/sobjects/${encodeURIComponent(object)}/describe`);
       if (!res.ok) throw new Error(await failText(res));
@@ -134,6 +201,23 @@ export function createSalesforceClient(opts: {
         body: JSON.stringify(values),
       });
       if (res.status !== 204 && !res.ok) throw new Error(await failText(res));
+    },
+
+    async sendEmail(msg) {
+      const input: Record<string, string> = { emailAddresses: msg.to, emailSubject: msg.subject, emailBody: msg.body };
+      if (msg.relatedRecordId) input.relatedRecordId = assertSfId(msg.relatedRecordId);
+      const res = await request(`/services/data/v${opts.apiVersion}/actions/standard/emailSimple`, {
+        method: 'POST',
+        body: JSON.stringify({ inputs: [input] }),
+      });
+      if (!res.ok) throw new Error(await failText(res));
+      // The action answers 200 with a per-input result; a failed send is isSuccess = false.
+      const out: any = await res.json().catch(() => null);
+      const first = Array.isArray(out) ? out[0] : null;
+      if (!first?.isSuccess) {
+        const why = (first?.errors ?? []).map((e: any) => `${e.statusCode ?? ''} ${e.message ?? ''}`.trim()).join('; ');
+        throw new Error(`Salesforce emailSimple failed: ${why || JSON.stringify(out).slice(0, 400)}`);
+      }
     },
   };
 }

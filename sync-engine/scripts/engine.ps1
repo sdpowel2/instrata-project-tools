@@ -11,13 +11,15 @@
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 measure-diff    (dry run: reset dry baseline, re-check all)
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 diff-report     (CSV to Desktop: monday now vs Salesforce)
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 sweep
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 estimator-preview      (CSV to Desktop: Estimator cleanup, read-only)
+    powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 estimator-first-pass   (writes the Estimators; asks first)
     powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 reconcile 006XXXXXXXXXXXXXXX
 
   Add -App instrata-sync-engine to target production (default: staging).
 #>
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('status', 'backfill-preview', 'backfill', 'requeue-linked', 'measure-diff', 'diff-report', 'sweep', 'reconcile')]
+  [ValidateSet('status', 'backfill-preview', 'backfill', 'requeue-linked', 'measure-diff', 'diff-report', 'sweep', 'reconcile', 'estimator-preview', 'estimator-first-pass')]
   [string]$Command,
   [Parameter(Position = 1)]
   [string]$OpportunityId,
@@ -70,6 +72,22 @@ switch ($Command) {
     return
   }
   'sweep'            { $r = Call 'POST' '/admin/sweep' @{} }
+  'estimator-preview' {
+    Write-Host 'Building the Estimator cleanup preview (read-only)...'
+    $csv = Call 'POST' '/admin/estimator-first-pass?format=csv' @{ apply = $false }
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $path = Join-Path $desktop ("estimator-preview-{0}-{1}.csv" -f $App, (Get-Date -Format 'yyyyMMdd-HHmm'))
+    [IO.File]::WriteAllText($path, $csv, (New-Object System.Text.UTF8Encoding $true))
+    $lines = ($csv -split "`r`n" | Where-Object { $_ -ne '' }).Count - 1
+    Write-Host ("Saved {0} rows to {1}" -f $lines, $path) -ForegroundColor Green
+    Invoke-Item $path
+    return
+  }
+  'estimator-first-pass' {
+    $answer = Read-Host 'This WRITES the Estimator on every open linked deal (each engineer gets the Salesforce email). Type YES to continue'
+    if ($answer -cne 'YES') { Write-Host 'Cancelled.'; return }
+    $r = Call 'POST' '/admin/estimator-first-pass' @{ apply = $true }
+  }
   'reconcile' {
     if ($OpportunityId -notmatch '^006[a-zA-Z0-9]{12}([a-zA-Z0-9]{3})?$') { throw 'Give an opportunity id: engine.ps1 reconcile 006...' }
     $r = Call 'POST' "/admin/reconcile/$OpportunityId" @{}

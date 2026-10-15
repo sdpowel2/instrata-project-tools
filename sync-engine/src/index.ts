@@ -11,10 +11,11 @@
  *   POST /admin/backfill               internal — link existing board items ({preview})
  *   POST /admin/requeue-linked         internal — re-check every linked opportunity
  *   GET  /admin/diff-report            internal — monday-now vs Salesforce, per field (?format=csv)
+ *   POST /admin/estimator-first-pass   internal — Estimator cleanup ({apply}; ?format=csv)
  *
  * Background: inbox drain (every 2 s, and immediately on ingest), Salesforce
- * safety sweep (hourly), label drift check (hourly), monday webhook
- * registration (at boot).
+ * safety sweep (hourly, then a retry of items waiting on an engineer mapping),
+ * label drift check (hourly), monday webhook registration (at boot).
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadEnv } from './env.ts';
@@ -38,6 +39,7 @@ import { runSweep, type SweepResult } from './schedule/sweep.ts';
 import { runBackfill } from './backfill/run.ts';
 import { requeueLinked } from './schedule/requeue.ts';
 import { buildDiffReport, reportCsv } from './report/run.ts';
+import { firstPassCsv, retryUnmappedEngineers, runEstimatorFirstPass } from './assign/run.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -58,7 +60,7 @@ async function getConfig(): Promise<RuntimeConfig> {
   return cfg;
 }
 
-const deps: WorkerDeps = { db, gate, monday, salesforce, getConfig, integrationUserId: env.monday.integrationUserId };
+const deps: WorkerDeps = { db, gate, monday, salesforce, getConfig, integrationUserId: env.monday.integrationUserId, salesforceLoginUrl: env.salesforce.loginUrl };
 
 // ── Background jobs ──
 const jobs = { lastDrain: null as string | null, lastSweep: null as (SweepResult & { at: string }) | null, lastDrift: null as string | null };
@@ -91,6 +93,11 @@ async function sweep(): Promise<SweepResult | undefined> {
     await setEngineStatus(db, 'last_sweep', { ...jobs.lastSweep });
     log.info('sweep', { ...result });
     void drain();
+    const cfg = await getConfig();
+    if (cfg.settings.estimator_writeback === true) {
+      const retried = await retryUnmappedEngineers({ db, gate, monday, salesforce, cfg, salesforceLoginUrl: env.salesforce.loginUrl });
+      if (retried > 0) log.info('estimator mapping retry', { items: retried });
+    }
   }
   return result;
 }
@@ -202,6 +209,29 @@ app.get('/admin/diff-report', internalOnly, async (req, res) => {
     res.json(report);
   } catch (e) {
     log.error('diff report failed', { error: errMessage(e) });
+    res.status(502).json({ error: errMessage(e) });
+  }
+});
+
+// Estimator cleanup over every linked open deal. Body {"apply": true} writes; otherwise a preview.
+app.post('/admin/estimator-first-pass', internalOnly, async (req, res) => {
+  const apply = req.body?.apply === true;
+  try {
+    const cfg = await getConfig();
+    const report = await db.withLock('estimator_first_pass', () =>
+      runEstimatorFirstPass({ db, gate, monday, salesforce, cfg, salesforceLoginUrl: env.salesforce.loginUrl }, { apply }));
+    if (!report) {
+      res.status(409).json({ error: 'an estimator first pass is already running' });
+      return;
+    }
+    log.info('estimator first pass', { apply, mode: env.syncMode, counts: report.counts, failed: report.failed.length });
+    if (req.query.format === 'csv') {
+      res.type('text/csv').send(firstPassCsv(report));
+      return;
+    }
+    res.json({ ...report, rows: undefined });
+  } catch (e) {
+    log.error('estimator first pass failed', { error: errMessage(e) });
     res.status(502).json({ error: errMessage(e) });
   }
 });

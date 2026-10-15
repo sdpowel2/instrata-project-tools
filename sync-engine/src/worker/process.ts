@@ -10,6 +10,7 @@ import { handleMondayEvent } from './mondayEvents.ts';
 
 export interface WorkerDeps extends ReconcileDeps {
   integrationUserId: string;
+  salesforceLoginUrl?: string;
   now?: () => Date;
 }
 

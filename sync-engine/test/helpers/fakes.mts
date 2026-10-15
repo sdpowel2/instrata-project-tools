@@ -1,6 +1,6 @@
 /** In-memory monday + Salesforce that record every call. */
 import type { MondayClient, MondayItemRaw, MondayWebhook } from '../../src/monday/client.ts';
-import type { SalesforceClient, SfLineItemState } from '../../src/salesforce/client.ts';
+import type { EmailMessage, SalesforceClient, SfEstimatorContext, SfLineItemState, SfUser } from '../../src/salesforce/client.ts';
 import type { SfOpportunity } from '../../src/reconcile/types.ts';
 
 export function fakeMonday() {
@@ -67,10 +67,14 @@ export function fakeMonday() {
   return { client, items, writes, webhooks, addItem, setCol, failOnce: () => { failNextChange = true; } };
 }
 
-export function fakeSalesforce(init: { opps?: SfOpportunity[]; lineItems?: SfLineItemState[] } = {}) {
+export function fakeSalesforce(init: { opps?: SfOpportunity[]; lineItems?: SfLineItemState[]; estimatorContexts?: SfEstimatorContext[]; users?: SfUser[] } = {}) {
+  const estimatorContexts = new Map((init.estimatorContexts ?? []).map((c) => [c.lineItemId, c]));
+  const users: SfUser[] = [...(init.users ?? [])];
+  const emails: EmailMessage[] = [];
+  let failEmail: Error | null = null;
   const opps = new Map((init.opps ?? []).map((o) => [o.Id, o]));
   const lineItems = new Map((init.lineItems ?? []).map((l) => [l.Id, l]));
-  const patches: { id: string; values: Record<string, number> }[] = [];
+  const patches: { id: string; values: Record<string, unknown> }[] = [];
   const queries: string[] = [];
   let queryResults: Record<string, any[]> = {};
   let failGetOpportunities: Error | null = null;
@@ -91,16 +95,28 @@ export function fakeSalesforce(init: { opps?: SfOpportunity[]; lineItems?: SfLin
       return new Map(ids.filter((id) => opps.has(id)).map((id) => [id, opps.get(id)!]));
     },
     getLineItem: async (id) => lineItems.get(id) ?? null,
+    getEstimatorContexts: async (ids) => new Map(ids.filter((id) => estimatorContexts.has(id)).map((id) => [id, { ...estimatorContexts.get(id)! }])),
+    findActiveUsersByName: async (names) => users.filter((u) => names.includes(u.Name)),
+    async sendEmail(msg) {
+      if (failEmail) throw failEmail;
+      emails.push(msg);
+    },
     picklistValues: async () => [],
     async patchLineItem(id, values) {
-      patches.push({ id, values: values as Record<string, number> });
+      patches.push({ id, values: values as Record<string, unknown> });
       const li = lineItems.get(id);
       if (li) Object.assign(li, values);
+      const ctx = estimatorContexts.get(id);
+      if (ctx && 'Estimator__c' in values) {
+        ctx.estimatorId = values.Estimator__c ?? null;
+        ctx.estimatorName = users.find((u) => u.Id === values.Estimator__c)?.Name ?? null;
+      }
     },
   };
 
   return {
-    client, opps, lineItems, patches, queries,
+    client, opps, lineItems, patches, queries, estimatorContexts, users, emails,
+    failEmail: (e: Error | null) => { failEmail = e; },
     setQueryResults: (r: Record<string, any[]>) => { queryResults = r; },
     failOpportunities: (e: Error | null) => { failGetOpportunities = e; },
   };

@@ -22,6 +22,14 @@ export interface RuntimeConfig {
   settings: Record<string, unknown>;
   /** Every configured label id, for the drift check. */
   labelRefs: LabelRef[];
+  /** map_estimator: monday user id → Salesforce user name (null = not mapped yet) or ignored. */
+  estimators: Record<string, EstimatorMapRow>;
+}
+
+export interface EstimatorMapRow {
+  mondayName: string;
+  sfUserName: string | null;
+  ignore: boolean;
 }
 
 const MAP_TABLES = [
@@ -91,7 +99,17 @@ export async function loadRuntimeConfig(
   }
   for (const s of stages.rows) maps.stageAction[s.stage] = { action: s.action, params: s.params ?? {} };
 
+  // map_estimator arrives with sync_triage_and_estimator.sql; tolerate a schema without it.
+  const estimators: Record<string, EstimatorMapRow> = {};
+  const { rows: hasEstimators } = await q.query<{ t: string | null }>(`select to_regclass('map_estimator')::text as t`);
+  if (hasEstimators[0]?.t) {
+    const { rows } = await q.query<{ monday_user_id: string; monday_name: string; sf_user_name: string | null; ignore: boolean }>(
+      'select monday_user_id::text, monday_name, sf_user_name, ignore from map_estimator where active');
+    for (const r of rows) estimators[r.monday_user_id] = { mondayName: r.monday_name, sfUserName: r.sf_user_name, ignore: r.ignore };
+  }
+
   return {
+    estimators,
     planner,
     maps,
     boards: Object.fromEntries(boards.rows.map((b) => [b.board_key, b.monday_board_id])),

@@ -776,6 +776,13 @@ section('45. Won while still on an intake board → task for Hope; no status, no
   onPresales.items[ITEM] = { ...onPresales.items[ITEM], boardKey: 'presales', groupId: G.won, statusLabelId: S.won };
   const p3 = run(opp({ StageName: 'Closed Won' }), onPresales, IC);
   check('task closes once Hope moves it to the Pre-Sales board', p3.tasks.some((t) => t.op === 'close' && t.dedupeKey === WON_INTAKE_KEY));
+  // Seth 2026-10-15: also close it when Salesforce stops saying Won.
+  const stillOnTriage = apply(p2, st);
+  const p4 = run(opp({ Win_Likelihood__c: '50%' }), stillOnTriage, IC);
+  check('99/100% taken back while still on Triage → task closes', p4.tasks.some((t) => t.op === 'close' && t.dedupeKey === WON_INTAKE_KEY));
+  check('…and no close while Salesforce still says Won', !p2.tasks.some((t) => t.op === 'close' && t.dedupeKey === WON_INTAKE_KEY));
+  const p5 = run(opp({ StageName: 'Engineering' }), apply(p, st), IC);
+  check('Closed Won reverted to Engineering → task closes', p5.tasks.some((t) => t.op === 'close' && t.dedupeKey === WON_INTAKE_KEY));
 }
 
 section("46. Hope's hand moves are not fought");

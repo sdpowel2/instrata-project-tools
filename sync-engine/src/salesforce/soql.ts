@@ -56,6 +56,30 @@ export function lineItemQuery(lineItemId: string): string {
   return `SELECT Id, OpportunityId, UnitPrice, Quantity, ${LINE_ITEM_MARGIN_FIELD} FROM OpportunityLineItem WHERE Id = '${assertSfId(lineItemId)}'`;
 }
 
+/** SOQL string literal (backslash and quote escaped). */
+export function soqlString(s: string): string {
+  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+/**
+ * Estimator writeback (Seth 2026-10-15): the line's current Estimator plus what the
+ * rep email needs. Estimator__c is a User lookup on the LINE (one per line).
+ */
+export function estimatorContextQuery(lineItemIds: string[]): string {
+  if (lineItemIds.length === 0 || lineItemIds.length > 200) throw new Error(`estimatorContextQuery takes 1–200 ids, got ${lineItemIds.length}`);
+  return [
+    'SELECT Id, OpportunityId, Estimator__c, Estimator__r.Name,',
+    '       Opportunity.Name, Opportunity.IsClosed, Opportunity.Sales_Rep__c, Opportunity.Sales_Rep__r.Name, Opportunity.Sales_Rep__r.Email',
+    `FROM OpportunityLineItem WHERE Id IN (${lineItemIds.map((id) => `'${assertSfId(id)}'`).join(', ')})`,
+  ].join('\n');
+}
+
+/** Active users by exact name (the monday engineer → Salesforce user match is by name). */
+export function activeUsersByNameQuery(names: string[]): string {
+  if (names.length === 0 || names.length > 200) throw new Error(`activeUsersByNameQuery takes 1–200 names, got ${names.length}`);
+  return `SELECT Id, Name, Email FROM User WHERE IsActive = true AND Name IN (${names.map(soqlString).join(', ')})`;
+}
+
 /** Raw REST record → planner input (subquery flattened). */
 export function mapOpportunity(r: any): SfOpportunity {
   const lines: SfLineItem[] = (r.OpportunityLineItems?.records ?? []).map((li: any) => ({

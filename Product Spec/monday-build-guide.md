@@ -47,11 +47,18 @@ Target labels: **Northeast, Mid-Atlantic, Southeast, Southwest** (add **Louisian
 
 ### 2.1 New column
 
-- [ ] **Win/Loss Notes**: Long Text. The sync fills it with the Salesforce lost/canceled reason, detail, and competitor. Send the column ID to config (`presales.win_loss_notes`).
+- [ ] **Win/Loss Notes**: Long Text. The sync fills it with the Salesforce lost/canceled reason, detail, and competitor. **Create it through the API with the fixed column id `win_loss_notes`** on the Pre-Sales, Pre-Qualification and Triage boards (all three), after Status, so a cross-board move keeps the notes. The UI can't choose a column id. Description: *"Filled by the Salesforce sync when a deal is Lost, Canceled or Declined: reason, detail and competitor from Salesforce. Edits here aren't sent back to Salesforce."* Then set `presales.win_loss_notes` to `win_loss_notes` in `public.config_field_registry`. Sandbox boards done Oct 15 (tested: notes written on Pre-Qualification, kept through the move to Pre-Sales / Lost).
 
 ### 2.2 New group
 
-- [ ] **Pre-Engineering**: holds linked items whose opportunity is still at Lead or Qualified Opportunity. The cutover moves them here; the sync moves them to New Requests when they reach Engineering. Place it below Declined to Bid.
+- [x] ~~**Pre-Engineering**~~: **no longer needed** (Oct 14). Pre-engineering opportunities live on the Pre-Qualification board.
+
+### 2.2b Triage board (production `18435527543`)
+
+- [ ] **Bid Decision**: Status column, created through the API with the fixed id `bid_decision`, labels **1 = Bid** (green) and **2 = No-Bid** (red), after Status. Triage board only; it drops off when the item moves to the Pre-Sales board (the decision is kept in the sync's event log). Then set `triage.bid_decision` to `bid_decision` in `public.config_field_registry`. Sandbox done Oct 15.
+- [ ] **R6 automation:** When **Bid Decision** changes to **Bid** → move item to group **New Assignment**. Sandbox done Oct 15.
+- R4 (Triage → Bid/No-Bid) is Hope dragging the item. R5 (No-Bid → Pre-Sales / Declined to Bid) and R7 (Bid + engineer → Pre-Sales / New Requests) are done by the sync, not monday automations.
+- Hope and anyone who assigns engineers must be **members** of the Triage board (Oct 15: Lee wasn't).
 
 ### 2.3 Status → group automations
 
