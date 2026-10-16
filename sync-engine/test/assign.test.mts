@@ -92,7 +92,7 @@ test('planTriage: No-Bid → R5 (status + Declined to Bid); Bid + engineer → R
 test('planEstimator: patch + rep email; the cases that leave Salesforce alone', () => {
   const base: EstimatorInput = {
     item: item(), closedGroup: false, noBid: false, link: { sfLineItemId: LINE, sfOpportunityId: OPP, linkState: 'active' },
-    ctx: ctx(), pick: { kind: 'user', user: LEE, mondayUserId: U.lee }, firstPass: false, repEmail: true,
+    ctx: ctx(), pick: { kind: 'user', user: LEE, mondayUserId: U.lee }, assignedSfIds: [LEE.Id], allowClear: true, firstPass: false, repEmail: true,
     itemLabel: 'Acme HQ (monday item 1)', sfBaseUrl: 'https://instrata.lightning.force.com',
   };
   const d = planEstimator(base);
@@ -118,6 +118,12 @@ test('planEstimator: patch + rep email; the cases that leave Salesforce alone', 
   assert.equal(cleared.kind, 'patch');
   assert.equal((cleared as any).estimatorId, null);
   assert.equal((cleared as any).repEmail, null, 'clearing emails nobody');
+
+  // Seth 2026-10-16: a merely empty column never clears; only a removal does.
+  assert.deepEqual(planEstimator({ ...base, pick: { kind: 'clear' }, assignedSfIds: [], allowClear: false, ctx: ctx({ estimatorId: SHAUN.Id }) }), { kind: 'none', reason: 'no engineer in monday' });
+  // Seth 2026-10-16: Salesforce already holds one of the item's engineers → keep them.
+  assert.equal(planEstimator({ ...base, assignedSfIds: [LEE.Id, SHAUN.Id], ctx: ctx({ estimatorId: SHAUN.Id }) }).kind, 'none', 'helper added: Estimator stays');
+  assert.equal(planEstimator({ ...base, assignedSfIds: [LEE.Id], ctx: ctx({ estimatorId: SHAUN.Id }) }).kind, 'patch', 'Salesforce has someone not on the item → first engineer');
 
   const task = planEstimator({ ...base, pick: { kind: 'blocked', mondayUserId: U.stranger, mondayName: 'New Person', why: 'no_mapping' } });
   assert.equal(task.kind, 'task');
@@ -147,7 +153,7 @@ test('R5: No-Bid on Triage → status Declined to Bid, moved to Pre-Sales / Decl
   const h = harness();
   await link();
   h.put(TRIAGE, 'new_group66048', { engineers: [U.lee], bid: 2 });
-  const r = await runAssignment(h.deps(), ITEM, '33940282');
+  const r = await runAssignment(h.deps(), ITEM, '33940282', 'engineer');
   assert.equal(r.triage, 'R5');
   assert.deepEqual(h.monday.writes.map((w) => w.op), ['change', 'move_board']);
   assert.deepEqual(h.monday.writes[0].args[2], { status9: { index: 7 } });
@@ -160,7 +166,7 @@ test('R7 + Estimator: Bid + engineer → New Requests; Estimator written; rep em
   const h = harness();
   await link();
   h.put(TRIAGE, 'group_mm84ys96', { engineers: [U.lee, U.shaun], bid: 1 });
-  const r = await runAssignment(h.deps(), ITEM, '33940282');
+  const r = await runAssignment(h.deps(), ITEM, '33940282', 'engineer');
   assert.equal(r.triage, 'R7');
   assert.deepEqual(h.monday.writes.map((w) => w.op), ['move_board']);
   assert.deepEqual(h.monday.writes[0].args, [ITEM, TRIAGE, PRESALES, 'new_group12986']);
@@ -172,7 +178,7 @@ test('R7 + Estimator: Bid + engineer → New Requests; Estimator written; rep em
 
   // Re-running changes nothing (Salesforce now matches; the item is on Pre-Sales).
   h.monday.items.get(ITEM)!.board = { id: PRESALES };
-  const again = await runAssignment(h.deps(), ITEM, null);
+  const again = await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(again.estimator, 'none');
   assert.equal(h.sf.patches.length, 1);
   assert.equal(h.sf.emails.length, 1);
@@ -182,18 +188,38 @@ test('engineer changed → overwrite + email; column emptied → cleared, no ema
   const h = harness({ estimator: { estimatorId: LEE.Id, estimatorName: LEE.Name } });
   await link();
   h.put(PRESALES, 'new_group12986', { engineers: [U.shaun] });
-  await runAssignment(h.deps(), ITEM, null);
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.deepEqual(h.sf.patches.at(-1), { id: LINE, values: { Estimator__c: SHAUN.Id } });
   assert.equal(h.sf.emails.length, 1);
 
   h.put(PRESALES, 'new_group12986', { engineers: [] });
-  await runAssignment(h.deps(), ITEM, null);
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.deepEqual(h.sf.patches.at(-1), { id: LINE, values: { Estimator__c: null } });
   assert.equal(h.sf.emails.length, 1, 'clearing sends no email');
 
   h.put(PRESALES, 'new_group52602', { engineers: [U.lee] }); // Won
-  await runAssignment(h.deps(), ITEM, null);
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(h.sf.patches.length, 2, 'Won group: monday edits no longer touch Salesforce');
+});
+
+test('a Bid Decision change or the retry never clears; an engineer removal does', async () => {
+  const h = harness({ estimator: { estimatorId: SHAUN.Id, estimatorName: SHAUN.Name } });
+  await link();
+  h.put(TRIAGE, 'new_group66048', { engineers: [], bid: 1 });
+  await runAssignment(h.deps(), ITEM, null, 'bid');
+  await runAssignment(h.deps(), ITEM, null, 'retry');
+  assert.equal(h.sf.patches.length, 0, 'empty column + Bid Decision → Salesforce left alone');
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
+  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: null } }]);
+});
+
+test('adding a second engineer keeps the current Estimator (no flip, no email)', async () => {
+  const h = harness({ estimator: { estimatorId: SHAUN.Id, estimatorName: SHAUN.Name } });
+  await link();
+  h.put(PRESALES, 'new_group12986', { engineers: [U.lee, U.shaun] });
+  const r = await runAssignment(h.deps(), ITEM, null, 'engineer');
+  assert.equal(r.estimator, 'none');
+  assert.equal(h.sf.patches.length + h.sf.emails.length, 0);
 });
 
 test('a failed rep email keeps the Estimator write and logs notify_failed', async () => {
@@ -201,7 +227,7 @@ test('a failed rep email keeps the Estimator write and logs notify_failed', asyn
   await link();
   h.sf.failEmail(new Error('NO_MASS_MAIL_PERMISSION'));
   h.put(PRESALES, 'new_group12986', { engineers: [U.lee] });
-  await runAssignment(h.deps(), ITEM, null);
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(h.sf.patches.length, 1);
   assert.equal((await rows(`select count(*)::int n from event_log where event_type = 'notified' and not applied`))[0].n, 1);
 });
@@ -210,7 +236,7 @@ test('unknown engineer → grouped task for Hope; mapping them + the hourly retr
   const h = harness({ users: [LEE, SHAUN, { Id: '005NEW000000001', Name: 'New Person', Email: null }] });
   await link();
   h.put(PRESALES, 'new_group12986', { engineers: [U.stranger, U.lee] });
-  await runAssignment(h.deps(), ITEM, null);
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(h.sf.patches.length, 0, 'blocked: the unknown person may be the lead');
   const t = (await rows(`select status, source_ref from task where dedupe_key = $1`, [unmappedEngineerKey(U.stranger)]))[0];
   assert.equal(t.status, 'not_started');
@@ -227,7 +253,7 @@ test('dry run: nothing written, dry_run_write events instead', async () => {
   const h = harness({ mode: 'dry_run' });
   await link();
   h.put(TRIAGE, 'group_mm84ys96', { engineers: [U.lee], bid: 1 });
-  await runAssignment(h.deps(), ITEM, null);
+  await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(h.monday.writes.length, 0);
   assert.equal(h.sf.patches.length, 0);
   assert.equal(h.sf.emails.length, 0);
@@ -241,7 +267,7 @@ test('estimator_writeback off → Triage moves still run, Salesforce untouched',
   const h = harness();
   await link();
   h.put(TRIAGE, 'group_mm84ys96', { engineers: [U.lee], bid: 1 });
-  const r = await runAssignment(h.deps(), ITEM, null);
+  const r = await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(r.triage, 'R7');
   assert.equal(h.sf.patches.length, 0);
 });
@@ -260,6 +286,15 @@ test('first pass: preview writes nothing; apply overwrites, emails no rep, skips
   assert.deepEqual(applied.counts, { replace: 1 });
   assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: LEE.Id } }]);
   assert.equal(h.sf.emails.length, 0, 'no rep emails on the first pass');
+
+  // Blank monday column on the first pass: listed as "leave", never cleared.
+  h.put(PRESALES, 'new_group12986', { engineers: [] });
+  const blank = await runEstimatorFirstPass(h.deps(), { apply: true });
+  assert.deepEqual(blank.counts, { 'leave (no engineer in monday)': 1 });
+  assert.equal(h.sf.patches.length, 1);
+  // Salesforce already holds one of two engineers → "already right".
+  h.put(PRESALES, 'new_group12986', { engineers: [U.shaun, U.lee] });
+  assert.deepEqual((await runEstimatorFirstPass(h.deps(), { apply: false })).counts, { 'already right': 1 });
 
   h.sf.estimatorContexts.get(LINE)!.opportunityClosed = true;
   const closed = await runEstimatorFirstPass(h.deps(), { apply: false });
@@ -283,7 +318,7 @@ test('routing: an engineer change waits out the debounce, then writes; a Bid Dec
   await db.query(`update webhook_inbox set received_at = now() - interval '2 minutes', next_attempt_at = now()`);
   await enqueue('bid_decision', 120);
   await drainInbox(d);
-  assert.equal(h.sf.patches.length, 1, 'the older person event is superseded by the newer bid event; one write');
+  assert.equal(h.sf.patches.length, 1, 'both events run (different columns); the second finds Salesforce already right');
   assert.equal(h.monday.writes.filter((w) => w.op === 'move_board').length, 1);
   const bid = (await rows(`select actor, new_value from event_log where event_type = 'field_changed' and field = 'triage.bid_decision'`))[0];
   assert.equal(bid.actor, '33940282');

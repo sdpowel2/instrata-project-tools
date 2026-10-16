@@ -11,9 +11,14 @@
  *
  * Estimator writeback: the first mappable person in the Pre-Sales Engineer column
  * becomes the AV line's OpportunityLineItem.Estimator__c (one user per line).
- *   - Salesforce follows monday while the deal is open: a change overwrites, an
- *     emptied column clears. Items in Won / Lost / Declined to Bid, No-Bid items
- *     and closed opportunities are left alone.
+ *   - Salesforce follows monday while the deal is open: a change overwrites.
+ *     Items in Won / Lost / Declined to Bid, No-Bid items and closed
+ *     opportunities are left alone.
+ *   - If Salesforce's Estimator is already one of the engineers on the item, it
+ *     stays (adding a helper never flips it; Seth 2026-10-16).
+ *   - Only someone REMOVING the engineer in monday clears Salesforce. A column
+ *     that is merely empty (first pass, a Bid Decision change, the retry) means
+ *     nobody filled it in, so Salesforce is left alone (Seth 2026-10-16).
  *   - Ignored people (map_estimator.ignore) are skipped; the next person counts.
  *   - A person with no mapping (or no active Salesforce user by that name) stops
  *     the pick — they may be the lead — and raises one grouped task for Hope.
@@ -90,16 +95,17 @@ export function pickEstimator(engineerUserIds: string[], map: Record<string, Est
   return { kind: 'none' };
 }
 
-/** Names to resolve in Salesforce for these engineers (stops where the pick would). */
+/** Salesforce names to resolve for these engineers (every mapped, non-ignored one). */
 export function namesToResolve(engineerUserIds: string[], map: Record<string, EstimatorMapRow>): string[] {
-  const out: string[] = [];
-  for (const id of engineerUserIds) {
-    const row = map[id];
-    if (row?.ignore) continue;
-    if (row?.sfUserName) out.push(row.sfUserName);
-    break;
-  }
-  return out;
+  return engineerUserIds.map((id) => map[id]).filter((r) => r && !r.ignore && r.sfUserName).map((r) => r!.sfUserName!);
+}
+
+/** Salesforce user ids of every engineer on the item that resolves to exactly one user. */
+export function assignedSfIds(engineerUserIds: string[], map: Record<string, EstimatorMapRow>, users: Map<string, SfUser[]>): string[] {
+  return namesToResolve(engineerUserIds, map)
+    .map((name) => users.get(name) ?? [])
+    .filter((m) => m.length === 1)
+    .map((m) => m[0].Id);
 }
 
 export interface EstimatorInput {
@@ -111,6 +117,10 @@ export interface EstimatorInput {
   link: { sfLineItemId: string; sfOpportunityId: string; linkState: 'active' | 'archived' | 'conflict' } | null;
   ctx: SfEstimatorContext | null; // null = line item gone / invisible
   pick: EstimatorPick;
+  /** Salesforce ids of every engineer on the item (see assignedSfIds). */
+  assignedSfIds: string[];
+  /** True only when the trigger was someone changing the engineer column itself. */
+  allowClear: boolean;
   firstPass: boolean;
   repEmail: boolean; // config: estimator_rep_email
   /** Shown in the task; e.g. "Acme HQ (monday item 123)". */
@@ -140,8 +150,12 @@ export function planEstimator(i: EstimatorInput): EstimatorDecision {
   if (!i.ctx) return { kind: 'none', reason: 'AV line item not found in Salesforce' };
   if (i.ctx.opportunityClosed) return { kind: 'none', reason: 'opportunity is closed in Salesforce' };
 
+  if (i.ctx.estimatorId && i.assignedSfIds.includes(i.ctx.estimatorId)) {
+    return { kind: 'none', reason: 'Salesforce already has an engineer on the item' };
+  }
   const p = i.pick;
   if (p.kind === 'none') return { kind: 'none', reason: 'only ignored people assigned' };
+  if (p.kind === 'clear' && !i.allowClear) return { kind: 'none', reason: 'no engineer in monday' };
   if (p.kind === 'blocked') {
     const who = p.mondayName || `monday user ${p.mondayUserId}`;
     const detail = p.why === 'no_mapping'

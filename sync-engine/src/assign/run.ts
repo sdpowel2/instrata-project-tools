@@ -16,7 +16,7 @@ import { lightningBase } from '../report/run.ts';
 import { toCsv } from '../report/fieldDiff.ts';
 import { errMessage, log } from '../log.ts';
 import {
-  UNMAPPED_ENGINEER_PREFIX, bidDecisionOf, namesToResolve, pickEstimator, planEstimator, planTriage,
+  UNMAPPED_ENGINEER_PREFIX, assignedSfIds, bidDecisionOf, namesToResolve, pickEstimator, planEstimator, planTriage,
   type AssignItem, type EstimatorDecision, type TriageMove,
 } from './plan.ts';
 
@@ -95,8 +95,14 @@ export interface AssignResult {
   note: string;
 }
 
+/**
+ * What made this run happen. Only 'engineer' (someone changed the Pre-Sales
+ * Engineer column) may clear Salesforce's Estimator.
+ */
+export type AssignTrigger = 'engineer' | 'bid' | 'retry';
+
 /** One item, after a Pre-Sales Engineer or Bid Decision change (debounced by the caller). */
-export async function runAssignment(deps: AssignDeps, itemId: string, actor: string | null): Promise<AssignResult> {
+export async function runAssignment(deps: AssignDeps, itemId: string, actor: string | null, trigger: AssignTrigger): Promise<AssignResult> {
   const { cfg } = deps;
   const gate = deps.gate.fork();
   const live = gate.mode === 'live';
@@ -144,6 +150,8 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
       noBid: item.boardKey === 'triage' && bidDecisionOf(cfg.planner, item.bidLabelId) === 'no_bid',
       link, ctx,
       pick: pickEstimator(item.engineerUserIds, cfg.estimators, users),
+      assignedSfIds: assignedSfIds(item.engineerUserIds, cfg.estimators, users),
+      allowClear: trigger === 'engineer',
       firstPass: false,
       repEmail: cfg.settings.estimator_rep_email !== false,
       itemLabel: itemLabel(item),
@@ -198,7 +206,7 @@ export async function retryUnmappedEngineers(deps: AssignDeps): Promise<number> 
       where dedupe_key like $1 and status <> 'done'`, [`${UNMAPPED_ENGINEER_PREFIX}%`]);
   for (const r of rows) {
     try {
-      await runAssignment(deps, r.item, 'engine');
+      await runAssignment(deps, r.item, 'engine', 'retry');
     } catch (e) {
       log.error('estimator retry failed', { itemId: r.item, error: errMessage(e) });
     }
@@ -254,15 +262,17 @@ export async function runEstimatorFirstPass(deps: AssignDeps, opts: { apply: boo
       noBid: item.boardKey === 'triage' && bidDecisionOf(cfg.planner, item.bidLabelId) === 'no_bid',
       link, ctx,
       pick: pickEstimator(item.engineerUserIds, cfg.estimators, users),
+      assignedSfIds: assignedSfIds(item.engineerUserIds, cfg.estimators, users),
+      allowClear: false,
       firstPass: true, repEmail: false, itemLabel: itemLabel(item), sfBaseUrl: lightningBase(deps.salesforceLoginUrl),
     });
     // Closed deals and unlinked lines aren't part of the cleanup; leave them out of the list.
-    if (decision.kind === 'none' && decision.reason !== 'Salesforce already matches' && decision.reason !== 'only ignored people assigned') {
+    if (decision.kind === 'none' && !LISTED_NONE.has(decision.reason)) {
       count('skipped (closed / not found)');
       continue;
     }
     const action = decision.kind === 'patch' ? (decision.estimatorId ? (decision.old.id ? 'replace' : 'fill blank') : 'clear')
-      : decision.kind === 'task' ? 'needs mapping' : decision.reason === 'Salesforce already matches' ? 'already right' : 'leave (only ignored people)';
+      : decision.kind === 'task' ? 'needs mapping' : LISTED_NONE.get(decision.reason)!;
     count(action);
     report.rows.push({
       opportunity: ctx?.opportunityName ?? '', opportunityId: link.sfOpportunityId, mondayItem: item.id, board: item.boardKey!,
@@ -292,6 +302,14 @@ export async function runEstimatorFirstPass(deps: AssignDeps, opts: { apply: boo
   report.rows.sort((a, b) => a.action.localeCompare(b.action) || a.opportunity.localeCompare(b.opportunity));
   return report;
 }
+
+/** "Nothing to write" outcomes the first-pass list still shows, with their Action label. */
+const LISTED_NONE = new Map([
+  ['Salesforce already matches', 'already right'],
+  ['Salesforce already has an engineer on the item', 'already right'],
+  ['only ignored people assigned', 'leave (only ignored people)'],
+  ['no engineer in monday', 'leave (no engineer in monday)'],
+]);
 
 export function firstPassCsv(r: FirstPassReport): string {
   return toCsv(

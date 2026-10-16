@@ -111,16 +111,16 @@ async function assignment(deps: MondayEventDeps, row: InboxRow, ev: MondayEvent,
     }], null);
   }
 
-  const { engineer, bid } = assignColumnIds(deps.cfg);
-  const cols = [engineer, bid].filter(Boolean);
+  // Superseded only by a newer edit of the SAME column, so an engineer removal
+  // still runs (and may clear) even when a Bid Decision change follows it.
   const { rows } = await deps.db.query<{ n: number }>(
     `select count(*)::int as n from webhook_inbox
       where source = 'monday' and status = 'pending' and id > $1::bigint
         and payload->'event'->>'pulseId' = $2 and payload->'event'->>'columnId' = any($3::text[])`,
-    [row.id, ev.itemId, cols]);
+    [row.id, ev.itemId, [ev.columnId]]);
   if (rows[0].n > 0) return { kind: 'done', note: 'superseded by a newer edit' };
 
-  const r = await runAssignment({ ...deps, salesforceLoginUrl: deps.salesforceLoginUrl ?? '' }, ev.itemId!, ev.userId);
+  const r = await runAssignment({ ...deps, salesforceLoginUrl: deps.salesforceLoginUrl ?? '' }, ev.itemId!, ev.userId, isBid ? 'bid' : 'engineer');
   if (r.triage || r.estimator === 'patch' || r.estimator === 'task') {
     log.info('assignment', { itemId: ev.itemId, mode: deps.gate.mode, triage: r.triage, estimator: r.estimator, note: r.note });
   }
