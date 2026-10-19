@@ -6,8 +6,12 @@
  * New Assignment is a native monday automation):
  *   R5  Bid Decision = No-Bid → Pre-Sales Summary / Declined to Bid, status Declined
  *       to Bid. Never writes Salesforce (decision 12).
- *   R7  Bid Decision = Bid AND an engineer assigned (whichever comes second) →
- *       Pre-Sales Summary / New Requests.
+ *   R7  Bid Decision = Bid AND an engineer picked (whichever comes second) →
+ *       Pre-Sales Summary / New Requests, and the engine assigns that engineer in
+ *       the Pre-Sales Engineer people column there. Engineers aren't members of
+ *       Triage (so they can't grab work before it's triaged); Hope picks from a
+ *       single-select dropdown whose labels map to monday accounts through
+ *       map_estimator.triage_label_id (Seth 2026-10-19).
  *
  * Estimator writeback: the first mappable person in the Pre-Sales Engineer column
  * becomes the AV line's OpportunityLineItem.Estimator__c (one user per line).
@@ -37,9 +41,19 @@ export interface AssignItem {
   boardKey: string | null; // 'presales' | 'prequal' | 'triage'
   groupId: string | null;
   statusLabelId: number | null;
-  engineerUserIds: string[]; // column order = order people were added
+  /**
+   * monday user ids, in column order (= order people were added). On Triage they
+   * come from the dropdown pick; a label with no mapping appears as
+   * '${TRIAGE_LABEL_PREFIX}<label id>' (see engineerNames).
+   */
+  engineerUserIds: string[];
+  /** Display names for unmapped Triage dropdown labels, by pseudo id. */
+  engineerNames?: Record<string, string>;
   bidLabelId: number | null; // triage.bid_decision (Triage board only)
 }
+
+export const TRIAGE_LABEL_PREFIX = 'triage-label:';
+const isUnmappedLabel = (id: string) => id.startsWith(TRIAGE_LABEL_PREFIX);
 
 export function bidDecisionOf(cfg: PlannerConfig, labelId: number | null): BidDecision {
   if (labelId === null) return null;
@@ -51,8 +65,11 @@ export function bidDecisionOf(cfg: PlannerConfig, labelId: number | null): BidDe
 // ── Triage moves ─────────────────────────────────────────────────────────────
 export interface TriageMove {
   rule: 'R5' | 'R7';
+  /** Written on Triage before the move. */
   columnWrites: ColumnWrite[];
   moveTo: { boardKey: 'presales'; groupKey: 'declined_to_bid' | 'new_requests' };
+  /** Written on the Pre-Sales Summary after the move (R7: the engineer). */
+  afterMoveWrites: ColumnWrite[];
 }
 
 export function planTriage(cfg: PlannerConfig, item: AssignItem): TriageMove | null {
@@ -63,10 +80,15 @@ export function planTriage(cfg: PlannerConfig, item: AssignItem): TriageMove | n
     const writes: ColumnWrite[] = declined !== undefined && declined !== null && item.statusLabelId !== declined
       ? [{ semanticKey: 'presales.status', value: { type: 'status', labelId: declined } }]
       : [];
-    return { rule: 'R5', columnWrites: writes, moveTo: { boardKey: 'presales', groupKey: 'declined_to_bid' } };
+    return { rule: 'R5', columnWrites: writes, moveTo: { boardKey: 'presales', groupKey: 'declined_to_bid' }, afterMoveWrites: [] };
   }
-  if (decision === 'bid' && item.engineerUserIds.length > 0) {
-    return { rule: 'R7', columnWrites: [], moveTo: { boardKey: 'presales', groupKey: 'new_requests' } };
+  // An unmapped dropdown pick holds the item on Triage (the runner raises the
+  // "map this engineer" task): moving it would land it on Pre-Sales unassigned.
+  if (decision === 'bid' && item.engineerUserIds.length > 0 && !item.engineerUserIds.some(isUnmappedLabel)) {
+    return {
+      rule: 'R7', columnWrites: [], moveTo: { boardKey: 'presales', groupKey: 'new_requests' },
+      afterMoveWrites: [{ semanticKey: 'presales.presales_engineer', value: { type: 'people', userIds: item.engineerUserIds } }],
+    };
   }
   return null;
 }
@@ -141,6 +163,26 @@ export type EstimatorDecision =
   | { kind: 'task'; task: Extract<TaskIntent, { op: 'open' }> }
   | { kind: 'none'; reason: string };
 
+/** The grouped "map this engineer" task (one per person, items as members). */
+export function unmappedEngineerTask(
+  item: AssignItem, itemLabel: string, mondayUserId: string, mondayName: string, why: 'no_mapping' | 'no_sf_user',
+): Extract<TaskIntent, { op: 'open' }> {
+  const who = mondayName || item.engineerNames?.[mondayUserId] || `monday user ${mondayUserId}`;
+  const detail = isUnmappedLabel(mondayUserId)
+    ? `"${who}" was picked in the Triage board's Pre-Sales Engineer dropdown, but that label isn't linked to a monday account and Salesforce user, so the item stays on Triage.`
+    : why === 'no_mapping'
+      ? `"${who}" is a Pre-Sales Engineer in monday but has no Salesforce user mapped, so the sync can't set them as Estimator.`
+      : `"${who}" is mapped to a Salesforce user name that doesn't match exactly one active Salesforce user.`;
+  return {
+    op: 'open', taskType: 'sync_failure', dedupeKey: unmappedEngineerKey(mondayUserId),
+    title: `Map Pre-Sales Engineer: ${who}`,
+    details: `${detail} Map them in Sync Admin → Mappings → Estimators (or mark them "ignore" if they are never an estimator of record). ` +
+      'The items below are picked up again within the hour after that.',
+    sourceRef: { board_key: item.boardKey ?? 'presales', mapping_table: 'map_estimator' },
+    member: { id: item.id, label: itemLabel },
+  };
+}
+
 export function planEstimator(i: EstimatorInput): EstimatorDecision {
   const { item } = i;
   if (!i.link) return { kind: 'none', reason: 'not linked to Salesforce' };
@@ -157,21 +199,7 @@ export function planEstimator(i: EstimatorInput): EstimatorDecision {
   if (p.kind === 'none') return { kind: 'none', reason: 'only ignored people assigned' };
   if (p.kind === 'clear' && !i.allowClear) return { kind: 'none', reason: 'no engineer in monday' };
   if (p.kind === 'blocked') {
-    const who = p.mondayName || `monday user ${p.mondayUserId}`;
-    const detail = p.why === 'no_mapping'
-      ? `"${who}" is a Pre-Sales Engineer in monday but has no Salesforce user mapped, so the sync can't set them as Estimator.`
-      : `"${who}" is mapped to a Salesforce user name that doesn't match exactly one active Salesforce user.`;
-    return {
-      kind: 'task',
-      task: {
-        op: 'open', taskType: 'sync_failure', dedupeKey: unmappedEngineerKey(p.mondayUserId),
-        title: `Map Pre-Sales Engineer to a Salesforce user: ${who}`,
-        details: `${detail} Map them in Sync Admin → Mappings → Estimators (or mark them "ignore" if they are never an estimator of record). ` +
-          'The Estimator is written on the items below within the hour after that.',
-        sourceRef: { board_key: item.boardKey ?? 'presales', mapping_table: 'map_estimator' },
-        member: { id: item.id, label: i.itemLabel },
-      },
-    };
+    return { kind: 'task', task: unmappedEngineerTask(item, i.itemLabel, p.mondayUserId, p.mondayName, p.why) };
   }
 
   const want = p.kind === 'user' ? p.user : null;

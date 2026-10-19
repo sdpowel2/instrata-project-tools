@@ -154,7 +154,8 @@ export type MondayValue =
   | { type: 'dropdown'; labelIds: number[] }
   | { type: 'datetime'; iso: string } // UTC instant, passed through (spec §4.4)
   | { type: 'text'; text: string }
-  | { type: 'long_text'; text: string };
+  | { type: 'long_text'; text: string }
+  | { type: 'people'; userIds: string[] }; // monday user ids
 
 export interface ColumnWrite {
   semanticKey: string;

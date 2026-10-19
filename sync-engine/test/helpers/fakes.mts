@@ -27,7 +27,7 @@ export function fakeMonday() {
       writes.push({ op: 'change', args: [boardId, itemId, values] });
       const it = items.get(itemId);
       const v = values as Record<string, any>;
-      if (it && v.status9) setCol(it, 'status9', JSON.stringify(v.status9));
+      if (it) for (const [col, val] of Object.entries(v)) setCol(it, col, JSON.stringify(val));
     },
     async createItem(boardId, groupId, name, values) {
       const id = String(nextId++);

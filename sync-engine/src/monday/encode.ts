@@ -25,6 +25,8 @@ export function encodeColumnValue(v: MondayValue): unknown {
       return v.text;
     case 'long_text':
       return { text: v.text };
+    case 'people':
+      return { personsAndTeams: v.userIds.map((id) => ({ id: Number(id), kind: 'person' })) };
   }
 }
 
@@ -125,6 +127,8 @@ export function mondayValueMatches(v: MondayValue, raw: string | null | undefine
     case 'text':
     case 'long_text':
       return readText(raw) === v.text;
+    case 'people':
+      return readPersonIds(raw).join(',') === v.userIds.join(',');
   }
 }
 

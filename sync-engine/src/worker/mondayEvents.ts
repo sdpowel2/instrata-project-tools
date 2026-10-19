@@ -7,7 +7,7 @@
  *   - Salesforce-owned field or status changed by a person → logged for rework
  *     analysis (spec §4.5, §8). The sync does not fight hand edits.
  *   - Item archived / deleted → its link is archived.
- *   - Pre-Sales Engineer or (Triage) Bid Decision changed → Triage moves R5 / R7
+ *   - Pre-Sales Engineer, or (Triage) Bid Decision / engineer pick changed → Triage moves R5 / R7
  *     and the Estimator writeback, debounced (src/assign; Seth 2026-10-15).
  */
 import type { Db } from '../db/pool.ts';
@@ -76,7 +76,8 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
   const assign = assignColumnIds(deps.cfg);
   const onTriage = deps.cfg.boards.triage !== null && String(deps.cfg.boards.triage) === String(ev.boardId);
   const isBid = assign.bid !== null && ev.columnId === assign.bid && onTriage;
-  if (ev.columnId === assign.engineer || isBid) return assignment(deps, row, ev, isBid);
+  const isPick = assign.pick !== null && ev.columnId === assign.pick && onTriage;
+  if (ev.columnId === assign.engineer || isBid || isPick) return assignment(deps, row, ev, isBid);
 
   const key = semanticKeyFor(deps.cfg, ev.columnId);
   if (!key) return { kind: 'done', note: 'untracked column' };

@@ -58,7 +58,8 @@ Target labels: **Northeast, Mid-Atlantic, Southeast, Southwest** (add **Louisian
 - [ ] **Bid Decision**: Status column, created through the API with the fixed id `bid_decision`, labels **1 = Bid** (green) and **2 = No-Bid** (red), after Status. Triage board only; it drops off when the item moves to the Pre-Sales board (the decision is kept in the sync's event log). Then set `triage.bid_decision` to `bid_decision` in `public.config_field_registry`. Sandbox done Oct 15.
 - [ ] **R6 automation:** When **Bid Decision** changes to **Bid** → move item to group **New Assignment**. Sandbox done Oct 15.
 - R4 (Triage → Bid/No-Bid) is Hope dragging the item. R5 (No-Bid → Pre-Sales / Declined to Bid) and R7 (Bid + engineer → Pre-Sales / New Requests) are done by the sync, not monday automations.
-- Hope and anyone who assigns engineers must be **members** of the Triage board (Oct 15: Lee wasn't).
+- **Pre-Sales Engineer on Triage is a dropdown, not a people column (Oct 19).** Engineers must NOT be members of Triage or Pre-Qualification (they were grabbing untriaged work), and a people column can only assign members. Delete the people column (`person`) on both boards; on Triage create a Dropdown through the API with the fixed id `engineer_pick`, title "Pre-Sales Engineer", **single select** (`limit_select`), labels with ids 1–12: Cameron Bell, Erik Benson, Garry Gilchrist, Isaac Garner, Jason Price, Jerry Bates, Johnny Price, Kelina Bauman, Lee Thompson, Seth Powell, Shaun Lee, Tim Giguere. The sync sets the real people column on the Pre-Sales Summary at R7. A new engineer = a new dropdown label + a `map_estimator` row with its `triage_label_id`. Sandbox done Oct 19.
+- Hope and leadership are **members** of Triage and Pre-Qualification; engineers are not.
 
 ### 2.3 Status → group automations
 

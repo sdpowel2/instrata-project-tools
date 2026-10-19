@@ -28,6 +28,8 @@ const LEE = { Id: '005LEE000000001', Name: 'Lee Thompson', Email: 'lee@example.c
 const SHAUN = { Id: '005SHA000000001', Name: 'Shaun Lee', Email: 'shaun@example.com' };
 const REP = { id: '005REP000000001', name: 'Luke Wood', email: 'luke@example.com' };
 const U = { lee: '33940238', shaun: '36489661', mitch: '36489667', stranger: '99999999' };
+/** Triage dropdown label ids (sync_triage_engineer_pick.sql). */
+const PICK: Record<string, number> = { [U.lee]: 9, [U.shaun]: 11 };
 
 let db: TestDb;
 let cfg: RuntimeConfig;
@@ -35,8 +37,10 @@ beforeEach(async () => {
   db = await createTestDb();
   const intake = migration('sync_intake_boards.sql');
   const mine = migration('sync_triage_and_estimator.sql');
-  await db.pg.exec(`reset role; ${intake} ${mine} ${intake} ${mine}
+  const pick = migration('sync_triage_engineer_pick.sql');
+  await db.pg.exec(`reset role; ${intake} ${mine} ${pick} ${intake} ${mine} ${pick}
     update config_field_registry set monday_column_id = 'bid_decision' where semantic_key = 'triage.bid_decision';
+    update config_field_registry set monday_column_id = 'engineer_pick' where semantic_key = 'triage.engineer_pick';
     update config_settings set value = 'true'::jsonb where key = 'estimator_writeback';
     set role sync_engine;`);
   cfg = await loadRuntimeConfig(db);
@@ -58,6 +62,9 @@ test('migration: engineer map (4 ignored), Bid Decision labels, settings; re-run
   assert.equal(Object.values(cfg.estimators).filter((r) => r.ignore).length, 4);
   assert.equal(cfg.estimators[U.mitch].ignore, true);
   assert.equal(cfg.estimators['52972596'].sfUserName, 'Jerry Bates');
+  assert.equal(cfg.estimators['52972596'].triageLabelId, 6);
+  assert.equal(Object.values(cfg.estimators).filter((r) => r.triageLabelId !== null).length, 12);
+  assert.equal(cfg.estimators[U.mitch].triageLabelId, null);
   assert.equal(cfg.planner.labels['triage.bid_decision.bid'], 1);
   assert.equal(cfg.planner.labels['triage.bid_decision.no_bid'], 2);
   assert.equal(cfg.settings.estimator_rep_email, true);
@@ -137,13 +144,18 @@ function harness(opts: { mode?: 'live' | 'dry_run'; estimator?: Partial<SfEstima
   const sf = fakeSalesforce({ estimatorContexts: [ctx(opts.estimator)], users: opts.users ?? [LEE, SHAUN] });
   const gate = createWriteGate(opts.mode ?? 'live', monday.client, sf.client);
   const deps = () => ({ db, gate, monday: monday.client, salesforce: sf.client, cfg, salesforceLoginUrl: 'https://instrata.my.salesforce.com' });
-  const put = (board: string, group: string, cols: { engineers?: string[]; bid?: number | null; status?: number }) => {
+  // On Triage the engineer is a dropdown pick (engineers aren't members there); elsewhere a person.
+  const put = (board: string, group: string, cols: { engineers?: string[]; labels?: number[]; labelText?: string; bid?: number | null; status?: number }) => {
+    const onTriage = board === TRIAGE;
     monday.addItem(ITEM, {
-      person: JSON.stringify({ personsAndTeams: (cols.engineers ?? []).map((id) => ({ id: Number(id), kind: 'person' })) }),
+      ...(onTriage
+        ? { engineer_pick: JSON.stringify({ ids: cols.labels ?? (cols.engineers ?? []).map((id) => PICK[id]) }) }
+        : { person: JSON.stringify({ personsAndTeams: (cols.engineers ?? []).map((id) => ({ id: Number(id), kind: 'person' })) }) }),
       status9: JSON.stringify({ index: cols.status ?? 0 }),
       ...(cols.bid ? { bid_decision: JSON.stringify({ index: cols.bid }) } : {}),
     }, group);
     monday.items.get(ITEM)!.board = { id: board };
+    if (cols.labelText) monday.items.get(ITEM)!.column_values.find((c) => c.id === 'engineer_pick')!.text = cols.labelText;
   };
   return { monday, sf, deps, put };
 }
@@ -162,15 +174,17 @@ test('R5: No-Bid on Triage → status Declined to Bid, moved to Pre-Sales / Decl
   assert.equal((await rows(`select count(*)::int n from event_log where event_type = 'group_moved' and details->>'rule' = 'R5'`))[0].n, 1);
 });
 
-test('R7 + Estimator: Bid + engineer → New Requests; Estimator written; rep emailed', async () => {
+test('R7 + Estimator: Bid + dropdown pick → New Requests; engineer assigned there; Estimator written; rep emailed', async () => {
   const h = harness();
   await link();
-  h.put(TRIAGE, 'group_mm84ys96', { engineers: [U.lee, U.shaun], bid: 1 });
+  h.put(TRIAGE, 'group_mm84ys96', { engineers: [U.lee], bid: 1 });
   const r = await runAssignment(h.deps(), ITEM, '33940282', 'engineer');
   assert.equal(r.triage, 'R7');
-  assert.deepEqual(h.monday.writes.map((w) => w.op), ['move_board']);
+  assert.deepEqual(h.monday.writes.map((w) => w.op), ['move_board', 'change']);
   assert.deepEqual(h.monday.writes[0].args, [ITEM, TRIAGE, PRESALES, 'new_group12986']);
-  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: LEE.Id } }], 'first person in the column');
+  assert.deepEqual(h.monday.writes[1].args, [PRESALES, ITEM, { person: { personsAndTeams: [{ id: Number(U.lee), kind: 'person' }] } }],
+    'the people column is set on the Pre-Sales Summary, after the move');
+  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: LEE.Id } }]);
   assert.equal(h.sf.emails.length, 1);
   assert.equal(h.sf.emails[0].to, REP.email);
   const ev = (await rows(`select old_value, new_value from event_log where event_type = 'writeback' and field = 'Estimator__c'`))[0];
@@ -249,6 +263,27 @@ test('unknown engineer → grouped task for Hope; mapping them + the hourly retr
   assert.equal((await rows(`select status from task where dedupe_key = $1`, [unmappedEngineerKey(U.stranger)]))[0].status, 'done');
 });
 
+test('unmapped dropdown pick: item stays on Triage, Hope gets a task naming the label (even with the writeback off)', async () => {
+  await db.pg.exec(`reset role; update config_settings set value = 'false'::jsonb where key = 'estimator_writeback'; set role sync_engine;`);
+  cfg = await loadRuntimeConfig(db);
+  const h = harness();
+  await link();
+  h.put(TRIAGE, 'group_mm84ys96', { labels: [42], labelText: 'New Engineer', bid: 1 });
+  const r = await runAssignment(h.deps(), ITEM, null, 'engineer');
+  assert.equal(r.triage, null);
+  assert.equal(h.monday.writes.length, 0, 'no move: it would land on Pre-Sales unassigned');
+  const t = (await rows(`select title, source_ref from task where dedupe_key = $1`, ['sync_failure:unmapped_engineer:triage-label:42:estimator']))[0];
+  assert.match(t.title, /New Engineer/);
+  assert.deepEqual(t.source_ref.members.map((m: any) => m.id), [ITEM]);
+
+  // Map label 42 to a monday account → the hourly retry moves it and closes the task.
+  await db.pg.exec(`reset role; insert into map_estimator (monday_user_id, monday_name, sf_user_name, triage_label_id) values (${U.stranger}, 'New Engineer', 'New Engineer', 42); set role sync_engine;`);
+  cfg = await loadRuntimeConfig(db);
+  await retryUnmappedEngineers(h.deps());
+  assert.deepEqual(h.monday.writes.map((w) => w.op), ['move_board', 'change']);
+  assert.equal((await rows(`select status from task where dedupe_key = $1`, ['sync_failure:unmapped_engineer:triage-label:42:estimator']))[0].status, 'done');
+});
+
 test('dry run: nothing written, dry_run_write events instead', async () => {
   const h = harness({ mode: 'dry_run' });
   await link();
@@ -258,7 +293,7 @@ test('dry run: nothing written, dry_run_write events instead', async () => {
   assert.equal(h.sf.patches.length, 0);
   assert.equal(h.sf.emails.length, 0);
   const ops = (await rows(`select details->>'op' op from event_log where event_type = 'dry_run_write' order by id`)).map((r) => r.op);
-  assert.deepEqual(ops, ['move_item_to_board', 'patch_line_item', 'send_email']);
+  assert.deepEqual(ops, ['move_item_to_board', 'change_multiple_column_values', 'patch_line_item', 'send_email']);
 });
 
 test('estimator_writeback off → Triage moves still run, Salesforce untouched', async () => {
@@ -310,7 +345,7 @@ test('routing: an engineer change waits out the debounce, then writes; a Bid Dec
     `insert into webhook_inbox (source, payload, dedupe_hash, received_at) values ('monday', $1::jsonb, $2, now() - make_interval(secs => $3))`,
     [JSON.stringify({ event: { type: 'update_column_value', boardId: Number(TRIAGE), pulseId: Number(ITEM), columnId, userId: 33940282, value: { label: { index: 1, text: 'Bid' } }, previousValue: null, triggerUuid: `t-${columnId}-${agoSec}` } }), `h-${columnId}-${agoSec}`, agoSec]);
 
-  await enqueue('person', 0);
+  await enqueue('engineer_pick', 0);
   await drainInbox(d);
   assert.equal(h.sf.patches.length, 0, 'deferred');
   assert.equal((await rows(`select status from webhook_inbox`))[0].status, 'pending');

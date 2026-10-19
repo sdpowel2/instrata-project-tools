@@ -30,6 +30,8 @@ export interface EstimatorMapRow {
   mondayName: string;
   sfUserName: string | null;
   ignore: boolean;
+  /** Label id in the Triage board's Pre-Sales Engineer dropdown (engineers aren't Triage members). */
+  triageLabelId: number | null;
 }
 
 const MAP_TABLES = [
@@ -103,9 +105,16 @@ export async function loadRuntimeConfig(
   const estimators: Record<string, EstimatorMapRow> = {};
   const { rows: hasEstimators } = await q.query<{ t: string | null }>(`select to_regclass('map_estimator')::text as t`);
   if (hasEstimators[0]?.t) {
-    const { rows } = await q.query<{ monday_user_id: string; monday_name: string; sf_user_name: string | null; ignore: boolean }>(
-      'select monday_user_id::text, monday_name, sf_user_name, ignore from map_estimator where active');
-    for (const r of rows) estimators[r.monday_user_id] = { mondayName: r.monday_name, sfUserName: r.sf_user_name, ignore: r.ignore };
+    // triage_label_id arrives with sync_triage_engineer_pick.sql; to_jsonb tolerates its absence.
+    const { rows } = await q.query<{ monday_user_id: string; monday_name: string; sf_user_name: string | null; ignore: boolean; triage_label_id: string | null }>(
+      `select monday_user_id::text, monday_name, sf_user_name, ignore, to_jsonb(m)->>'triage_label_id' as triage_label_id
+         from map_estimator m where active`);
+    for (const r of rows) {
+      estimators[r.monday_user_id] = {
+        mondayName: r.monday_name, sfUserName: r.sf_user_name, ignore: r.ignore,
+        triageLabelId: r.triage_label_id === null ? null : Number(r.triage_label_id),
+      };
+    }
   }
 
   return {

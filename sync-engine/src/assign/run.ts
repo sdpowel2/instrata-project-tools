@@ -8,7 +8,7 @@ import type { Db, Queryable } from '../db/pool.ts';
 import { appendEvents, closeTask, openTask, type EventRow } from '../db/store.ts';
 import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient, MondayItemRaw } from '../monday/client.ts';
-import { encodeColumnValues, readPersonIds, readStatusLabelId } from '../monday/encode.ts';
+import { encodeColumnValues, readDropdownIds, readPersonIds, readStatusLabelId } from '../monday/encode.ts';
 import type { SalesforceClient, SfEstimatorContext, SfUser } from '../salesforce/client.ts';
 import type { WriteGate } from '../writeGate.ts';
 import { isClosedGroup } from '../reconcile/plan.ts';
@@ -16,7 +16,7 @@ import { lightningBase } from '../report/run.ts';
 import { toCsv } from '../report/fieldDiff.ts';
 import { errMessage, log } from '../log.ts';
 import {
-  UNMAPPED_ENGINEER_PREFIX, assignedSfIds, bidDecisionOf, namesToResolve, pickEstimator, planEstimator, planTriage,
+  TRIAGE_LABEL_PREFIX, UNMAPPED_ENGINEER_PREFIX, assignedSfIds, bidDecisionOf, namesToResolve, pickEstimator, planEstimator, planTriage, unmappedEngineerTask,
   type AssignItem, type EstimatorDecision, type TriageMove,
 } from './plan.ts';
 
@@ -29,14 +29,40 @@ export interface AssignDeps {
   salesforceLoginUrl: string;
 }
 
-const ASSIGN_KEYS = ['presales.presales_engineer', 'presales.status', 'triage.bid_decision'] as const;
+const ASSIGN_KEYS = ['presales.presales_engineer', 'presales.status', 'triage.bid_decision', 'triage.engineer_pick'] as const;
 
-/** Column ids whose change triggers this module (engineer anywhere, Bid Decision on Triage). */
-export function assignColumnIds(cfg: RuntimeConfig): { engineer: string | null; bid: string | null } {
+/**
+ * Column ids whose change triggers this module: the Pre-Sales Engineer people
+ * column (Pre-Sales Summary), and on Triage the Bid Decision and the engineer
+ * dropdown.
+ */
+export function assignColumnIds(cfg: RuntimeConfig): { engineer: string | null; bid: string | null; pick: string | null } {
   return {
     engineer: cfg.planner.columns['presales.presales_engineer']?.columnId ?? null,
     bid: cfg.planner.columns['triage.bid_decision']?.columnId ?? null,
+    pick: cfg.planner.columns['triage.engineer_pick']?.columnId ?? null,
   };
+}
+
+/** Triage dropdown label ids → monday user ids; an unmapped label becomes a pseudo id. */
+function engineersFromPick(raw: MondayItemRaw, cfg: RuntimeConfig): { ids: string[]; names: Record<string, string> } {
+  const colId = cfg.planner.columns['triage.engineer_pick']?.columnId;
+  const col = colId ? raw.column_values.find((c) => c.id === colId) : undefined;
+  const labelIds = readDropdownIds(col?.value ?? null);
+  const byLabel = new Map(Object.entries(cfg.estimators).filter(([, r]) => r.triageLabelId !== null).map(([uid, r]) => [r.triageLabelId!, uid]));
+  const texts = (col?.text ?? '').split(',').map((t) => t.trim());
+  const ids: string[] = [];
+  const names: Record<string, string> = {};
+  labelIds.forEach((labelId, i) => {
+    const uid = byLabel.get(labelId);
+    if (uid) ids.push(uid);
+    else {
+      const pseudo = `${TRIAGE_LABEL_PREFIX}${labelId}`;
+      ids.push(pseudo);
+      names[pseudo] = texts[i] || `dropdown label ${labelId}`;
+    }
+  });
+  return { ids, names };
 }
 
 function toAssignItem(raw: MondayItemRaw, cfg: RuntimeConfig): AssignItem {
@@ -46,13 +72,16 @@ function toAssignItem(raw: MondayItemRaw, cfg: RuntimeConfig): AssignItem {
   };
   const boardId = raw.board?.id ? String(raw.board.id) : null;
   const boardKey = boardId ? Object.entries(cfg.boards).find(([, id]) => id !== null && String(id) === boardId)?.[0] ?? null : null;
+  // Engineers aren't Triage members, so there the engineer is a dropdown pick (Seth 2026-10-19).
+  const pick = boardKey === 'triage' ? engineersFromPick(raw, cfg) : null;
   return {
     id: String(raw.id),
     name: raw.name,
     boardKey,
     groupId: raw.group?.id ?? null,
     statusLabelId: readStatusLabelId(value('presales.status')),
-    engineerUserIds: readPersonIds(value('presales.presales_engineer')),
+    engineerUserIds: pick ? pick.ids : readPersonIds(value('presales.presales_engineer')),
+    ...(pick ? { engineerNames: pick.names } : {}),
     bidLabelId: boardKey === 'triage' ? readStatusLabelId(value('triage.bid_decision')) : null,
   };
 }
@@ -127,6 +156,10 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
       await gate.monday.changeColumnValues(boardId('triage'), item.id, encodeColumnValues(move.columnWrites, (k) => cfg.planner.columns[k]?.columnId));
     }
     await gate.monday.moveItemToBoard(item.id, boardId('triage'), boardId(move.moveTo.boardKey), groupId);
+    // R7: assign the engineer on the Pre-Sales Summary, where they're a member (monday notifies them).
+    if (move.afterMoveWrites.length > 0) {
+      await gate.monday.changeColumnValues(boardId(move.moveTo.boardKey), item.id, encodeColumnValues(move.afterMoveWrites, (k) => cfg.planner.columns[k]?.columnId));
+    }
     if (live) {
       events.push({
         source: 'engine', entity_type: 'monday_item', entity_id: item.id, event_type: 'group_moved',
@@ -180,6 +213,13 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
     }
   }
 
+  // A Triage pick with no mapping holds the item on Triage; Hope gets the task
+  // whether or not the Estimator writeback is on.
+  const unmappedPick = item.boardKey === 'triage' ? item.engineerUserIds.find((id) => id.startsWith(TRIAGE_LABEL_PREFIX)) : undefined;
+  if (unmappedPick && decision?.kind !== 'task') {
+    decision = { kind: 'task', task: unmappedEngineerTask(item, itemLabel(item), unmappedPick, '', 'no_mapping') };
+  }
+
   const journal = gate.drain();
   if (!live) {
     for (const j of journal) {
@@ -190,8 +230,9 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
   const correlationId = randomUUID();
   await deps.db.tx(async (q) => {
     await appendEvents(q, events, correlationId);
+    // Nothing blocks the item any more → it leaves any "map this engineer" task it was in.
     if (decision?.kind === 'task') await openTask(q, decision.task, correlationId);
-    else if (decision) await leaveUnmappedTasks(q, item.id, correlationId);
+    else await leaveUnmappedTasks(q, item.id, correlationId);
   });
 
   const note = [move ? move.rule : null, decision ? `estimator: ${decision.kind === 'none' ? decision.reason : decision.kind}` : 'estimator: off'].filter(Boolean).join('; ');
