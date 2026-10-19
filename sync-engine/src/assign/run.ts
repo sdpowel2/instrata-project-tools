@@ -106,6 +106,8 @@ async function usersByName(sf: SalesforceClient, names: string[]): Promise<Map<s
   return out;
 }
 
+const assignFailedKey = (itemId: string) => `sync_failure:assign_failed:${itemId}:engineer`;
+
 const itemLabel = (item: AssignItem) => `${item.name} (monday item ${item.id})`;
 
 /** Remove the item from every open "map this engineer" task it's waiting in. */
@@ -148,6 +150,7 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
   };
 
   // ── Triage moves ──
+  let assignFailed: { error: string } | null = null;
   const move = planTriage(cfg.planner, item);
   if (move) {
     const groupId = cfg.planner.groups[`${move.moveTo.boardKey}.${move.moveTo.groupKey}`];
@@ -157,8 +160,15 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
     }
     await gate.monday.moveItemToBoard(item.id, boardId('triage'), boardId(move.moveTo.boardKey), groupId);
     // R7: assign the engineer on the Pre-Sales Summary, where they're a member (monday notifies them).
+    // The Triage pick dropped off with the move, so a retry couldn't redo this: on
+    // failure carry on (the Estimator still comes from the pick) and ask Hope to assign.
     if (move.afterMoveWrites.length > 0) {
-      await gate.monday.changeColumnValues(boardId(move.moveTo.boardKey), item.id, encodeColumnValues(move.afterMoveWrites, (k) => cfg.planner.columns[k]?.columnId));
+      try {
+        await gate.monday.changeColumnValues(boardId(move.moveTo.boardKey), item.id, encodeColumnValues(move.afterMoveWrites, (k) => cfg.planner.columns[k]?.columnId));
+      } catch (e) {
+        log.warn('engineer assignment after R7 failed', { itemId: item.id, error: errMessage(e) });
+        assignFailed = { error: errMessage(e) };
+      }
     }
     if (live) {
       events.push({
@@ -233,6 +243,20 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
     // Nothing blocks the item any more → it leaves any "map this engineer" task it was in.
     if (decision?.kind === 'task') await openTask(q, decision.task, correlationId);
     else await leaveUnmappedTasks(q, item.id, correlationId);
+    if (assignFailed) {
+      const who = item.engineerUserIds.map((id) => cfg.estimators[id]?.mondayName || id).join(', ');
+      await openTask(q, {
+        op: 'open', taskType: 'sync_failure', dedupeKey: assignFailedKey(item.id),
+        title: `Assign ${who} on the Pre-Sales Summary: ${item.name}`,
+        details: `The sync moved "${item.name}" from Triage to the Pre-Sales Summary's New Requests, but monday refused to set its Pre-Sales Engineer to ${who} ` +
+          `(is ${who} a member of that board?). Assign them there by hand; this task closes once the item has an engineer.
+
+monday said: ${assignFailed.error}`,
+        sourceRef: { board_key: 'presales', monday_item_id: item.id },
+      }, correlationId);
+    } else if (item.boardKey === 'presales' && item.engineerUserIds.length > 0) {
+      await closeTask(q, assignFailedKey(item.id), 'auto', correlationId);
+    }
   });
 
   const note = [move ? move.rule : null, decision ? `estimator: ${decision.kind === 'none' ? decision.reason : decision.kind}` : 'estimator: off'].filter(Boolean).join('; ');

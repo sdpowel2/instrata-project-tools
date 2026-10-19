@@ -263,6 +263,27 @@ test('unknown engineer → grouped task for Hope; mapping them + the hourly retr
   assert.equal((await rows(`select status from task where dedupe_key = $1`, [unmappedEngineerKey(U.stranger)]))[0].status, 'done');
 });
 
+test('R7: if monday refuses the engineer after the move, the Estimator still lands and Hope gets an "assign" task', async () => {
+  const h = harness();
+  await link();
+  h.put(TRIAGE, 'group_mm84ys96', { engineers: [U.lee], bid: 1 });
+  const realChange = h.monday.client.changeColumnValues;
+  h.monday.client.changeColumnValues = async () => { throw new Error('monday: user is not a board member'); };
+  const r = await runAssignment(h.deps(), ITEM, null, 'engineer');
+  assert.equal(r.triage, 'R7');
+  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: LEE.Id } }], 'Estimator from the pick, not the failed write');
+  const t = (await rows(`select status, title, details from task where dedupe_key = $1`, [`sync_failure:assign_failed:${ITEM}:engineer`]))[0];
+  assert.equal(t.status, 'not_started');
+  assert.match(t.title, /Assign Lee Thompson on the Pre-Sales Summary/);
+  assert.match(t.details, /not a board member/);
+
+  // Hope assigns Lee by hand on Pre-Sales → the next engineer-column run closes the task.
+  h.monday.client.changeColumnValues = realChange;
+  h.put(PRESALES, 'new_group12986', { engineers: [U.lee] });
+  await runAssignment(h.deps(), ITEM, '33940282', 'engineer');
+  assert.equal((await rows(`select status from task where dedupe_key = $1`, [`sync_failure:assign_failed:${ITEM}:engineer`]))[0].status, 'done');
+});
+
 test('unmapped dropdown pick: item stays on Triage, Hope gets a task naming the label (even with the writeback off)', async () => {
   await db.pg.exec(`reset role; update config_settings set value = 'false'::jsonb where key = 'estimator_writeback'; set role sync_engine;`);
   cfg = await loadRuntimeConfig(db);
