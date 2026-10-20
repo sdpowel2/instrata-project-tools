@@ -44,6 +44,7 @@ import { firstPassCsv, retryUnmappedEngineers, runEstimatorFirstPass } from './a
 import { syncQueueBoard } from './queue/run.ts';
 import { openRecurringTasks } from './queue/recurring.ts';
 import { closeOpenedJobs } from './queue/jobs.ts';
+import { runCleanliness } from './queue/cleanliness.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -105,6 +106,9 @@ async function sweep(): Promise<SweepResult | undefined> {
     // Won – open job tasks close once the Post-Sales copy has a Project Number.
     const openJobs = await closeOpenedJobs({ db, monday, cfg }).catch((e) => ({ checked: 0, closed: 0, skipped: errMessage(e) }));
     if (openJobs.closed > 0 || openJobs.skipped) log.info('open-job check', { ...openJobs });
+    // Data Cleanliness row on Hope's Queue (active work only), plus the daily snapshot.
+    const clean = await runCleanliness({ db, monday, cfg }).catch((e) => { log.error('cleanliness count failed', { error: errMessage(e) }); return null; });
+    if (clean) log.info('cleanliness', { total: clean.total, inScope: clean.inScope });
   }
   return result;
 }

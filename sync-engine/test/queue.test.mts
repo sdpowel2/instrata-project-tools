@@ -26,7 +26,8 @@ beforeEach(async () => {
   db = await createTestDb();
   const q = migration('sync_hopes_queue.sql');
   const won = migration('sync_won_tasks.sql');
-  await db.pg.exec(`reset role; ${q} ${won} ${q} ${won} update config_settings set value = 'true'::jsonb where key = 'queue_push'; set role sync_engine;`);
+  const clean = migration('sync_cleanliness.sql');
+  await db.pg.exec(`reset role; ${q} ${won} ${clean} ${q} ${won} ${clean} update config_settings set value = 'true'::jsonb where key = 'queue_push'; set role sync_engine;`);
   cfg = await loadRuntimeConfig(db);
 });
 afterEach(async () => { await db.close(); });
@@ -331,4 +332,87 @@ test('a deal leaving Won withdraws its open Won tasks: archived off the board; W
   await status(6, 1);
   await status(1, 6);
   assert.deepEqual((await rows(`select status, close_mode from task where dedupe_key = 'won_handoff:4242'`))[0], { status: 'done', close_mode: 'manual' });
+});
+
+// ── Data cleanliness (Seth 2026-10-20) ───────────────────────────────────────
+import { CLEANLINESS_KEY, countExceptions, isBlank, runCleanliness } from '../src/queue/cleanliness.ts';
+import type { MondayItemRaw } from '../src/monday/client.ts';
+
+const it = (id: string, group: string, cols: Record<string, unknown>): MondayItemRaw => ({
+  id, name: `Item ${id}`, state: 'active', group: { id: group },
+  column_values: Object.entries(cols).map(([cid, v]) => ({ id: cid, value: v === null ? null : JSON.stringify(v), text: null })),
+});
+// Every Pre-Sales required field filled, so tests can blank one at a time.
+const fullPre = { numbers9: '1000', numbers__1: '30', numbers4__1: '0', dropdown_mkt9zhb9: { ids: [2] }, text8: 'Q-1', dropdown__1: { ids: [2] }, dropdown2: { ids: [4] }, dropdown3: { ids: [1] } };
+const fullPost = { dropdown: { ids: [3] }, multiple_person_mm4sd38q: { personsAndTeams: [{ id: 1, kind: 'person' }] }, people: null, date_mksn1dmg: { date: '2026-11-01' }, date8: { date: '2026-11-08' }, text: '26-1001' };
+
+test('blank detection by column type; 0 counts as filled', () => {
+  assert.equal(isBlank('numbers', JSON.stringify('0')), false);
+  assert.equal(isBlank('numbers', JSON.stringify('')), true);
+  assert.equal(isBlank('numbers', null), true);
+  assert.equal(isBlank('dropdown', JSON.stringify({ ids: [] })), true);
+  assert.equal(isBlank('people', JSON.stringify({ personsAndTeams: [] })), true);
+  assert.equal(isBlank('date', JSON.stringify({ date: '2026-01-01' })), false);
+  assert.equal(isBlank('text', JSON.stringify('  ')), true);
+});
+
+test('cleanliness: active work only; Won counts when contracted this year; Programmer only when on the Programming board', async () => {
+  const rules = (await rows(`select board_key, semantic_key, exempt_when from config_cleanliness_rule`)).map((r) => ({ boardKey: r.board_key, semanticKey: r.semantic_key, exemptWhen: r.exempt_when }));
+  assert.equal(rules.length, 19);
+  const r = countExceptions({
+    items: {
+      presales: [
+        it('1', 'new_group66048', { ...fullPre, numbers9: '' }),                         // Follow Up, no price → 1
+        it('2', 'new_group12986', { ...fullPre, numbers9: '' }),                         // New Requests → not counted
+        it('3', 'new_group52602', { ...fullPre, dropdown3: { ids: [] }, date9: { date: '2026-03-02' } }), // Won 2026 → 1
+        it('4', 'new_group52602', { ...fullPre, dropdown3: { ids: [] }, date9: { date: '2025-06-01' } }), // Won 2025 → not counted
+        it('5', 'new_group64129', { numbers9: '' }),                                     // Lost → not counted
+      ],
+      postsales: [
+        it('10', 'new_group70660', { ...fullPost }),                                     // Install, Programmer blank, not on Programming board → OK
+        it('11', 'topics', { ...fullPost, text: '26-2002' }),                            // on Programming board, no Programmer → 1
+        it('12', 'new_group', { ...fullPost, date8: null }),                             // Completed → not counted
+        it('13', 'new_group52749', { ...fullPost, date_mksn1dmg: null, date8: null }),   // Close Out, no cutsheet / drawings → 2
+      ],
+      programming: [it('20', 'group_title', { multiple_person_mm4srewb: null })],       // Active, 5 blanks
+    },
+    rules, columns: cfg.planner.columns, groups: cfg.planner.groups, scope: cfg.settings.cleanliness_scope as any,
+    programmingNumbers: new Set(['26-2002']), year: 2026,
+  });
+  assert.deepEqual(r.inScope, { presales: 2, postsales: 3, programming: 1 });
+  assert.equal(r.byField['presales.quoted_price'], 1);
+  assert.equal(r.byField['presales.sales_person'], 1);
+  assert.equal(r.byField['presales.premiere_protect'], 0, '0 counts as filled');
+  assert.equal(r.byField['postsales.programmer'], 1);
+  assert.equal(r.byField['postsales.cutsheet_due'], 1);
+  assert.equal(r.byField['postsales.shop_drawings_due'], 1);
+  assert.equal(r.byField['programming.manufacturer'], 1);
+  assert.equal(r.total, 1 + 1 + 1 + 1 + 1 + 5);
+});
+
+test('runCleanliness: one Data Cleanliness task in Background with the count; daily snapshot', async () => {
+  const monday = fakeMonday();
+  const boards: Record<string, MondayItemRaw[]> = {
+    '3477536693': [it('1', 'new_group66048', { ...fullPre, numbers9: '' })],
+    '3523133226': [it('13', 'new_group52749', { ...fullPost, date8: null })],
+    '9358385694': [],
+  };
+  monday.client.pageBoardItems = async (b, _cols, onPage) => { await onPage(boards[b] ?? []); };
+  const now = new Date('2026-10-20T15:00:00Z');
+  const r = await runCleanliness({ db, monday: monday.client, cfg }, now);
+  assert.equal(r?.total, 2);
+  const t = (await rows(`select task_type, title, details, count_value from task where dedupe_key = $1`, [CLEANLINESS_KEY]))[0];
+  assert.equal(t.title, 'Data cleanliness: 2 blank required fields');
+  assert.equal(Number(t.count_value), 2);
+  assert.match(t.details, /Pre-Sales \(1 active items\): 1 blank — Quoted Price 1/);
+  assert.match(t.details, /Post-Sales \(1 active items\): 1 blank — Shop Drawings Due 1/);
+  assert.equal(groupFor({ status: 'not_started', taskType: 'data_cleanliness', dueAt: null }, now), 'background');
+  const snap = await rows(`select semantic_key, exception_count from cleanliness_snapshot where snapshot_date = '2026-10-20' and exception_count > 0 order by semantic_key`);
+  assert.deepEqual(snap.map((s) => [s.semantic_key, s.exception_count]), [['postsales.shop_drawings_due', 1], ['presales.quoted_price', 1]]);
+
+  // Next hour, fixed → count 0, same single task.
+  boards['3477536693'] = [it('1', 'new_group66048', fullPre)];
+  await runCleanliness({ db, monday: monday.client, cfg }, now);
+  assert.equal((await rows(`select count(*)::int n from task where task_type = 'data_cleanliness'`))[0].n, 1);
+  assert.equal(Number((await rows(`select count_value from task where dedupe_key = $1`, [CLEANLINESS_KEY]))[0].count_value), 1);
 });
