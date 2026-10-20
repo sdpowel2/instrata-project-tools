@@ -200,6 +200,8 @@ export type TaskIntent =
       dedupeKey: string;
       /** Present → only remove this member; the task closes when none remain. */
       memberId?: string;
+      /** The reason went away (a Won deal un-won): close and take it off Hope's Queue; a later open brings it back. */
+      withdraw?: boolean;
     };
 
 export interface EventIntent {

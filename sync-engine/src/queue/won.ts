@@ -33,6 +33,18 @@ export function wonTaskIntents(itemId: string, dealName: string, ref: OpenIntent
   ];
 }
 
+/**
+ * The deal left Won (Seth 2026-10-20): still-open Won tasks are withdrawn — taken off
+ * Hope's Queue, not counted as done. A later Won brings them back with a fresh due
+ * date; a handoff Hope already sent or a job already opened stays done.
+ */
+export function withdrawWonIntents(itemId: string): Extract<TaskIntent, { op: 'close' }>[] {
+  return [
+    { op: 'close', dedupeKey: `won_handoff:${itemId}`, withdraw: true },
+    { op: 'close', dedupeKey: `open_job:${itemId}`, withdraw: true },
+  ];
+}
+
 export function handoffSlaDays(settings: Record<string, unknown>): number | null {
   const n = Number(settings.handoff_sla_business_days);
   return Number.isInteger(n) && n > 0 ? n : null;

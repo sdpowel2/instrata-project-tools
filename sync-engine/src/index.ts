@@ -125,7 +125,7 @@ async function queuePush(): Promise<void> {
     // Report tasks (open once per period) go out with the same push.
     const reports = cfg.settings.queue_push === true ? await openRecurringTasks(db, cfg.settings, new Date()) : 0;
     const r = await syncQueueBoard({ db, gate, monday, cfg, salesforceLoginUrl: env.salesforce.loginUrl });
-    if (reports || r.created || r.updated || r.moved || r.failed) log.info('queue push', { reportsOpened: reports, ...r });
+    if (reports || r.created || r.archived || r.updated || r.moved || r.failed) log.info('queue push', { reportsOpened: reports, ...r });
   } finally {
     queueBusy = false;
   }

@@ -139,7 +139,7 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
         const dueAt = sla ? businessDaysAfter(new Date(), sla).toISOString() : null;
         await openTask(q, { ...t, dedupeKey: resolve(t.dedupeKey), sourceRef: ref, ...(member ? { member } : {}) }, correlationId, dueAt);
       } else {
-        await closeTask(q, resolve(t.dedupeKey), 'auto', correlationId, t.memberId);
+        await closeTask(q, resolve(t.dedupeKey), 'auto', correlationId, t.memberId, { withdraw: t.withdraw });
       }
     }
   });

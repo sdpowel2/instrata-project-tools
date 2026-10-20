@@ -13,7 +13,7 @@ import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient } from '../monday/client.ts';
 import { readText } from '../monday/encode.ts';
 import { businessDaysAfter } from './time.ts';
-import { handoffSlaDays, wonTaskIntents } from './won.ts';
+import { handoffSlaDays, withdrawWonIntents, wonTaskIntents } from './won.ts';
 
 export async function openWonTasksForItem(
   deps: { db: Db; monday: MondayClient; cfg: RuntimeConfig },
@@ -35,6 +35,18 @@ export async function openWonTasksForItem(
     }
   });
   return opened;
+}
+
+/** A person moved a Pre-Sales item off Won: withdraw its still-open Won tasks. */
+export async function withdrawWonTasksForItem(deps: { db: Db }, itemId: string): Promise<number> {
+  let withdrawn = 0;
+  await deps.db.tx(async (q) => {
+    const correlationId = randomUUID();
+    for (const t of withdrawWonIntents(itemId)) {
+      if (await closeTask(q, t.dedupeKey, 'auto', correlationId, undefined, { withdraw: true }) === 'closed') withdrawn++;
+    }
+  });
+  return withdrawn;
 }
 
 export interface JobCheck { checked: number; closed: number; skipped?: string }

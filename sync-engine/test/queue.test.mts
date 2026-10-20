@@ -111,7 +111,7 @@ test('push: open tasks become items in their group; clean rows are left alone; c
   assert.ok(t.every((x) => x.queue_item_id && !x.monday_dirty));
 
   h.monday.writes.length = 0;
-  assert.deepEqual(await syncQueueBoard(h.deps()), { created: 0, updated: 0, moved: 0, failed: 0 }, 'nothing to do');
+  assert.deepEqual(await syncQueueBoard(h.deps()), { created: 0, archived: 0, updated: 0, moved: 0, failed: 0 }, 'nothing to do');
 
   await closeTask(db, 'sync_failure:unmapped_value:Johnny:presales.sales_person', 'auto', null);
   const r2 = await syncQueueBoard(h.deps());
@@ -288,4 +288,47 @@ test('Open Job closes itself once the Post-Sales item (matched by Project ID) ha
   assert.deepEqual(await closeOpenedJobs({ db, monday: monday.client, cfg }), { checked: 2, closed: 1 });
   const st = Object.fromEntries((await rows(`select dedupe_key, status, close_mode from task where task_type = 'open_job'`)).map((x) => [x.dedupe_key, [x.status, x.close_mode]]));
   assert.deepEqual(st, { 'open_job:500': ['done', 'auto'], 'open_job:501': ['not_started', null] });
+});
+
+test('a deal leaving Won withdraws its open Won tasks: archived off the board; Won again brings them back fresh', async () => {
+  const monday = fakeMonday();
+  monday.addItem('4242', {});
+  monday.items.get('4242')!.name = 'Acme HQ';
+  const sf = fakeSalesforce().client;
+  const gate = createWriteGate('live', monday.client, sf);
+  const deps = { db, gate, monday: monday.client, salesforce: sf, cfg, integrationUserId: '119228546', salesforceLoginUrl: 'https://x.my.salesforce.com', now: () => new Date('2026-10-21T15:00:00Z') };
+  const status = (value: number, previous: number) => handleMondayEvent(deps, {
+    id: '1', source: 'monday', received_at: new Date().toISOString(), attempts: 1,
+    payload: { event: { type: 'update_column_value', boardId: 3477536693, pulseId: 4242, columnId: 'status9', userId: 33940282, value: { label: { index: value } }, previousValue: { label: { index: previous } }, triggerUuid: 't' } },
+  } as any);
+
+  await status(1, 0); // → Won
+  await syncQueueBoard(deps);
+  const items = Object.fromEntries((await rows(`select dedupe_key, queue_item_id from task`)).map((x) => [x.dedupe_key, x.queue_item_id]));
+  assert.ok(items['won_handoff:4242'] && items['open_job:4242']);
+
+  const r = await status(6, 1); // Won → Follow Up
+  assert.equal(r.kind === 'done' && r.note, 'logged; won tasks withdrawn: 2');
+  monday.writes.length = 0;
+  const push = await syncQueueBoard(deps);
+  assert.equal(push.archived, 2);
+  assert.deepEqual(monday.writes.map((w) => w.op).sort(), ['archive', 'archive'], 'archived, not moved to Done');
+  let t = await rows(`select dedupe_key, status, close_mode, queue_item_id, source_ref->>'withdrawn' w from task order by dedupe_key`);
+  assert.deepEqual(t.map((x) => [x.status, x.close_mode, x.queue_item_id, x.w]), [['done', 'auto', null, 'true'], ['done', 'auto', null, 'true']]);
+
+  // Back to Won a few days later: both reopen, the handoff with a new due date, and get new items.
+  deps.now = () => new Date('2026-10-26T15:00:00Z');
+  await status(1, 6);
+  t = await rows(`select dedupe_key, status, due_at, source_ref->>'withdrawn' w from task order by dedupe_key`);
+  assert.deepEqual(t.map((x) => [x.dedupe_key, x.status, x.w]), [['open_job:4242', 'not_started', null], ['won_handoff:4242', 'not_started', null]]);
+  assert.equal(new Date(t[1].due_at).toISOString(), '2026-11-02T22:00:00.000Z', '5 business days from Oct 26, after DST ends');
+  monday.writes.length = 0;
+  await syncQueueBoard(deps);
+  assert.equal(monday.writes.filter((w) => w.op === 'create').length, 2);
+
+  // A handoff Hope already sent is not withdrawn, and so never comes back.
+  await closeTask(db, 'won_handoff:4242', 'manual', null);
+  await status(6, 1);
+  await status(1, 6);
+  assert.deepEqual((await rows(`select status, close_mode from task where dedupe_key = 'won_handoff:4242'`))[0], { status: 'done', close_mode: 'manual' });
 });

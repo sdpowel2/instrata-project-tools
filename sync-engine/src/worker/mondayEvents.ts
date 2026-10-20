@@ -21,7 +21,7 @@ import { runWriteback } from '../writeback/run.ts';
 import { assignColumnIds, runAssignment, type AssignTrigger } from '../assign/run.ts';
 import { log } from '../log.ts';
 import { handleQueueEvent } from '../queue/run.ts';
-import { openWonTasksForItem } from '../queue/jobs.ts';
+import { openWonTasksForItem, withdrawWonTasksForItem } from '../queue/jobs.ts';
 import type { InboxRow } from './inbox.ts';
 
 export interface MondayEventDeps {
@@ -110,6 +110,12 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
         && labelOf(ev.value) === wonId && labelOf(ev.previousValue) !== wonId) {
       const opened = await openWonTasksForItem(deps, ev.itemId, deps.now?.() ?? new Date());
       return { kind: 'done', note: `logged; won tasks opened: ${opened}` };
+    }
+    // …and moved it off Won → take the still-open Won tasks back (Seth 2026-10-20).
+    if (key === 'presales.status' && onPresales && wonId !== undefined && wonId !== null
+        && labelOf(ev.previousValue) === wonId && labelOf(ev.value) !== wonId) {
+      const withdrawn = await withdrawWonTasksForItem(deps, ev.itemId);
+      return { kind: 'done', note: `logged; won tasks withdrawn: ${withdrawn}` };
     }
     return { kind: 'done', note: 'logged' };
   }

@@ -143,7 +143,8 @@ export async function openTask(q: Queryable, t: OpenIntent, correlationId: strin
   const { rows } = await q.query<TaskRow>(
     'select id, status, title, details, source_ref from task where dedupe_key = $1 for update', [t.dedupeKey]);
   const existing = rows[0];
-  if (t.once && existing) return 'unchanged';
+  // "once": never reopen or refresh, except a task withdrawn because its reason went away.
+  if (t.once && existing && !(existing.status === 'done' && existing.source_ref?.withdrawn)) return 'unchanged';
 
   let title = t.title;
   let details = t.details;
@@ -173,9 +174,10 @@ export async function openTask(q: Queryable, t: OpenIntent, correlationId: strin
       `update task
           set status = 'not_started', synced_status = 'not_started', reopen_count = reopen_count + 1,
               open_since = now(), closed_at = null, close_mode = null,
-              title = $2, details = $3, source_ref = $4::jsonb, monday_dirty = true
+              title = $2, details = $3, source_ref = $4::jsonb, monday_dirty = true,
+              due_at = coalesce($5::timestamptz, due_at)
         where id = $1`,
-      [existing.id, title, details, JSON.stringify(sourceRef)]);
+      [existing.id, title, details, JSON.stringify(sourceRef), dueAt]);
     await appendEvents(q, [taskEvent(existing.id, 'task_reopened', t.dedupeKey, { task_type: t.taskType, ...(t.member ? { member: t.member.id } : {}) })], correlationId);
     return 'reopened';
   }
@@ -192,7 +194,10 @@ export async function openTask(q: Queryable, t: OpenIntent, correlationId: strin
  * With `memberId`, only that member leaves a grouped task; the task closes when
  * the last one does ('shrunk' = members remain).
  */
-export async function closeTask(q: Queryable, dedupeKey: string, mode: 'auto' | 'manual', correlationId: string | null, memberId?: string): Promise<TaskOutcome> {
+export async function closeTask(
+  q: Queryable, dedupeKey: string, mode: 'auto' | 'manual', correlationId: string | null, memberId?: string,
+  opts: { withdraw?: boolean } = {},
+): Promise<TaskOutcome> {
   if (memberId !== undefined) {
     const { rows } = await q.query<TaskRow>(
       'select id, status, title, details, source_ref from task where dedupe_key = $1 for update', [dedupeKey]);
@@ -215,12 +220,13 @@ export async function closeTask(q: Queryable, dedupeKey: string, mode: 'auto' | 
     `update task
         set status = 'done', synced_status = 'done', close_mode = $2, closed_at = now(),
             total_open_seconds = total_open_seconds + greatest(0, extract(epoch from now() - coalesce(open_since, now())))::bigint,
-            open_since = null, monday_dirty = true
+            open_since = null, monday_dirty = true,
+            source_ref = case when $3 then source_ref || '{"withdrawn": true}'::jsonb else source_ref end
       where dedupe_key = $1 and status <> 'done'
       returning id`,
-    [dedupeKey, mode]);
+    [dedupeKey, mode, opts.withdraw === true]);
   if (rows.length === 0) return 'unchanged';
-  await appendEvents(q, [taskEvent(rows[0].id, 'task_closed', dedupeKey, { close_mode: mode })], correlationId);
+  await appendEvents(q, [taskEvent(rows[0].id, 'task_closed', dedupeKey, { close_mode: mode, ...(opts.withdraw ? { withdrawn: true } : {}) })], correlationId);
   return 'closed';
 }
 

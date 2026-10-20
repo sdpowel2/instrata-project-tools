@@ -22,7 +22,7 @@
  * watermark sweep won't revisit it. When a map_* row changes, re-reconcile the
  * opportunities on open `sync_failure:unmapped_value:*` tasks for that field.
  */
-import { wonTaskIntents } from '../queue/won.ts';
+import { withdrawWonIntents, wonTaskIntents } from '../queue/won.ts';
 import {
   CREATED_ITEM,
   type Baseline,
@@ -394,6 +394,9 @@ function setStatus(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects, labelKey
     return 'skipped';
   }
   if (item.statusLabelId === labelId) return 'already';
+  // Leaving Won withdraws the Won tasks (the webhook ignores the engine's own writes).
+  const wonId = ctx.config.labels[`${key}.won`];
+  if (labelKey !== 'won' && wonId !== undefined && item.statusLabelId === wonId) ctx.tasks.push(...withdrawWonIntents(item.id));
   fx.writes = fx.writes.filter((x) => x.semanticKey !== key);
   fx.writes.push({ semanticKey: key, value: { type: 'status', labelId } });
   ctx.events.push(engineEvent(item.id, { eventType: 'status_changed', field: key, oldValue: item.statusLabelId, newValue: labelId, details: { label_key: labelKey, sf_stage: ctx.opp.StageName } }));

@@ -826,5 +826,19 @@ section('48. EC2 on a linked Pre-Qualification item: opens, then closes on Engin
   idempotent(p3, st2, opp({ StageName: 'Engineering' }), IC);
 }
 
+section('49. Won deal un-won by Salesforce (Closed Lost) → the Won tasks are withdrawn (Seth 2026-10-20)');
+{
+  const st = linked(opp({ StageName: 'Contract In House' }), { statusLabelId: S.won, groupId: G.won });
+  st.links[0].baseline['sf.stage'] = 'Contract In House';
+  const p = run(opp({ StageName: 'Closed Lost', Lost_Reason__c: 'Price' }), st);
+  const withdrawn = p.tasks.filter((t) => t.op === 'close' && t.withdraw).map((t) => t.dedupeKey).sort();
+  check('status Lost written', statusWrite(writesOf(p)) === S.lost);
+  check('won_handoff + open_job withdrawn', JSON.stringify(withdrawn) === JSON.stringify([`open_job:${ITEM}`, `won_handoff:${ITEM}`]), JSON.stringify(withdrawn));
+  const notWon = linked(opp({ StageName: 'Engineering' }), { statusLabelId: S.in_progress });
+  notWon.links[0].baseline['sf.stage'] = 'Engineering';
+  const p2 = run(opp({ StageName: 'Closed Lost', Lost_Reason__c: 'Price' }), notWon);
+  check('a deal that was never Won withdraws nothing', !p2.tasks.some((t) => t.op === 'close' && t.withdraw));
+}
+
 console.log(`\n${cases} cases, ${failures === 0 ? 'all checks passed' : `${failures} check(s) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

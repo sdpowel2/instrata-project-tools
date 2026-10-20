@@ -73,6 +73,7 @@ const toQueueTask = (r: TaskRow): QueueTask => ({
 export interface QueueSyncResult {
   skipped?: string;
   created: number;
+  archived: number;
   updated: number;
   moved: number;
   failed: number;
@@ -80,7 +81,7 @@ export interface QueueSyncResult {
 
 export async function syncQueueBoard(deps: QueueDeps): Promise<QueueSyncResult> {
   const { cfg } = deps;
-  const out: QueueSyncResult = { created: 0, updated: 0, moved: 0, failed: 0 };
+  const out: QueueSyncResult = { created: 0, archived: 0, updated: 0, moved: 0, failed: 0 };
   if (cfg.settings.queue_push !== true) return { ...out, skipped: 'queue_push is off' };
   const boardId = cfg.boards.queue;
   if (!boardId) return { ...out, skipped: 'no queue board configured' };
@@ -128,6 +129,14 @@ export async function syncQueueBoard(deps: QueueDeps): Promise<QueueSyncResult> 
         const id = await gate.monday.createItem(boardId, gid, v.name, encodeColumnValues(v.writes, columnId));
         if (live && id) await settle(id);
         out.created++;
+        continue;
+      }
+
+      // Withdrawn (its reason went away, e.g. a deal un-won): off the board, not into Done.
+      if (t.status === 'done' && t.sourceRef.withdrawn) {
+        await gate.monday.archiveItem(r.queue_item_id);
+        if (live) await settle(null);
+        out.archived++;
         continue;
       }
 
