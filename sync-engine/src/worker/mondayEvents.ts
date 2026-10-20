@@ -18,7 +18,7 @@ import type { MondayClient } from '../monday/client.ts';
 import type { SalesforceClient } from '../salesforce/client.ts';
 import type { WriteGate } from '../writeGate.ts';
 import { runWriteback } from '../writeback/run.ts';
-import { assignColumnIds, runAssignment } from '../assign/run.ts';
+import { assignColumnIds, runAssignment, type AssignTrigger } from '../assign/run.ts';
 import { log } from '../log.ts';
 import type { InboxRow } from './inbox.ts';
 
@@ -77,7 +77,7 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
   const onTriage = deps.cfg.boards.triage !== null && String(deps.cfg.boards.triage) === String(ev.boardId);
   const isBid = assign.bid !== null && ev.columnId === assign.bid && onTriage;
   const isPick = assign.pick !== null && ev.columnId === assign.pick && onTriage;
-  if (ev.columnId === assign.engineer || isBid || isPick) return assignment(deps, row, ev, isBid);
+  if (ev.columnId === assign.engineer || isBid || isPick) return assignment(deps, row, ev, isBid ? 'bid' : isPick ? 'pick' : 'engineer');
 
   const key = semanticKeyFor(deps.cfg, ev.columnId);
   if (!key) return { kind: 'done', note: 'untracked column' };
@@ -97,7 +97,8 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
   return { kind: 'done', note: 'monday-owned column' };
 }
 
-async function assignment(deps: MondayEventDeps, row: InboxRow, ev: MondayEvent, isBid: boolean): Promise<MondayOutcome> {
+async function assignment(deps: MondayEventDeps, row: InboxRow, ev: MondayEvent, trigger: AssignTrigger): Promise<MondayOutcome> {
+  const isBid = trigger === 'bid';
   const debounceSec = Number(deps.cfg.settings.writeback_debounce_seconds ?? 30) || 30;
   const due = new Date(new Date(row.received_at).getTime() + debounceSec * 1000);
   const now = deps.now?.() ?? new Date();
@@ -121,7 +122,7 @@ async function assignment(deps: MondayEventDeps, row: InboxRow, ev: MondayEvent,
     [row.id, ev.itemId, [ev.columnId]]);
   if (rows[0].n > 0) return { kind: 'done', note: 'superseded by a newer edit' };
 
-  const r = await runAssignment({ ...deps, salesforceLoginUrl: deps.salesforceLoginUrl ?? '' }, ev.itemId!, ev.userId, isBid ? 'bid' : 'engineer');
+  const r = await runAssignment({ ...deps, salesforceLoginUrl: deps.salesforceLoginUrl ?? '' }, ev.itemId!, ev.userId, trigger);
   if (r.triage || r.estimator === 'patch' || r.estimator === 'task') {
     log.info('assignment', { itemId: ev.itemId, mode: deps.gate.mode, triage: r.triage, estimator: r.estimator, note: r.note });
   }

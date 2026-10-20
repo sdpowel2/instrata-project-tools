@@ -224,7 +224,9 @@ test('a Bid Decision change or the retry never clears; an engineer removal does'
   await runAssignment(h.deps(), ITEM, null, 'retry');
   assert.equal(h.sf.patches.length, 0, 'empty column + Bid Decision → Salesforce left alone');
   await runAssignment(h.deps(), ITEM, null, 'engineer');
-  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: null } }]);
+  assert.equal(h.sf.patches.length, 0, 'a Pre-Sales people-column event while the item is on Triage is not a removal');
+  await runAssignment(h.deps(), ITEM, null, 'pick');
+  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: null } }], 'clearing the Triage pick is');
 });
 
 test('adding a second engineer keeps the current Estimator (no flip, no email)', async () => {
@@ -282,6 +284,23 @@ test('R7: if monday refuses the engineer after the move, the Estimator still lan
   h.put(PRESALES, 'new_group12986', { engineers: [U.lee] });
   await runAssignment(h.deps(), ITEM, '33940282', 'engineer');
   assert.equal((await rows(`select status from task where dedupe_key = $1`, [`sync_failure:assign_failed:${ITEM}:engineer`]))[0].status, 'done');
+});
+
+test('a Triage pick processed after R7 moved the item never clears the Estimator (staging 2026-10-20)', async () => {
+  const h = harness({ estimator: { estimatorId: LEE.Id, estimatorName: LEE.Name } });
+  await link();
+  // The item already left Triage; monday refused the engineer, so Pre-Sales shows nobody.
+  h.put(PRESALES, 'new_group12986', { engineers: [] });
+  await runAssignment(h.deps(), ITEM, '33940282', 'pick');
+  assert.equal(h.sf.patches.length, 0, 'a late dropdown edit is not a removal on Pre-Sales');
+  // A removal on the board the item is on still clears.
+  await runAssignment(h.deps(), ITEM, '33940282', 'engineer');
+  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: null } }]);
+  // And clearing the pick while still on Triage clears too.
+  h.sf.estimatorContexts.get(LINE)!.estimatorId = LEE.Id;
+  h.put(TRIAGE, 'group_mm84ys96', { engineers: [], bid: 1 });
+  await runAssignment(h.deps(), ITEM, '33940282', 'pick');
+  assert.equal(h.sf.patches.length, 2);
 });
 
 test('unmapped dropdown pick: item stays on Triage, Hope gets a task naming the label (even with the writeback off)', async () => {

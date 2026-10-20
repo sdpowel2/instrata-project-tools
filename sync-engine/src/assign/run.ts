@@ -127,10 +127,20 @@ export interface AssignResult {
 }
 
 /**
- * What made this run happen. Only 'engineer' (someone changed the Pre-Sales
- * Engineer column) may clear Salesforce's Estimator.
+ * What made this run happen: 'engineer' = the Pre-Sales Engineer people column,
+ * 'pick' = the Triage engineer dropdown, 'bid' = Bid Decision, 'retry' = the
+ * hourly mapping retry. Only an edit of the engineer column on the board the item
+ * is on NOW may clear Salesforce's Estimator: a Triage pick processed after R7
+ * already moved the item must not read the (maybe empty) Pre-Sales column as a
+ * removal (found on staging 2026-10-20).
  */
-export type AssignTrigger = 'engineer' | 'bid' | 'retry';
+export type AssignTrigger = 'engineer' | 'pick' | 'bid' | 'retry';
+
+function mayClear(trigger: AssignTrigger, boardKey: string | null): boolean {
+  if (trigger === 'pick') return boardKey === 'triage';
+  if (trigger === 'engineer') return boardKey !== 'triage';
+  return false;
+}
 
 /** One item, after a Pre-Sales Engineer or Bid Decision change (debounced by the caller). */
 export async function runAssignment(deps: AssignDeps, itemId: string, actor: string | null, trigger: AssignTrigger): Promise<AssignResult> {
@@ -194,7 +204,7 @@ export async function runAssignment(deps: AssignDeps, itemId: string, actor: str
       link, ctx,
       pick: pickEstimator(item.engineerUserIds, cfg.estimators, users),
       assignedSfIds: assignedSfIds(item.engineerUserIds, cfg.estimators, users),
-      allowClear: trigger === 'engineer',
+      allowClear: mayClear(trigger, item.boardKey),
       firstPass: false,
       repEmail: cfg.settings.estimator_rep_email !== false,
       itemLabel: itemLabel(item),
