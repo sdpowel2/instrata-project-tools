@@ -54,6 +54,7 @@ interface TaskRow {
   details: string;
   source_ref: QueueTask['sourceRef'];
   status: TaskStatus;
+  synced_status: TaskStatus | null;
   due_at: Date | null;
   count_value: string | null;
   reopen_count: number;
@@ -101,13 +102,16 @@ export async function syncQueueBoard(deps: QueueDeps): Promise<QueueSyncResult> 
   const live = deps.gate.mode === 'live';
 
   const { rows } = await deps.db.query<TaskRow>(
-    `select id, task_type, dedupe_key, title, details, source_ref, status, due_at, count_value, reopen_count, open_since,
+    `select id, task_type, dedupe_key, title, details, source_ref, status, synced_status, due_at, count_value, reopen_count, open_since,
             queue_item_id::text, group_key, monday_dirty, updated_at
        from task
       where monday_dirty or status <> 'done' or (queue_item_id is not null and group_key is distinct from 'done')
       order by created_at`);
 
   for (const r of rows) {
+    // A status set in Project Tools (the app may only change status): same meaning
+    // as Hope's edit on monday — Done is a manual close, leaving Done a reopen.
+    if (live && r.synced_status !== null && r.status !== r.synced_status) await applyAppStatus(deps.db, r);
     const t = toQueueTask(r);
     const want = groupFor(t, now);
     const gid = groupIds[want];
@@ -159,6 +163,23 @@ export async function syncQueueBoard(deps: QueueDeps): Promise<QueueSyncResult> 
     }
   }
   return out;
+}
+
+async function applyAppStatus(db: Db, r: TaskRow): Promise<void> {
+  if (r.status === 'done') {
+    await db.query(
+      `update task set close_mode = 'manual', closed_at = now(), open_since = null,
+              total_open_seconds = total_open_seconds + greatest(0, extract(epoch from now() - coalesce(open_since, now())))::bigint
+        where id = $1`, [r.id]);
+  } else if (r.synced_status === 'done') {
+    await db.query(`update task set close_mode = null, closed_at = null, open_since = now(), reopen_count = reopen_count + 1 where id = $1`, [r.id]);
+    r.reopen_count += 1;
+    r.open_since = new Date();
+  }
+  await appendEvents(db, [{
+    source: 'hope', entity_type: 'task', entity_id: r.id, event_type: r.status === 'done' ? 'task_closed' : r.synced_status === 'done' ? 'task_reopened' : 'status_changed',
+    old_value: r.synced_status, new_value: r.status, details: { dedupe_key: r.dedupe_key, via: 'project_tools' },
+  }], null);
 }
 
 /** A monday event on the Hope's Queue board (not the engine's own echo). */

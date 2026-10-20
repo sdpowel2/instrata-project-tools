@@ -833,6 +833,9 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-20 — Hope's Queue page in Project Tools
+- New page **Hope's Queue** (`/ops-queue`, sidebar) for admins and ops coordinators (`profiles.is_ops_coordinator`, now in the auth context as `isSyncViewer`): KPI tiles, the sync task queue grouped like the monday board with status edits, Data Cleanliness item lists with monday links, and a Mappings screen (Sales Rep / Business Unit / Win % / Estimators) where Fix Mapping tasks get resolved. Admin-only Sandbox data switch reads the `sync_sandbox` schema. Data layer `app/src/lib/syncQueue.ts`; the engine publishes the cleanliness lists and monday label names to `engine_status`.
+
 ### 2026-10-20 — Hope's Queue board (sync engine pushes tasks to monday)
 - **Data cleanliness:** an hourly count of blank required fields on active work (Pre-Sales Follow Up + this year's Won, Post-Sales In Progress / Install / Close Out, Programming On Radar / Active / Close Out) becomes one "Data Cleanliness" row in Hope's Queue, with a daily snapshot per field for trends. Rules and exemptions live in `config_cleanliness_rule`. Migration `sync_cleanliness.sql`.
 - **Won tasks:** a Pre-Sales item set to Won (by the sync or a person) opens **Won – Handoff** (due 5 business days later) and **Won – Open Job** (no due date, in a new "Job Opening" group on Hope's Queue, Lee's confirmed-to-win list). Open Job closes itself once the deal's Post-Sales item has a Project Number. If the deal leaves Won, still-open Won tasks are withdrawn (archived off the queue, not counted as done) and return if it's Won again. Migration `sync_won_tasks.sql`.

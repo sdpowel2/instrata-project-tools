@@ -8,6 +8,8 @@ export interface UserProfile {
   email: string;
   fullName: string;
   role: 'admin' | 'member';
+  /** Hope's flag (profiles.is_ops_coordinator): sees and works the sync queue + mappings. Not a role. */
+  isOpsCoordinator: boolean;
 }
 
 interface AuthContextValue {
@@ -15,6 +17,8 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   isAdmin: boolean;
+  /** Admins + ops coordinators: Hope's Queue and Sync Admin. */
+  isSyncViewer: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -25,6 +29,7 @@ const DEMO_USER: UserProfile = {
   email: 'admin@instrata.com',
   fullName: 'Demo Admin',
   role: 'admin',
+  isOpsCoordinator: false,
 };
 
 /**
@@ -40,7 +45,7 @@ async function fetchProfile(userId: string, email: string): Promise<UserProfile 
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role')
+      .select('id, email, full_name, role, is_ops_coordinator')
       .eq('id', userId)
       .maybeSingle();
 
@@ -59,6 +64,7 @@ async function fetchProfile(userId: string, email: string): Promise<UserProfile 
       email: data.email ?? email,
       fullName: data.full_name ?? email,
       role: data.role === 'admin' ? 'admin' : 'member',
+      isOpsCoordinator: data.is_ops_coordinator === true,
     };
   } catch (err) {
     console.warn('[Auth] Profile fetch exception (preserving existing state):', err);
@@ -182,9 +188,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const isAdmin = user?.role === 'admin';
+  const isSyncViewer = isAdmin || user?.isOpsCoordinator === true;
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isAdmin, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isAdmin, isSyncViewer, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -416,3 +416,17 @@ test('runCleanliness: one Data Cleanliness task in Background with the count; da
   assert.equal((await rows(`select count(*)::int n from task where task_type = 'data_cleanliness'`))[0].n, 1);
   assert.equal(Number((await rows(`select count_value from task where dedupe_key = $1`, [CLEANLINESS_KEY]))[0].count_value), 1);
 });
+
+test('a status set in Project Tools counts like Hope\'s edit on monday; the item follows', async () => {
+  const h = harness();
+  await open('sync_failure:won_on_intake:9:status');
+  await syncQueueBoard(h.deps());
+  // The app (authenticated, status column only) marks it Done.
+  await db.pg.exec(`reset role; update task set status = 'done' where dedupe_key = 'sync_failure:won_on_intake:9:status'; set role sync_engine;`);
+  h.monday.writes.length = 0;
+  await syncQueueBoard(h.deps());
+  const t = (await rows(`select status, synced_status, close_mode, closed_at from task`))[0];
+  assert.deepEqual([t.status, t.synced_status, t.close_mode, !!t.closed_at], ['done', 'done', 'manual', true]);
+  assert.equal(h.monday.writes.find((w) => w.op === 'move')!.args[1], G.done);
+  assert.equal((await rows(`select count(*)::int n from event_log where source = 'hope' and details->>'via' = 'project_tools'`))[0].n, 1);
+});

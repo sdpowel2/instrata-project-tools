@@ -45,6 +45,7 @@ import { syncQueueBoard } from './queue/run.ts';
 import { openRecurringTasks } from './queue/recurring.ts';
 import { closeOpenedJobs } from './queue/jobs.ts';
 import { runCleanliness } from './queue/cleanliness.ts';
+import { snapshotMondayLabels } from './queue/labels.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -116,6 +117,8 @@ async function sweep(): Promise<SweepResult | undefined> {
 async function refreshDrift(): Promise<void> {
   lastDrift = await runDriftCheck(db, monday, await loadRuntimeConfig(db));
   cached = null;
+  // Label names for the Mappings screen in Project Tools.
+  await snapshotMondayLabels(db, monday, await getConfig()).catch((e) => log.warn('label snapshot failed', { error: errMessage(e) }));
   jobs.lastDrift = new Date().toISOString();
   if (lastDrift.findings.length > 0) log.warn('config drift', { findings: lastDrift.findings.length, blocked: lastDrift.blockedColumns });
 }

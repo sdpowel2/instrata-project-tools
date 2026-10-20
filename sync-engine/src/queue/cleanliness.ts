@@ -16,7 +16,7 @@
  * countExceptions is pure (test/queue.test.mts); runCleanliness does the I/O, hourly.
  */
 import type { Db } from '../db/pool.ts';
-import { openTask } from '../db/store.ts';
+import { openTask, setEngineStatus } from '../db/store.ts';
 import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient, MondayItemRaw } from '../monday/client.ts';
 import { etDate } from '../monday/encode.ts';
@@ -55,6 +55,8 @@ export interface CleanResult {
   total: number;
   /** semantic key → blank count */
   byField: Record<string, number>;
+  /** semantic key → the items behind the count (for Hope's Dashboard). */
+  itemsByField: Record<string, { id: string; name: string }[]>;
   /** board → items in scope */
   inScope: Record<string, number>;
 }
@@ -70,7 +72,7 @@ export function countExceptions(input: {
   /** Current year (ET). */
   year: number;
 }): CleanResult {
-  const out: CleanResult = { total: 0, byField: {}, inScope: {} };
+  const out: CleanResult = { total: 0, byField: {}, itemsByField: {}, inScope: {} };
   for (const board of BOARDS) {
     const sc = input.scope[board];
     if (!sc) continue;
@@ -94,6 +96,7 @@ export function countExceptions(input: {
       const col = input.columns[r.semanticKey];
       if (!col?.columnId) continue;
       let n = 0;
+      const hits: { id: string; name: string }[] = [];
       for (const it of items) {
         if (!isBlank(col.type, valueOf(it, col.columnId))) continue;
         if (r.exemptWhen.not_on_programming_board) {
@@ -102,8 +105,10 @@ export function countExceptions(input: {
           if (!pn || !input.programmingNumbers.has(pn)) continue;
         }
         n++;
+        hits.push({ id: String(it.id), name: it.name });
       }
       out.byField[r.semanticKey] = n;
+      out.itemsByField[r.semanticKey] = hits;
       out.total += n;
     }
   }
@@ -166,6 +171,15 @@ export async function runCleanliness(deps: { db: Db; monday: MondayClient; cfg: 
   await deps.db.tx(async (q) => {
     await openTask(q, { op: 'open', taskType: 'data_cleanliness', dedupeKey: CLEANLINESS_KEY, title: text.title, details: text.details, sourceRef: {} }, null);
     await q.query(`update task set count_value = $2, monday_dirty = true where dedupe_key = $1 and count_value is distinct from $2`, [CLEANLINESS_KEY, result.total]);
+    // The lists behind the counts, for Hope's Dashboard (engine_status is readable by sync viewers).
+    const slug = await deps.monday.query<{ account: { slug: string } | null }>('query { account { slug } }').then((x) => x.account?.slug ?? null).catch(() => null);
+    await setEngineStatus(q, 'cleanliness_items', {
+      at: now.toISOString(), slug,
+      boards: Object.fromEntries(BOARDS.map((b) => [b, cfg.boards[b] ?? null])),
+      fields: Object.fromEntries(Object.entries(result.itemsByField).map(([k, list]) => [k, {
+        title: titles[k] ?? k, board: k.split('.')[0], count: result.byField[k], items: list.slice(0, 300),
+      }])),
+    });
     const today = etDate(now.toISOString());
     for (const r of rules) {
       if (result.byField[r.semanticKey] === undefined) continue;
