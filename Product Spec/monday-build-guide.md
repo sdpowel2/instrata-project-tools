@@ -102,7 +102,7 @@ Rebid, ON HOLD, Review, and In Progress do **not** move groups.
 
 ## 4. Hope's Queue board (new)
 
-> **Built Oct 20 by Claude through the API** (prod `18436259969`, sandbox `18436259977`, Pre-Qualification workspace). What's left by hand: **hide the Engine Key column** in the main view. Task Type labels differ from 4.1 below (Seth, Oct 19): Fix Mapping, Review, Sync Problem, Stage Check, Won – Handoff, Won – Open Job, Report, Triage, Data Cleanliness; the single Source link became two (monday item, Salesforce).
+> **Built Oct 20 by Claude through the API** (prod `18436259969`, sandbox `18436259977`, Pre-Qualification workspace). What's left by hand: **hide the Engine Key column** in the main view. Oct 20: a **Job Opening** group (after As Needed) holds Won – Open Job tasks until the Post-Sales Project Number appears; **Lee** is a member of the production board for that view. Task Type labels differ from 4.1 below (Seth, Oct 19): Fix Mapping, Review, Sync Problem, Stage Check, Won – Handoff, Won – Open Job, Report, Triage, Data Cleanliness; the single Source link became two (monday item, Salesforce).
 
 **When:** before Phase 1B.
 

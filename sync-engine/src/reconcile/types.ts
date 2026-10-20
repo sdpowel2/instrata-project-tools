@@ -192,6 +192,8 @@ export type TaskIntent =
       sourceRef: { board_key?: string; monday_item_id?: string; sf_opportunity_id?: string; mapping_table?: string };
       /** Present → grouped task: add this member (title/details become the base text). */
       member?: TaskMember;
+      /** Open only if no row exists for the key (never reopen or refresh). */
+      once?: boolean;
     }
   | {
       op: 'close';

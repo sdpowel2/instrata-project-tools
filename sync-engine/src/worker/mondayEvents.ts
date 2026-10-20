@@ -21,6 +21,7 @@ import { runWriteback } from '../writeback/run.ts';
 import { assignColumnIds, runAssignment, type AssignTrigger } from '../assign/run.ts';
 import { log } from '../log.ts';
 import { handleQueueEvent } from '../queue/run.ts';
+import { openWonTasksForItem } from '../queue/jobs.ts';
 import type { InboxRow } from './inbox.ts';
 
 export interface MondayEventDeps {
@@ -100,6 +101,16 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
       field: key, old_value: ev.previousValue, new_value: ev.value, actor: ev.userId,
       details: { column_id: ev.columnId },
     }], null);
+    // A person set a Pre-Sales item to Won → the Won tasks (the engine's own Won
+    // opens them in the planner). Opened once, so re-setting Won never reopens them.
+    const onPresales = deps.cfg.boards.presales !== null && String(deps.cfg.boards.presales) === String(ev.boardId);
+    const wonId = deps.cfg.planner.labels['presales.status.won'];
+    const labelOf = (v: unknown) => (v as { label?: { index?: number } } | null)?.label?.index ?? null;
+    if (key === 'presales.status' && onPresales && wonId !== undefined && wonId !== null
+        && labelOf(ev.value) === wonId && labelOf(ev.previousValue) !== wonId) {
+      const opened = await openWonTasksForItem(deps, ev.itemId, deps.now?.() ?? new Date());
+      return { kind: 'done', note: `logged; won tasks opened: ${opened}` };
+    }
     return { kind: 'done', note: 'logged' };
   }
   return { kind: 'done', note: 'monday-owned column' };

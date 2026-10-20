@@ -31,7 +31,7 @@ export interface QueueDeps {
   now?: () => Date;
 }
 
-const GROUPS: QueueGroup[] = ['today_overdue', 'this_week', 'as_needed', 'background', 'done'];
+const GROUPS: QueueGroup[] = ['today_overdue', 'this_week', 'as_needed', 'job_opening', 'background', 'done'];
 
 function labelsFor(cfg: RuntimeConfig, semanticKey: string): Record<string, number | null> {
   const prefix = `${semanticKey}.`;

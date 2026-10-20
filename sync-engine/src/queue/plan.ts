@@ -6,14 +6,14 @@
  *     (Seth 2026-10-19): Fix Mapping / Review / Sync Problem / Stage Check /
  *     Won – Handoff / Won – Open Job / Report / Triage / Data Cleanliness.
  *   - Group placement (Eastern time): Done if done; Background for the data
- *     cleanliness row; Today / Overdue when due today or earlier; This Week when
+ *     cleanliness row; Job Opening for open_job (waits on the contract); Today / Overdue when due today or earlier; This Week when
  *     due within 7 days; otherwise As Needed.
  */
 import { etDate } from '../monday/encode.ts';
 import type { ColumnWrite } from '../reconcile/types.ts';
 
 export type TaskStatus = 'not_started' | 'in_progress' | 'waiting' | 'done';
-export type QueueGroup = 'today_overdue' | 'this_week' | 'as_needed' | 'background' | 'done';
+export type QueueGroup = 'today_overdue' | 'this_week' | 'as_needed' | 'job_opening' | 'background' | 'done';
 
 /** The task row fields the board needs. */
 export interface QueueTask {
@@ -68,6 +68,8 @@ export function taskTypeLabelKey(taskType: string, dedupeKey: string): string {
 export function groupFor(t: Pick<QueueTask, 'status' | 'taskType' | 'dueAt'>, now: Date): QueueGroup {
   if (t.status === 'done') return 'done';
   if (t.taskType === 'data_cleanliness') return 'background';
+  // Confirmed to win, waiting for a contract: no due date, its own group (Seth 2026-10-20).
+  if (t.taskType === 'open_job') return 'job_opening';
   if (!t.dueAt) return 'as_needed';
   const due = etDate(t.dueAt);
   if (due <= etDate(now.toISOString())) return 'today_overdue';

@@ -25,7 +25,8 @@ let cfg: RuntimeConfig;
 beforeEach(async () => {
   db = await createTestDb();
   const q = migration('sync_hopes_queue.sql');
-  await db.pg.exec(`reset role; ${q} ${q} update config_settings set value = 'true'::jsonb where key = 'queue_push'; set role sync_engine;`);
+  const won = migration('sync_won_tasks.sql');
+  await db.pg.exec(`reset role; ${q} ${won} ${q} ${won} update config_settings set value = 'true'::jsonb where key = 'queue_push'; set role sync_engine;`);
   cfg = await loadRuntimeConfig(db);
 });
 afterEach(async () => { await db.close(); });
@@ -224,4 +225,67 @@ test('report tasks open once per period; Done stays done', async () => {
   assert.equal(t.task_type, 'report_pm_weekly');
   assert.equal(new Date(t.due_at).toISOString(), '2026-10-22T21:00:00.000Z');
   assert.equal(taskTypeLabelKey(t.task_type, 'report_pm_weekly:2026-W43'), 'report');
+});
+
+// ── Won tasks (Seth 2026-10-20) ──────────────────────────────────────────────
+import { businessDaysAfter } from '../src/queue/time.ts';
+import { wonTaskIntents } from '../src/queue/won.ts';
+import { closeOpenedJobs, openWonTasksForItem } from '../src/queue/jobs.ts';
+import { handleMondayEvent } from '../src/worker/mondayEvents.ts';
+import { insertLink } from '../src/db/store.ts';
+
+test('handoff due: 5 business days after Won at 5 pm ET (weekends skipped, DST-safe)', () => {
+  assert.equal(businessDaysAfter(new Date('2026-10-21T15:00:00Z'), 5).toISOString(), '2026-10-28T21:00:00.000Z', 'Wed → next Wed');
+  assert.equal(businessDaysAfter(new Date('2026-10-23T20:00:00Z'), 5).toISOString(), '2026-10-30T21:00:00.000Z', 'Fri → next Fri');
+  assert.equal(businessDaysAfter(new Date('2026-10-29T15:00:00Z'), 5).toISOString(), '2026-11-05T22:00:00.000Z', 'crosses the end of DST');
+  assert.equal(groupFor({ status: 'not_started', taskType: 'open_job', dueAt: null }, new Date()), 'job_opening');
+  assert.equal(cfg.planner.groups['queue.job_opening'], 'group_mm8a39ns');
+  assert.equal(cfg.settings.handoff_sla_business_days, 5);
+  assert.ok(wonTaskIntents('1', 'Acme', {}).every((t) => t.once));
+});
+
+test('a person setting Won opens both tasks once; the handoff is due in 5 business days', async () => {
+  const monday = fakeMonday();
+  monday.addItem('4242', {});
+  monday.items.get('4242')!.name = 'Acme HQ';
+  await insertLink(db, { mondayItemId: '4242', sfOpportunityId: '006AAA000000001', sfLineItemId: '00kAAA000000001', baseline: {} }, 'live');
+  const sf = fakeSalesforce().client;
+  const deps = { db, gate: createWriteGate('live', monday.client, sf), monday: monday.client, salesforce: sf, cfg, integrationUserId: '119228546', now: () => new Date('2026-10-21T15:00:00Z') };
+  const row = (value: unknown, previousValue: unknown) => ({
+    id: '1', source: 'monday', received_at: new Date().toISOString(), attempts: 1,
+    payload: { event: { type: 'update_column_value', boardId: 3477536693, pulseId: 4242, columnId: 'status9', userId: 33940282, value, previousValue, triggerUuid: 't' } },
+  }) as any;
+  const r = await handleMondayEvent(deps, row({ label: { index: 1, text: 'Won' } }, { label: { index: 0 } }));
+  assert.equal(r.kind === 'done' && r.note, 'logged; won tasks opened: 2');
+  const t = await rows(`select task_type, title, due_at, source_ref from task order by task_type`);
+  assert.deepEqual(t.map((x) => x.task_type), ['open_job', 'won_handoff']);
+  assert.equal(t[0].due_at, null, 'Open Job has no due date');
+  assert.equal(new Date(t[1].due_at).toISOString(), '2026-10-28T21:00:00.000Z');
+  assert.equal(t[1].title, 'Won – handoff: Acme HQ');
+  assert.equal(t[1].source_ref.sf_opportunity_id, '006AAA000000001');
+
+  await closeTask(db, 'won_handoff:4242', 'manual', null);
+  await handleMondayEvent(deps, row({ label: { index: 1 } }, { label: { index: 6 } }));
+  assert.equal((await rows(`select status from task where dedupe_key = 'won_handoff:4242'`))[0].status, 'done', 'Won again never reopens the sent handoff');
+  assert.equal(await openWonTasksForItem(deps, '4242'), 0);
+});
+
+test('Open Job closes itself once the Post-Sales item (matched by Project ID) has a Project Number', async () => {
+  const monday = fakeMonday();
+  monday.addItem('500', { text_mm2rcnav: JSON.stringify('INST-2026-0042') });
+  monday.addItem('501', { text_mm2rcnav: JSON.stringify('INST-2026-0043') });
+  for (const t of [...wonTaskIntents('500', 'A', { monday_item_id: '500' }), ...wonTaskIntents('501', 'B', { monday_item_id: '501' })]) await openTask(db, t, null);
+  let numbered = false;
+  monday.client.query = (async (_q: string, v: any) => {
+    assert.deepEqual([...v.v].sort(), ['INST-2026-0042', 'INST-2026-0043']);
+    return { items_page_by_column_values: { items: [
+      { column_values: [{ id: 'text_mm2rsn', text: 'INST-2026-0042' }, { id: 'text', text: numbered ? '26-1187' : '' }] },
+      { column_values: [{ id: 'text_mm2rsn', text: 'INST-2026-0043' }, { id: 'text', text: '' }] },
+    ] } };
+  }) as any;
+  assert.deepEqual(await closeOpenedJobs({ db, monday: monday.client, cfg }), { checked: 2, closed: 0 }, 'no job number yet');
+  numbered = true;
+  assert.deepEqual(await closeOpenedJobs({ db, monday: monday.client, cfg }), { checked: 2, closed: 1 });
+  const st = Object.fromEntries((await rows(`select dedupe_key, status, close_mode from task where task_type = 'open_job'`)).map((x) => [x.dedupe_key, [x.status, x.close_mode]]));
+  assert.deepEqual(st, { 'open_job:500': ['done', 'auto'], 'open_job:501': ['not_started', null] });
 });

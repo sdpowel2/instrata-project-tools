@@ -26,6 +26,8 @@ import { encodeColumnValues } from '../monday/encode.ts';
 import type { WriteGate } from '../writeGate.ts';
 import { CREATED_ITEM, type ReconcilePlan, type TaskIntent } from './types.ts';
 import { STAGE_KEY } from './normalize.ts';
+import { handoffSlaDays } from '../queue/won.ts';
+import { businessDaysAfter } from '../queue/time.ts';
 
 export interface ExecuteDeps {
   db: Db;
@@ -132,7 +134,10 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
       if (t.op === 'open') {
         const ref = { ...t.sourceRef, ...(t.sourceRef.monday_item_id ? { monday_item_id: resolve(t.sourceRef.monday_item_id) } : {}) };
         const member = t.member ? { ...t.member, label: resolveItemLabel(t.member.label) } : undefined;
-        await openTask(q, { ...t, dedupeKey: resolve(t.dedupeKey), sourceRef: ref, ...(member ? { member } : {}) }, correlationId);
+        // Won – handoff is due N business days after Won (Seth 2026-10-20).
+        const sla = t.taskType === 'won_handoff' ? handoffSlaDays(cfg.settings) : null;
+        const dueAt = sla ? businessDaysAfter(new Date(), sla).toISOString() : null;
+        await openTask(q, { ...t, dedupeKey: resolve(t.dedupeKey), sourceRef: ref, ...(member ? { member } : {}) }, correlationId, dueAt);
       } else {
         await closeTask(q, resolve(t.dedupeKey), 'auto', correlationId, t.memberId);
       }

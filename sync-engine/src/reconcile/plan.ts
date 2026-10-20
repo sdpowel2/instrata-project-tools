@@ -22,6 +22,7 @@
  * watermark sweep won't revisit it. When a map_* row changes, re-reconcile the
  * opportunities on open `sync_failure:unmapped_value:*` tasks for that field.
  */
+import { wonTaskIntents } from '../queue/won.ts';
 import {
   CREATED_ITEM,
   type Baseline,
@@ -480,11 +481,7 @@ function applyWon(ctx: Ctx, item: MondayItemSnapshot, fx: ItemEffects): void {
   // already set Won, the monday status webhook raised them (and re-raising here
   // would reopen tasks Hope already closed).
   if (setStatus(ctx, item, fx, 'won') !== 'written') return;
-  const ref = { board_key: 'presales', monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id };
-  ctx.tasks.push(
-    { op: 'open', taskType: 'won_handoff', dedupeKey: `won_handoff:${item.id}`, title: `Won – handoff: ${ctx.opp.Name}`, details: 'Pre-sales → post-sales handoff package.', sourceRef: ref },
-    { op: 'open', taskType: 'open_job', dedupeKey: `open_job:${item.id}`, title: `Won – open job: ${ctx.opp.Name}`, details: 'Open the job; closes when the post-sales item has a Project Number.', sourceRef: ref },
-  );
+  ctx.tasks.push(...wonTaskIntents(item.id, ctx.opp.Name, { board_key: 'presales', monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id }));
 }
 
 /**

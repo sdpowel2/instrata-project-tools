@@ -12,6 +12,9 @@
 import type { Queryable } from '../db/pool.ts';
 import { openTask } from '../db/store.ts';
 import type { TaskType } from '../reconcile/types.ts';
+import { addDays, zonedParts, zonedTime } from './time.ts';
+
+export { zonedTime } from './time.ts';
 
 export interface WeeklySchedule { weekday: number; due_time: string; tz: string } // weekday: ISO, 1 = Monday
 export interface MonthlySchedule { business_day: number; due_time: string; tz: string }
@@ -26,28 +29,6 @@ export interface RecurringTask {
 
 const TZ_DEFAULT = 'America/New_York';
 
-/** Calendar date + ISO weekday of an instant in a time zone. */
-function zonedParts(at: Date, tz: string): { y: number; m: number; d: number; isoWeekday: number } {
-  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short' })
-    .formatToParts(at).map((x) => [x.type, x.value]));
-  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday) + 1;
-  return { y: Number(p.year), m: Number(p.month), d: Number(p.day), isoWeekday: wd };
-}
-
-/** Wall-clock time in `tz` → UTC instant (handles DST). */
-export function zonedTime(y: number, m: number, d: number, hhmm: string, tz: string): Date {
-  const [hh, mm] = hhmm.split(':').map(Number);
-  const wanted = Date.UTC(y, m - 1, d, hh, mm);
-  let guess = wanted;
-  for (let i = 0; i < 2; i++) {
-    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' })
-      .formatToParts(new Date(guess)).map((x) => [x.type, x.value]));
-    const shown = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute));
-    guess += wanted - shown;
-  }
-  return new Date(guess);
-}
-
 /** ISO week key 'YYYY-Www' of a calendar date. */
 export function isoWeekKey(y: number, m: number, d: number): string {
   const date = new Date(Date.UTC(y, m - 1, d));
@@ -58,10 +39,6 @@ export function isoWeekKey(y: number, m: number, d: number): string {
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
 }
 
-const addDays = (y: number, m: number, d: number, n: number) => {
-  const t = new Date(Date.UTC(y, m - 1, d + n));
-  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
-};
 const monthName = (y: number, m: number) => new Date(Date.UTC(y, m - 1, 15)).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const shortDate = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d)).toLocaleString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 

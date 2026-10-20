@@ -143,6 +143,7 @@ export async function openTask(q: Queryable, t: OpenIntent, correlationId: strin
   const { rows } = await q.query<TaskRow>(
     'select id, status, title, details, source_ref from task where dedupe_key = $1 for update', [t.dedupeKey]);
   const existing = rows[0];
+  if (t.once && existing) return 'unchanged';
 
   let title = t.title;
   let details = t.details;

@@ -43,6 +43,7 @@ import { buildDiffReport, reportCsv } from './report/run.ts';
 import { firstPassCsv, retryUnmappedEngineers, runEstimatorFirstPass } from './assign/run.ts';
 import { syncQueueBoard } from './queue/run.ts';
 import { openRecurringTasks } from './queue/recurring.ts';
+import { closeOpenedJobs } from './queue/jobs.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -101,6 +102,9 @@ async function sweep(): Promise<SweepResult | undefined> {
       const retried = await retryUnmappedEngineers({ db, gate, monday, salesforce, cfg, salesforceLoginUrl: env.salesforce.loginUrl });
       if (retried > 0) log.info('estimator mapping retry', { items: retried });
     }
+    // Won – open job tasks close once the Post-Sales copy has a Project Number.
+    const openJobs = await closeOpenedJobs({ db, monday, cfg }).catch((e) => ({ checked: 0, closed: 0, skipped: errMessage(e) }));
+    if (openJobs.closed > 0 || openJobs.skipped) log.info('open-job check', { ...openJobs });
   }
   return result;
 }
