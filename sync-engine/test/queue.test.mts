@@ -60,6 +60,10 @@ test('group placement in Eastern time', () => {
 test('Project only for tasks about one deal; status labels map both ways', () => {
   assert.equal(projectFrom({ title: 'Assign Erik on the Pre-Sales Summary: AVSS Test Opp 5', sourceRef: { monday_item_id: '1' } }), 'AVSS Test Opp 5');
   assert.equal(projectFrom({ title: 'Map Pre-Sales Engineer: Erik', sourceRef: { mapping_table: 'map_estimator' } }), '');
+  // Staging, Oct 20: these titles don't end in a deal name.
+  assert.equal(projectFrom({ title: "Price/GM% not sent to Salesforce: item 1 isn't linked", sourceRef: { monday_item_id: '1' }, taskType: 'writeback_no_link', dedupeKey: 'writeback_no_link:1' }), '');
+  assert.equal(projectFrom({ title: 'Config missing: presales.win_loss_notes', sourceRef: { monday_item_id: '1' }, taskType: 'sync_failure', dedupeKey: 'sync_failure:config_missing:presales:presales.win_loss_notes' }), '');
+  assert.equal(projectFrom({ title: 'Multiple AV products: The Beacon', sourceRef: { sf_opportunity_id: '006' }, taskType: 'sync_failure', dedupeKey: 'sync_failure:multi_av_product:006:line_items' }), 'The Beacon');
   const labels = { not_started: 5, in_progress: 0, waiting: 3, done: 1 };
   assert.equal(statusFromLabel(labels, 3), 'waiting');
   assert.equal(statusFromLabel(labels, 0), 'in_progress', 'label id 0 is a real label');

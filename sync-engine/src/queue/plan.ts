@@ -75,9 +75,14 @@ export function groupFor(t: Pick<QueueTask, 'status' | 'taskType' | 'dueAt'>, no
   return 'as_needed';
 }
 
+/** Task kinds whose title doesn't end in a deal name ("…: item 123 isn't linked", "Config missing: presales.x"). */
+const NO_PROJECT_KINDS = new Set(['config_missing', 'config_drift', 'webhook_error', 'backfill', 'unmapped_value', 'unmapped_stage', 'unmapped_engineer', 'due_date_differs']);
+
 /** "Assign Erik on the Pre-Sales Summary: AVSS Test Opp 5" → "AVSS Test Opp 5" (only for tasks about one deal). */
-export function projectFrom(t: Pick<QueueTask, 'title' | 'sourceRef'>): string {
+export function projectFrom(t: Pick<QueueTask, 'title' | 'sourceRef'> & Partial<Pick<QueueTask, 'taskType' | 'dedupeKey'>>): string {
   if (!t.sourceRef.monday_item_id && !t.sourceRef.sf_opportunity_id) return '';
+  if (t.taskType === 'writeback_no_link') return '';
+  if (t.taskType === 'sync_failure' && NO_PROJECT_KINDS.has(t.dedupeKey?.split(':')[1] ?? '')) return '';
   const at = t.title.indexOf(': ');
   return at >= 0 ? t.title.slice(at + 2) : '';
 }
