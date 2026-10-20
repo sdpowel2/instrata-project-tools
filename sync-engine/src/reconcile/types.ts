@@ -170,7 +170,8 @@ export const CREATED_ITEM = '$created';
 
 export type TaskType =
   | 'sync_failure' | 'writeback_no_link' | 'writeback_quantity'
-  | 'stage_check_delivered' | 'stage_check_contract' | 'won_handoff' | 'open_job';
+  | 'stage_check_delivered' | 'stage_check_contract' | 'won_handoff' | 'open_job'
+  | 'report_presales_weekly' | 'report_pm_weekly' | 'report_avss_monthly' | 'triage' | 'data_cleanliness';
 
 /**
  * One opportunity waiting on a grouped task. Grouped tasks (one per missing

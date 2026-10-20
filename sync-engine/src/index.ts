@@ -42,6 +42,7 @@ import { requeueLinked } from './schedule/requeue.ts';
 import { buildDiffReport, reportCsv } from './report/run.ts';
 import { firstPassCsv, retryUnmappedEngineers, runEstimatorFirstPass } from './assign/run.ts';
 import { syncQueueBoard } from './queue/run.ts';
+import { openRecurringTasks } from './queue/recurring.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -116,8 +117,11 @@ async function queuePush(): Promise<void> {
   if (queueBusy) return;
   queueBusy = true;
   try {
-    const r = await syncQueueBoard({ db, gate, monday, cfg: await getConfig(), salesforceLoginUrl: env.salesforce.loginUrl });
-    if (r.created || r.updated || r.moved || r.failed) log.info('queue push', { ...r });
+    const cfg = await getConfig();
+    // Report tasks (open once per period) go out with the same push.
+    const reports = cfg.settings.queue_push === true ? await openRecurringTasks(db, cfg.settings, new Date()) : 0;
+    const r = await syncQueueBoard({ db, gate, monday, cfg, salesforceLoginUrl: env.salesforce.loginUrl });
+    if (reports || r.created || r.updated || r.moved || r.failed) log.info('queue push', { reportsOpened: reports, ...r });
   } finally {
     queueBusy = false;
   }

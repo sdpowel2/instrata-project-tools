@@ -178,3 +178,50 @@ test("Hope's own items are only logged; queue_push off touches nothing; dry run 
   cfg = await loadRuntimeConfig(db);
   assert.equal((await syncQueueBoard(h.deps())).skipped, 'queue_push is off');
 });
+
+// ── Recurring report tasks (Seth 2026-10-20) ─────────────────────────────────
+import { isoWeekKey, openRecurringTasks, recurringTasks, zonedTime } from '../src/queue/recurring.ts';
+
+const SCHED = {
+  report_pm_weekly: { weekday: 4, due_time: '17:00', tz: 'America/New_York' },
+  report_presales_weekly: { weekday: 5, due_time: '17:00', tz: 'America/New_York' },
+  report_avss_monthly: { business_day: 3, due_time: '17:00', tz: 'America/New_York' },
+};
+
+test('report schedules: Thursday / Friday 5 pm ET weekly, 3rd business day monthly; passed periods skipped', () => {
+  assert.equal(zonedTime(2026, 10, 23, '17:00', 'America/New_York').toISOString(), '2026-10-23T21:00:00.000Z', 'EDT');
+  assert.equal(zonedTime(2026, 12, 4, '17:00', 'America/New_York').toISOString(), '2026-12-04T22:00:00.000Z', 'EST');
+  assert.equal(isoWeekKey(2026, 10, 19), '2026-W43');
+  assert.equal(isoWeekKey(2027, 1, 1), '2026-W53');
+
+  // Monday Oct 19 2026, 9:00 ET: both weeklies for W43; the monthly (due Oct 5) already passed.
+  const mon = recurringTasks(SCHED, new Date('2026-10-19T13:00:00Z'));
+  assert.deepEqual(mon.map((t) => [t.dedupeKey, t.dueAt]), [
+    ['report_pm_weekly:2026-W43', '2026-10-22T21:00:00.000Z'],
+    ['report_presales_weekly:2026-W43', '2026-10-23T21:00:00.000Z'],
+  ]);
+  assert.match(mon[1].title, /week of Oct 19/);
+
+  // Friday 6 pm ET: both weeklies are past due → nothing new this week.
+  assert.deepEqual(recurringTasks(SCHED, new Date('2026-10-23T22:00:00Z')), []);
+
+  // Nov 2 2026 (Mon) → 3rd business day is Wed Nov 4; the report is for October.
+  const nov = recurringTasks({ report_avss_monthly: SCHED.report_avss_monthly }, new Date('2026-11-02T14:00:00Z'));
+  assert.deepEqual(nov.map((t) => [t.dedupeKey, t.dueAt]), [['report_avss_monthly:2026-11', '2026-11-04T22:00:00.000Z']]);
+  assert.match(nov[0].title, /October 2026/);
+  // Aug 1 2026 is a Saturday → business days Mon 3, Tue 4, Wed 5.
+  assert.equal(recurringTasks({ report_avss_monthly: SCHED.report_avss_monthly }, new Date('2026-08-01T14:00:00Z'))[0].dueAt, '2026-08-05T21:00:00.000Z');
+  assert.deepEqual(recurringTasks({ report_presales_weekly: null }, new Date()), [], 'null schedule = off');
+});
+
+test('report tasks open once per period; Done stays done', async () => {
+  const monday = new Date('2026-10-19T13:00:00Z');
+  assert.equal(await openRecurringTasks(db, SCHED, monday), 2);
+  assert.equal(await openRecurringTasks(db, SCHED, monday), 0, 'already there');
+  await closeTask(db, 'report_presales_weekly:2026-W43', 'manual', null);
+  assert.equal(await openRecurringTasks(db, SCHED, new Date('2026-10-21T13:00:00Z')), 0, 'sent → not reopened');
+  const t = (await rows(`select task_type, status, due_at from task where dedupe_key = 'report_pm_weekly:2026-W43'`))[0];
+  assert.equal(t.task_type, 'report_pm_weekly');
+  assert.equal(new Date(t.due_at).toISOString(), '2026-10-22T21:00:00.000Z');
+  assert.equal(taskTypeLabelKey(t.task_type, 'report_pm_weekly:2026-W43'), 'report');
+});

@@ -834,6 +834,7 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 -->
 
 ### 2026-10-20 — Hope's Queue board (sync engine pushes tasks to monday)
+- **Report tasks:** the queue now opens Hope's recurring report tasks: PM weekly (Thursday 5 pm ET), weekly pre-sales report by salesperson (Friday 5 pm ET) and the AVSS monthly report to Lee (3rd business day, 5 pm ET). One per week / month; Done means sent. Migration `sync_report_schedules.sql`.
 - New private monday boards **Hope's Queue** (`18436259969`) and **Hope's Queue - Sandbox** (`18436259977`) in the Pre-Qualification workspace, built through the API with fixed column ids. The engine (`sync-engine/src/queue/`) keeps them in step with the `task` table every minute: creates items for open tasks, pushes changes, and places items in Today / Overdue, This Week, As Needed, Background or Done (Eastern time). Hope's Status edits come back by webhook (Done closes the task, moving off Done reopens it, archiving an open item closes it). Task Type labels group the engine's task kinds by what Hope does (Fix Mapping, Review, Sync Problem, …). Setting `queue_push` (production off until the rollout). Migration `sync_hopes_queue.sql`.
 
 ### 2026-10-19 — Sync: Triage engineer pick (engineers off the intake boards)
