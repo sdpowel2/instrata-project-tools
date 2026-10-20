@@ -22,6 +22,10 @@ begin
 
     execute format($q$update %I.config_boards set monday_board_id = 9358385694, title = 'AV Programming Project Summary', updated_at = now()
                       where board_key = 'programming'$q$, s);
+    -- The sandbox had Post-Sales blank so it could never write there; the engine only
+    -- READS Post-Sales (cleanliness, the Open Job check), so point it at the real board.
+    execute format($q$update %I.config_boards set monday_board_id = 3523133226, updated_at = now()
+                      where board_key = 'postsales' and monday_board_id is null$q$, s);
 
     execute format($q$
       insert into %I.config_groups (board_key, group_key, monday_group_id, title) values

@@ -121,7 +121,7 @@ export function cleanlinessText(r: CleanResult, columns: Record<string, { title?
   }
   return {
     title: `Data cleanliness: ${r.total} blank required field${r.total === 1 ? '' : 's'}`,
-    details: `${lines.join('\n')}\n\nCounts active work only. Use each board's "Data Cleanliness" view to find the items, and the Request Update button to ping the engineer. Refreshed hourly.`,
+    details: `${lines.join('\n')}\n\nCounts active work only (Pre-Sales: Follow Up + this year's Won; Post-Sales: In Progress, Install, Close Out; Programming: On Radar, Active, Close Out). Refreshed hourly. The item list behind each count is coming to Hope's Dashboard in Project Tools.`,
   };
 }
 
