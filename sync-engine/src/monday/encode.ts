@@ -27,6 +27,12 @@ export function encodeColumnValue(v: MondayValue): unknown {
       return { text: v.text };
     case 'people':
       return { personsAndTeams: v.userIds.map((id) => ({ id: Number(id), kind: 'person' })) };
+    case 'link':
+      return v.url ? { url: v.url, text: v.text } : {};
+    case 'numbers':
+      return v.value === null ? '' : String(v.value);
+    case 'date':
+      return v.date ? { date: v.date } : {};
   }
 }
 
@@ -129,6 +135,10 @@ export function mondayValueMatches(v: MondayValue, raw: string | null | undefine
       return readText(raw) === v.text;
     case 'people':
       return readPersonIds(raw).join(',') === v.userIds.join(',');
+    case 'link':
+    case 'numbers':
+    case 'date':
+      return false; // queue-board columns: the engine always writes them
   }
 }
 

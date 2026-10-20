@@ -15,7 +15,8 @@
  *
  * Background: inbox drain (every 2 s, and immediately on ingest), Salesforce
  * safety sweep (hourly, then a retry of items waiting on an engineer mapping),
- * label drift check (hourly), monday webhook registration (at boot).
+ * label drift check (hourly), Hope's Queue board push + group placement (every
+ * minute), monday webhook registration (at boot).
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadEnv } from './env.ts';
@@ -40,6 +41,7 @@ import { runBackfill } from './backfill/run.ts';
 import { requeueLinked } from './schedule/requeue.ts';
 import { buildDiffReport, reportCsv } from './report/run.ts';
 import { firstPassCsv, retryUnmappedEngineers, runEstimatorFirstPass } from './assign/run.ts';
+import { syncQueueBoard } from './queue/run.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -107,6 +109,18 @@ async function refreshDrift(): Promise<void> {
   cached = null;
   jobs.lastDrift = new Date().toISOString();
   if (lastDrift.findings.length > 0) log.warn('config drift', { findings: lastDrift.findings.length, blocked: lastDrift.blockedColumns });
+}
+
+let queueBusy = false;
+async function queuePush(): Promise<void> {
+  if (queueBusy) return;
+  queueBusy = true;
+  try {
+    const r = await syncQueueBoard({ db, gate, monday, cfg: await getConfig(), salesforceLoginUrl: env.salesforce.loginUrl });
+    if (r.created || r.updated || r.moved || r.failed) log.info('queue push', { ...r });
+  } finally {
+    queueBusy = false;
+  }
 }
 
 function every(ms: number, name: string, fn: () => Promise<unknown>): NodeJS.Timeout {
@@ -257,7 +271,7 @@ async function main() {
   // monday sends a challenge to the URL during registration, so register after listen().
   const cfg = await getConfig();
   const url = `${env.publicBaseUrl}/webhooks/monday/${env.monday.webhookPathSecret}`;
-  for (const key of PRESALES_BOARD_KEYS) {
+  for (const key of [...PRESALES_BOARD_KEYS, 'queue']) {
     const boardId = cfg.boards[key];
     if (!boardId) continue;
     ensurePresalesWebhooks(db, monday, boardId, url)
@@ -268,6 +282,7 @@ async function main() {
   timers.push(every(2_000, 'inbox drain', drain));
   timers.push(every(60 * 60_000, 'sweep', sweep));
   timers.push(every(60 * 60_000, 'drift check', refreshDrift));
+  timers.push(every(60_000, 'queue push', queuePush));
   setTimeout(() => void sweep().catch((e) => log.error('sweep failed', { error: errMessage(e) })), 60_000);
 
   const shutdown = (signal: string) => {

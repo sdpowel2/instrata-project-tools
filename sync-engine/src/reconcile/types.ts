@@ -155,7 +155,10 @@ export type MondayValue =
   | { type: 'datetime'; iso: string } // UTC instant, passed through (spec §4.4)
   | { type: 'text'; text: string }
   | { type: 'long_text'; text: string }
-  | { type: 'people'; userIds: string[] }; // monday user ids
+  | { type: 'people'; userIds: string[] } // monday user ids
+  | { type: 'link'; url: string; text: string } // url '' clears
+  | { type: 'numbers'; value: number | null }
+  | { type: 'date'; date: string | null }; // YYYY-MM-DD (ET day); null clears
 
 export interface ColumnWrite {
   semanticKey: string;

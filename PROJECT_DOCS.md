@@ -833,6 +833,9 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-20 — Hope's Queue board (sync engine pushes tasks to monday)
+- New private monday boards **Hope's Queue** (`18436259969`) and **Hope's Queue - Sandbox** (`18436259977`) in the Pre-Qualification workspace, built through the API with fixed column ids. The engine (`sync-engine/src/queue/`) keeps them in step with the `task` table every minute: creates items for open tasks, pushes changes, and places items in Today / Overdue, This Week, As Needed, Background or Done (Eastern time). Hope's Status edits come back by webhook (Done closes the task, moving off Done reopens it, archiving an open item closes it). Task Type labels group the engine's task kinds by what Hope does (Fix Mapping, Review, Sync Problem, …). Setting `queue_push` (production off until the rollout). Migration `sync_hopes_queue.sql`.
+
 ### 2026-10-19 — Sync: Triage engineer pick (engineers off the intake boards)
 - Engineers are no longer members of the Pre-Qualification and Triage boards, so they can't start work before a deal is triaged. On Triage the Pre-Sales Engineer people column is replaced by a single-select dropdown (fixed id `engineer_pick`); the people column is removed from Pre-Qualification too. At R7 (Bid + a pick) the engine moves the item to the Pre-Sales Summary and assigns the real people column there, which is when the engineer gets monday's notification; the Salesforce Estimator and rep email follow in the same step. `map_estimator.triage_label_id` links each dropdown label to an engineer; an unmapped label keeps the item on Triage and raises a task for Hope. Migration `sync_triage_engineer_pick.sql`.
 - **Estimator refinements (Oct 16):** a current Estimator who is one of the item's engineers is kept, and only removing the engineer in monday clears Salesforce.

@@ -1,6 +1,6 @@
 /**
- * Routing for monday webhook events (pre-sales board; Hope's Queue board events
- * arrive with the queue engine in Phase 1B).
+ * Routing for monday webhook events: the three pre-sales boards, and Hope's Queue
+ * (her status edits; src/queue).
  *
  *   - Echoes of the engine's own writes (integration user) → ignored (spec §4.7).
  *   - Quoted Price / GM % changed by a person → writeback, debounced (spec §5).
@@ -20,6 +20,7 @@ import type { WriteGate } from '../writeGate.ts';
 import { runWriteback } from '../writeback/run.ts';
 import { assignColumnIds, runAssignment, type AssignTrigger } from '../assign/run.ts';
 import { log } from '../log.ts';
+import { handleQueueEvent } from '../queue/run.ts';
 import type { InboxRow } from './inbox.ts';
 
 export interface MondayEventDeps {
@@ -52,6 +53,13 @@ function semanticKeyFor(cfg: RuntimeConfig, columnId: string): string | null {
 export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): Promise<MondayOutcome> {
   const ev = parseMondayEvent(row.payload);
   if (!ev) return { kind: 'done', note: 'unparseable' };
+  // Hope's Queue board: her status edits (and archives) flow back into the task table.
+  const queueBoard = deps.cfg.boards.queue;
+  if (queueBoard && String(ev.boardId) === String(queueBoard)) {
+    if (ev.userId === deps.integrationUserId) return { kind: 'done', note: 'own echo' };
+    const note = await handleQueueEvent({ ...deps, salesforceLoginUrl: deps.salesforceLoginUrl ?? '' }, ev);
+    return { kind: 'done', note: `queue: ${note}` };
+  }
   // The Pre-Sales Summary plus the intake boards (same column ids on all three).
   const salesBoards = PRESALES_BOARD_KEYS.map((k) => deps.cfg.boards[k]).filter((id): id is string => !!id).map(String);
   if (!ev.boardId || !salesBoards.includes(String(ev.boardId))) return { kind: 'done', note: 'not a pre-sales board' };
