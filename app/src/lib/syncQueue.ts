@@ -1,4 +1,4 @@
-// Hope's Queue + Sync Admin — client data layer for the Salesforce ↔ monday sync
+// Coordinator page (sync task queue + mappings) — client data layer for the Salesforce ↔ monday sync
 // engine's tables (supabase/migrations/add_sync_and_queue.sql and the sync_*.sql
 // migrations). Readable by admins and ops coordinators only (RLS: is_sync_viewer()).
 // The app may change a task's STATUS (column grant) and edit the map_* tables;

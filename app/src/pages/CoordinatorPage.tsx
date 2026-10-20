@@ -1,9 +1,10 @@
-// Hope's Queue — the Project Tools side of the Salesforce ↔ monday sync engine's
-// task queue (plan §6.1/§6.2; Seth 2026-10-20). Hope works the queue on the
-// "Hope's Queue" monday board; this page adds what monday can't show: KPI tiles,
-// the cleanliness item lists, and the Mappings screen she uses to fix "Fix Mapping"
-// tasks. Status changes here sync to monday within a minute (and vice versa).
-// Visible to admins and ops coordinators (profiles.is_ops_coordinator).
+// Coordinator — the Project Tools side of the Salesforce ↔ monday sync engine's
+// task queue (plan §6.1/§6.2; Seth 2026-10-20). The engineering workflow
+// coordinator(s) work the queue on the "Hope's Queue" monday board; this page adds
+// what monday can't show: KPI tiles, the cleanliness item lists, and the Mappings
+// screen used to fix "Fix Mapping" tasks. Status changes here sync to monday within
+// a minute (and vice versa). Role-based, not person-based: visible to admins and to
+// every profile with profiles.is_ops_coordinator (named "Coordinator", Seth 2026-10-20).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight, ExternalLink, Loader2, Plus, RefreshCw, Save } from 'lucide-react';
@@ -16,7 +17,7 @@ import {
   type EngineInfo, type EstimatorRow, type LabelMapRow, type LabelMapTable, type QueueTask, type SyncSchema, type TaskStatus,
 } from '../lib/syncQueue';
 
-const SCHEMA_KEY = 'hopesQueue.schema';
+const SCHEMA_KEY = 'coordinator.schema';
 type Tab = 'queue' | 'cleanliness' | 'mappings';
 
 function readSchemaPref(): SyncSchema {
@@ -35,7 +36,7 @@ const fmtDue = (iso: string | null) => iso
   ? new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ' ET'
   : '—';
 
-export function HopesQueuePage() {
+export function CoordinatorPage() {
   const { isAdmin, isSyncViewer } = useAuth();
   const [schema, setSchema] = useState<SyncSchema>(isAdmin ? readSchemaPref() : 'public');
   const [tab, setTab] = useState<Tab>('queue');
@@ -78,7 +79,7 @@ export function HopesQueuePage() {
     <div className="p-6 max-w-[1400px] mx-auto">
       <PageHeader
         eyebrow="Operations"
-        title="Hope's Queue"
+        title="Coordinator"
         subtitle="Sync tasks, data cleanliness, and the mappings behind them. Status changes sync to the monday board within a minute."
         actions={
           <>

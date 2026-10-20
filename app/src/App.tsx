@@ -27,7 +27,7 @@ import { ScheduleMilestonesPage } from './pages/operations/ScheduleMilestones';
 import { PurchasingListPage } from './pages/operations/PurchasingList';
 import { PurchasingDetailPage } from './pages/operations/PurchasingDetail';
 import { DocumentationPage } from './pages/DocumentationPage';
-import { HopesQueuePage } from './pages/HopesQueuePage';
+import { CoordinatorPage } from './pages/CoordinatorPage';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -122,7 +122,7 @@ export default function App() {
               <Route path="directory" element={<DirectoryPage />} />
               <Route path="documentation" element={<DocumentationPage />} />
               <Route path="settings" element={<SettingsPage />} />
-              <Route path="ops-queue" element={<HopesQueuePage />} />
+              <Route path="ops-queue" element={<CoordinatorPage />} />
 
               {/* Routes below are not exposed in the sidebar but kept
                   reachable so the code remains warm and any deep links

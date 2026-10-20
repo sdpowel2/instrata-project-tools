@@ -75,7 +75,7 @@ export function Layout() {
           <SidebarLink to={PROJECTS_NAV.to} icon={PROJECTS_NAV.icon} label={PROJECTS_NAV.label} />
           <SidebarLink to={PRODUCTS_NAV.to} icon={PRODUCTS_NAV.icon} label={PRODUCTS_NAV.label} />
           <SidebarLink to="/directory" icon={BookUser} label="Directory" />
-          {isSyncViewer && <SidebarLink to="/ops-queue" icon={ListChecks} label="Hope's Queue" />}
+          {isSyncViewer && <SidebarLink to="/ops-queue" icon={ListChecks} label="Coordinator" />}
           <SidebarLink
             to="/documentation"
             icon={Library}
