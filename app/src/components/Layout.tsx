@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser, NotebookPen,
+  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser, NotebookPen, ListChecks,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -45,7 +45,7 @@ const operationsTools = [
 export function Layout() {
   const { projectId } = useParams();
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
-  const { user, signOut, isAdmin } = useAuth();
+  const { user, signOut, isAdmin, isSyncViewer } = useAuth();
   const pendingCutsheets = usePendingCutsheetCount(isAdmin);
   const { pathname } = useLocation();
   const docCrumbs = useDocNav((s) => s.crumbs);
@@ -75,6 +75,7 @@ export function Layout() {
           <SidebarLink to={PROJECTS_NAV.to} icon={PROJECTS_NAV.icon} label={PROJECTS_NAV.label} />
           <SidebarLink to={PRODUCTS_NAV.to} icon={PRODUCTS_NAV.icon} label={PRODUCTS_NAV.label} />
           <SidebarLink to="/directory" icon={BookUser} label="Directory" />
+          {isSyncViewer && <SidebarLink to="/ops-queue" icon={ListChecks} label="Coordinator" />}
           <SidebarLink
             to="/documentation"
             icon={Library}

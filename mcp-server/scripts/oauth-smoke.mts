@@ -139,8 +139,15 @@ try {
 
   const list = await mcp(access1, 'tools/list');
   const tools = ((list.json.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name).sort();
-  const WRITE = ['attach_cutsheet', 'create_submittal', 'detach_cutsheet', 'populate_submittal_from_bom', 'update_submittal'];
-  assert(`B4 tools/list → ${tools.length} tools incl. all 5 write tools`, list.status === 200 && tools.length === 18 && WRITE.every((w) => tools.includes(w)), tools);
+  // Twin of the mcp:write entries in src/oauth/scopes.ts (submittal + project wiki).
+  const WRITE = [
+    'attach_cutsheet', 'create_submittal', 'detach_cutsheet', 'populate_submittal_from_bom', 'update_submittal',
+    'upsert_project_wiki', 'upsert_project_room', 'set_room_status', 'append_room_decision', 'set_room_labor',
+    'raise_room_question', 'answer_room_question', 'link_room_bom_lines', 'link_room_files',
+  ];
+  const READ_COUNT = 19; // mcp:read tools in src/oauth/scopes.ts
+  const ALL_COUNT = READ_COUNT + WRITE.length;
+  assert(`B4 tools/list → ${tools.length} tools incl. all ${WRITE.length} write tools`, list.status === 200 && tools.length === ALL_COUNT && WRITE.every((w) => tools.includes(w)), tools);
 
   // ── B5: refresh rotation + reuse detection ─────────────────────────────────
   const t2 = await form('/oauth/token', { grant_type: 'refresh_token', client_id: clientId, refresh_token: refresh1 });
@@ -156,7 +163,7 @@ try {
   const access3 = narrowed.json.access_token as string;
   const listNarrow = await mcp(access3, 'tools/list');
   const narrowTools = ((listNarrow.json.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
-  assert('  narrowed token hides write tools', narrowTools.length === 13 && !WRITE.some((w) => narrowTools.includes(w)), narrowTools);
+  assert('  narrowed token hides write tools', narrowTools.length === READ_COUNT && !WRITE.some((w) => narrowTools.includes(w)), narrowTools);
 
   const widen = await form('/oauth/token', { grant_type: 'refresh_token', client_id: clientId, refresh_token: refresh3, scope: 'mcp:read mcp:write offline_access' });
   assert('  refresh asking for MORE scope → invalid_scope', widen.status === 400 && widen.json.error === 'invalid_scope', widen.json);
@@ -175,7 +182,7 @@ try {
   const access4 = t4.json.access_token as string;
   const list4 = await mcp(access4, 'tools/list');
   const roTools = ((list4.json.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
-  assert('  read-only tools/list → 13 tools, no write tools', roTools.length === 13 && !WRITE.some((w) => roTools.includes(w)), roTools);
+  assert(`  read-only tools/list → ${READ_COUNT} tools, no write tools`, roTools.length === READ_COUNT && !WRITE.some((w) => roTools.includes(w)), roTools);
   const call = await mcp(access4, 'tools/call', { name: 'create_submittal', arguments: { project_id: '00000000-0000-0000-0000-000000000000', submitted_to: 'x' } });
   // The SDK reports a disabled tool as an isError tool result ("MCP error -32602:
   // Tool X disabled"), which is what MCP clients surface best. Either shape is
