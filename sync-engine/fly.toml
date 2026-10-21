@@ -1,0 +1,43 @@
+# fly.toml — Instrata sync engine (Salesforce ↔ monday sync + Hope's Queue).
+# Spec: Product Spec/project-tools-sync-and-queue-spec.md
+#
+# Two apps share this config:
+#   instrata-sync-engine-staging   sandbox Salesforce + board copy, DB_SCHEMA=sync_sandbox
+#   instrata-sync-engine           production, DB_SCHEMA=public
+# Deploy from this directory:  fly deploy -a <app>   (CI workflow added once the apps exist)
+#
+# Secrets (runtime env, set with `fly secrets set -a <app> ...`) — see src/env.ts for the list.
+#
+# Exactly ONE always-on machine: the engine runs in-process schedulers (sweeps,
+# inbox drain, writeback debounce), so it must never auto-stop, and a second
+# machine would only contend for the advisory locks.
+app = "instrata-sync-engine"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Non-secret config shared by staging and production.
+[env]
+  # "AV Integrations" monday user (avsfintegration@instrata.com) — the identity the engine
+  # writes as; webhook events from this user are its own echoes and are ignored (spec §4.7).
+  MONDAY_INTEGRATION_USER_ID = "119228546"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

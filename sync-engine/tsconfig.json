@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    // Source imports use .ts extensions so the pure modules run directly under
+    // Node's type stripping (scripts/verify-sync-*.mts); tsc rewrites them to .js.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    // Node type stripping can't handle enums / namespaces / parameter properties.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*"]
+}
