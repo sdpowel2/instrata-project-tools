@@ -6,7 +6,9 @@
  * through (and is still journaled, for logging).
  *
  * Webhook registration is infrastructure, not a sync write, and deliberately
- * bypasses the gate — dry run needs to receive monday events too.
+ * bypasses the gate — dry run needs to receive monday events too. The Hope's
+ * Queue push gets its own always-live gate (index.ts): that board is the
+ * engine's own, switched by the queue_push setting.
  */
 import type { SyncMode } from './env.ts';
 import type { MondayClient } from './monday/client.ts';

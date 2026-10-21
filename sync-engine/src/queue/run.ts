@@ -62,7 +62,8 @@ interface TaskRow {
   queue_item_id: string | null;
   group_key: string | null;
   monday_dirty: boolean;
-  updated_at: Date;
+  /** Text, not a Date: a Date drops Postgres's microseconds and the settle check never matches. */
+  updated_at: string;
 }
 
 const toQueueTask = (r: TaskRow): QueueTask => ({
@@ -103,7 +104,7 @@ export async function syncQueueBoard(deps: QueueDeps): Promise<QueueSyncResult> 
 
   const { rows } = await deps.db.query<TaskRow>(
     `select id, task_type, dedupe_key, title, details, source_ref, status, synced_status, due_at, count_value, reopen_count, open_since,
-            queue_item_id::text, group_key, monday_dirty, updated_at
+            queue_item_id::text, group_key, monday_dirty, updated_at::text as updated_at
        from task
       where monday_dirty or status <> 'done' or (queue_item_id is not null and group_key is distinct from 'done')
       order by created_at`);
@@ -121,7 +122,7 @@ export async function syncQueueBoard(deps: QueueDeps): Promise<QueueSyncResult> 
       // Leave the row dirty if it changed while we were pushing (compare updated_at).
       const settle = (itemId: string | null) => deps.db.query(
         `update task set queue_item_id = $2::bigint, group_key = $3, synced_status = status,
-                monday_dirty = case when updated_at = $4 then false else true end
+                monday_dirty = case when updated_at = $4::timestamptz then false else true end
           where id = $1`, [r.id, itemId, want, r.updated_at]);
 
       if (!r.queue_item_id) {

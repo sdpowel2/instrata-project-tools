@@ -123,6 +123,19 @@ test('push: open tasks become items in their group; clean rows are left alone; c
   assert.ok(change.name.startsWith('Problem:'));
 });
 
+test('a pushed task settles clean when updated_at has microseconds (no re-push every minute)', async () => {
+  // Postgres keeps microseconds; a JS Date keeps milliseconds. Staging re-sent the
+  // same items every minute because the settle compared the two (2026-10-21).
+  const h = harness();
+  await open('report_presales_weekly:2026-W43');
+  await db.pg.exec(`reset role; alter table task disable trigger sync_task_before_update;
+    update task set updated_at = '2026-10-20T14:00:00.123456Z', monday_dirty = true;
+    alter table task enable trigger sync_task_before_update; set role sync_engine;`);
+  assert.equal((await syncQueueBoard(h.deps())).created, 1);
+  assert.equal((await rows(`select monday_dirty from task`))[0].monday_dirty, false);
+  assert.deepEqual(await syncQueueBoard(h.deps()), { created: 0, archived: 0, updated: 0, moved: 0, failed: 0 });
+});
+
 test('a task closed before it ever reached the board gets no item; due dates roll into Today', async () => {
   const h = harness();
   await open('sync_failure:av_line_missing:006:00k');

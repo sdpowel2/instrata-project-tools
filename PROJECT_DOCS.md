@@ -833,6 +833,11 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-21 — Sync production rollout: engine in dry run; Hope's Queue live during the dry run
+- **Production engine** `instrata-sync-engine` deployed in dry run against production Salesforce and the production monday boards (rollout P1–P10: integration user and permission sets, External Client App, credentials, both Flows, board columns, backfill of 440 links and 50 problem tasks, diff report).
+- **Hope's Queue writes in dry run** (Seth): the queue push has its own always-live write gate, switched only by `queue_push`, so Hope can work backfill problems and reviews before the switch. All other writes still follow `SYNC_MODE`.
+- **Fix:** queue items were re-sent every minute because the "is it still clean" check compared a millisecond JS timestamp with Postgres's microseconds. It now compares the exact value.
+
 ### 2026-10-20 — Coordinator page in Project Tools
 - New page **Coordinator** (`/ops-queue`, sidebar; role-based so any engineering workflow coordinator gets it) for admins and ops coordinators (`profiles.is_ops_coordinator`, now in the auth context as `isSyncViewer`): KPI tiles, the sync task queue grouped like the monday board with status edits, Data Cleanliness item lists with monday links, and a Mappings screen (Sales Rep / Business Unit / Win % / Estimators) where Fix Mapping tasks get resolved. Admin-only Sandbox data switch reads the `sync_sandbox` schema. Data layer `app/src/lib/syncQueue.ts`; the engine publishes the cleanliness lists and monday label names to `engine_status`.
 

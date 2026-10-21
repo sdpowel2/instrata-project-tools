@@ -53,6 +53,10 @@ const db = createDb(env.databaseUrl, env.dbSchema);
 const monday = createMondayClient({ token: env.monday.token, apiVersion: env.monday.apiVersion });
 const salesforce = createSalesforceClient(env.salesforce);
 const gate = createWriteGate(env.syncMode, monday, salesforce);
+// Hope's Queue is the engine's own board, not a sync target, so it writes in dry run
+// too; queue_push is its on/off switch. Hope can work backfill problems and mappings
+// during the dry run (rollout P12, Seth 2026-10-21). Only syncQueueBoard gets it.
+const queueGate = createWriteGate('live', monday, salesforce);
 
 // ── Config cache (reloaded at most once a minute) ──
 const CONFIG_TTL_MS = 60_000;
@@ -131,7 +135,7 @@ async function queuePush(): Promise<void> {
     const cfg = await getConfig();
     // Report tasks (open once per period) go out with the same push.
     const reports = cfg.settings.queue_push === true ? await openRecurringTasks(db, cfg.settings, new Date()) : 0;
-    const r = await syncQueueBoard({ db, gate, monday, cfg, salesforceLoginUrl: env.salesforce.loginUrl });
+    const r = await syncQueueBoard({ db, gate: queueGate, monday, cfg, salesforceLoginUrl: env.salesforce.loginUrl });
     if (reports || r.created || r.archived || r.updated || r.moved || r.failed) log.info('queue push', { reportsOpened: reports, ...r });
   } finally {
     queueBusy = false;
