@@ -113,8 +113,9 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   }
 
   // Dry run keeps only failure tasks (Hope can start clearing unmapped values);
-  // stage-check / won tasks describe writes that didn't happen.
-  const keepTask = (t: TaskIntent) => live || t.dedupeKey.startsWith('sync_failure:');
+  // stage-check / won tasks describe writes that didn't happen, and so does any task
+  // keyed to an item dry run only pretended to create (no such item on any board).
+  const keepTask = (t: TaskIntent) => live || (t.dedupeKey.startsWith('sync_failure:') && !t.dedupeKey.includes(CREATED_ITEM));
   for (const t of plan.tasks) {
     if (!keepTask(t) && t.op === 'open') {
       events.push({

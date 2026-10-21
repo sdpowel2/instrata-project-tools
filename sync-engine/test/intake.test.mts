@@ -82,6 +82,20 @@ test('Lead → created on Pre-Qualification with the EC2 task; Engineering → m
   assert.equal((await rows(`select status from task where dedupe_key = $1`, [`sync_failure:prequal_estimate_due:${itemId}:due_date`]))[0].status, 'done');
 });
 
+test('dry run keeps no task about an item it only pretended to create', async () => {
+  // Production, 2026-10-21: unlinked opportunities produced "still on Triage" and
+  // "estimate due date" tasks for intake items that dry run never made.
+  const monday = fakeMonday();
+  const sf = fakeSalesforce({ opps: [opp({ Sales_Rep__r: { Name: 'Not A Real Rep' } })] });
+  const deps = { db, gate: createWriteGate('dry_run', monday.client, sf.client), monday: monday.client, salesforce: sf.client, getConfig: () => loadRuntimeConfig(db) };
+  await reconcileOpportunities(deps, [OPP]);
+  const keys = (await rows('select dedupe_key from task')).map((r) => r.dedupe_key as string);
+  assert.ok(keys.every((k) => !k.includes('pending:')), JSON.stringify(keys));
+  assert.ok(keys.some((k) => k.includes('unmapped_value')), 'an unmapped rep is still a real task');
+  const dryTasks = await rows(`select entity_id from event_log where event_type = 'dry_run_write' and entity_type = 'task'`);
+  assert.ok(dryTasks.some((r) => r.entity_id.includes('prequal_estimate_due:pending:')), 'logged as intended instead');
+});
+
 test('Closed Lost while on Triage → status + notes on Triage, then moved to Pre-Sales Lost', async () => {
   const h = harness(opp({ StageName: 'Engineering' }));
   const s1 = await h.run();
