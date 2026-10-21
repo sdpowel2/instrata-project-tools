@@ -1,7 +1,7 @@
 # Sync Engine Build — Handoff
 
 **Read this first in a new session**, together with `PROJECT_DOCS.md`.
-Last updated: Oct 20, 2026 (end of session 4) · Branch: `salesforce-automations-and-dashboards` (local, not pushed; branched from `dev`)
+Last updated: Oct 21, 2026 (session 5: production rollout, Phase A done) · Branch: `salesforce-automations-and-dashboards` (local, not pushed; branched from `dev`)
 
 **Session 4 (Oct 16–20) in one paragraph:** Estimator writeback refined (keep a current Estimator who is on the item; only a removal on the item's current board clears). Engineers taken off the intake boards: Triage's people column became the `engineer_pick` dropdown and the engine assigns the real Pre-Sales Engineer at R7 (decision 19). **Hope's Queue built end to end and verified on staging** (decisions 20–24): the monday board (prod + sandbox, Pre-Qualification workspace), task push / group placement / Hope's status edits, recurring report tasks, Won – Handoff / Won – Open Job (Job Opening group, auto-close on Post-Sales Project Number, withdrawn when a deal leaves Won), data-cleanliness counts, and the **Coordinator** page in Project Tools (`/ops-queue`). All migrations so far were run in the SQL Editor and loop over BOTH schemas, so `public` config is in place too — only prod board column ids and on/off settings remain. Tests: `npm test` 109, planner 49. **Next: the production rollout (section 6, steps P1–P23).**
 
@@ -120,6 +120,14 @@ powershell -ExecutionPolicy Bypass -File sync-engine\scripts\engine.ps1 <command
 ### Production runbook (planned Oct 20)
 
 **Shape:** 23 steps in 6 phases. **Hands-on time ≈ 1.5–2 working days** (Seth ~6–8 h of Salesforce / monday / Supabase clicks, Claude the rest), spread over **about 2–3 calendar weeks** because of the ≥ 5-business-day dry run before the switch. Everything prod-side is designed and was proven on staging; the migrations already wrote the `public` config.
+
+**Progress (Oct 21, session 5):** **Phase A done and verified read-only** (P1–P3). P13 done by Seth (his own Coordinator flag set; Hope still to register). Production facts:
+- Integration user **already existed**: "AVIntegration" `005QO00000GZ72DYAT`, username `avsfintegration@instrata.com`, license Salesforce Integration, profile **Salesforce API Only System Integrations** (API Enabled), never logged in before. Given the **Salesforce API Integration** PSL.
+- Permission set **AVSS ProjectTools Integration** `0PSQO000000PEvp4AG` (license Salesforce API Integration): Opportunity R/E/View All, all 134 fields read-only; OLI edit only Sold_in_Margin__c + Estimator__c (UnitPrice / Quantity have no FLS rows; that's normal); Product2 + Pricebook2 Read; Edit Opportunity Product Sales Price + Send Email. **Edit Opportunity Product Sales Price is NOT in the System Permissions list** for this license; it only shows up through the permission set's **Find Settings** box.
+- External Client App "AVSS Project Tools" (Local, client credentials, Run As AVIntegration, admin-approved + the permission set). Callback `https://instrata-sync-engine.fly.dev/oauth/callback`. Key/secret in Seth's password manager as "SF prod – AVSS Project Tools".
+- The three prod engine secrets were generated in P3 (not P4), because the External Credential needs `SF_WEBHOOK_SECRET`: password manager "Prod – SF_WEBHOOK_SECRET", "Prod – MONDAY_WEBHOOK_PATH_SECRET", "Prod – ENGINE_INTERNAL_SECRET".
+- External Credential + Named Credential `AVSS_ProjectTools` → `https://instrata-sync-engine.fly.dev`; principal `AVSS_Principal` (param id `0puQO0000000dXdYAI`). Permission set **AVSS ProjectTools Callout** `0PSQO000000PExR4AW` assigned to AVIntegration + Seth; principal access on the 4 profiles (Instrata Standard User, Instrata Standard User - SSO Opt, Standard User, System Administrator: still the only Opportunity / OLI editors over 90 days, checked Oct 21).
+- The connector can't read External Client Apps or External Credentials (`INVALID_TYPE`); `SetupEntityAccess` shows principal access.
 
 **Phase A — Salesforce production (Seth, guided; ~2–3 h).** Repeat the sandbox setup guide in prod.
 - **P1.** Integration user + profile (guide A1–A2) and permission set **AVSS ProjectTools Integration** (A3) **with** Edit Opportunity Product Sales Price, Estimator Edit and Send Email.

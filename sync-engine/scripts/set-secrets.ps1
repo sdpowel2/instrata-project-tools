@@ -47,28 +47,33 @@ function Read-Secret([string]$label, [scriptblock]$check, [string]$hint) {
   }
 }
 
+# Which password manager entries to copy from. DATABASE_URL and the monday token are
+# the same for both apps (one Supabase project, one integration user); the rest differ.
+$envName = if ($App -eq 'instrata-sync-engine') { 'Prod' } else { 'Staging' }
+$sfEntry = if ($envName -eq 'Prod') { 'SF prod - AVSS Project Tools' } else { 'SF sandbox - AVSS Project Tools' }
+
 Write-Host ""
 Write-Host "Setting secrets on $App  (schema=$Schema, mode=$Mode)" -ForegroundColor Cyan
 Write-Host "For each prompt: copy the value in your password manager, then press Enter. Values are never shown."
 Write-Host ""
 
 $secrets = [ordered]@{
-  DATABASE_URL = Read-Secret 'DATABASE_URL (Staging - DATABASE_URL)' {
+  DATABASE_URL = Read-Secret 'DATABASE_URL (Staging - DATABASE_URL; same value for both apps)' {
     param($v) $v -match '^postgres(ql)?://sync_engine\.' -and $v -match ':5432/'
   } 'should start postgresql://sync_engine. and use port :5432'
   MONDAY_API_TOKEN           = Read-Secret 'MONDAY_API_TOKEN (monday - AV Integrations API token)' $null ''
-  MONDAY_WEBHOOK_PATH_SECRET = Read-Secret 'MONDAY_WEBHOOK_PATH_SECRET' { param($v) $v -match '^[0-9a-f]{64}$' } 'expected the 64-character value from Step 1'
-  SF_CLIENT_ID               = Read-Secret 'SF_CLIENT_ID (Consumer Key)' $null ''
-  SF_CLIENT_SECRET           = Read-Secret 'SF_CLIENT_SECRET (Consumer Secret)' $null ''
-  SF_WEBHOOK_SECRET          = Read-Secret 'SF_WEBHOOK_SECRET' { param($v) $v -match '^[0-9a-f]{64}$' } 'expected the 64-character value from Step 1'
-  ENGINE_INTERNAL_SECRET     = Read-Secret 'ENGINE_INTERNAL_SECRET' { param($v) $v -match '^[0-9a-f]{64}$' } 'expected the 64-character value from Step 1'
+  MONDAY_WEBHOOK_PATH_SECRET = Read-Secret "MONDAY_WEBHOOK_PATH_SECRET ($envName - MONDAY_WEBHOOK_PATH_SECRET)" { param($v) $v -match '^[0-9a-f]{64}$' } 'expected a 64-character hex value'
+  SF_CLIENT_ID               = Read-Secret "SF_CLIENT_ID (Consumer Key in $sfEntry)" $null ''
+  SF_CLIENT_SECRET           = Read-Secret "SF_CLIENT_SECRET (Consumer Secret in $sfEntry)" $null ''
+  SF_WEBHOOK_SECRET          = Read-Secret "SF_WEBHOOK_SECRET ($envName - SF_WEBHOOK_SECRET)" { param($v) $v -match '^[0-9a-f]{64}$' } 'expected a 64-character hex value'
+  ENGINE_INTERNAL_SECRET     = Read-Secret "ENGINE_INTERNAL_SECRET ($envName - ENGINE_INTERNAL_SECRET)" { param($v) $v -match '^[0-9a-f]{64}$' } 'expected a 64-character hex value'
 }
 $secrets['DB_SCHEMA'] = $Schema
 $secrets['SYNC_MODE'] = $Mode
 $secrets['SF_LOGIN_URL'] = $SalesforceLoginUrl
 
 $distinct = @($secrets['MONDAY_WEBHOOK_PATH_SECRET'], $secrets['SF_WEBHOOK_SECRET'], $secrets['ENGINE_INTERNAL_SECRET']) | Select-Object -Unique
-if ($distinct.Count -ne 3) { throw 'The three Step 1 secrets must all be different - one was pasted twice.' }
+if ($distinct.Count -ne 3) { throw 'The three generated secrets must all be different - one was pasted twice.' }
 
 # Passed as arguments, NOT piped: Windows PowerShell 5.1 prepends a UTF-8 byte-order
 # mark to anything piped into a native program (even with a no-BOM $OutputEncoding),
