@@ -1,7 +1,7 @@
 /** Carries out a writeback for one monday item: fat fetch both sides, decide, write, log. */
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/pool.ts';
-import { appendEvents, closeTask, openTask, type EventRow } from '../db/store.ts';
+import { appendEvents, closeTask, openTask, setAsideItemIds, type EventRow } from '../db/store.ts';
 import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient } from '../monday/client.ts';
 import { readNumber } from '../monday/encode.ts';
@@ -23,6 +23,12 @@ export async function runWriteback(deps: WritebackDeps, mondayItemId: string, ac
   const priceCol = deps.cfg.planner.columns['presales.quoted_price']?.columnId;
   const gmCol = deps.cfg.planner.columns['presales.gm_pct']?.columnId;
   if (!priceCol || !gmCol) throw new Error('presales.quoted_price / presales.gm_pct columns are not configured');
+
+  // Set aside (a change order, say): nothing to send, and no "isn't linked" task.
+  if ((await setAsideItemIds(deps.db)).has(mondayItemId)) {
+    await deps.db.tx(async (q) => { for (const key of writebackTaskKeys(mondayItemId)) await closeTask(q, key, 'auto', null); });
+    return { kind: 'none', reason: 'item set aside' };
+  }
 
   const { rows } = await deps.db.query<{ sf_line_item_id: string; sf_opportunity_id: string; link_state: 'active' | 'archived' | 'conflict' }>(
     'select sf_line_item_id, sf_opportunity_id, link_state from sf_link where monday_item_id = $1::bigint', [mondayItemId]);

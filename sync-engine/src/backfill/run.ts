@@ -5,7 +5,7 @@
  * each problem task's member list is replaced with the current set.
  */
 import type { Db } from '../db/pool.ts';
-import { closeTask, openTask } from '../db/store.ts';
+import { closeTask, openTask, setAsideItemIds } from '../db/store.ts';
 import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient } from '../monday/client.ts';
 import { readText } from '../monday/encode.ts';
@@ -31,6 +31,10 @@ export interface BackfillReport {
   problems: Record<BackfillProblemKind, { count: number; examples: string[] }>;
   linked: number;
   reconcilesQueued: number;
+  /** Items the coordinator set aside: skipped entirely. */
+  setAside: number;
+  /** Links a set-aside item held that go to the other item with the same Salesforce ID. */
+  handedOver: number;
 }
 
 const chunk = <T>(xs: T[], n: number): T[][] => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
@@ -51,8 +55,12 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
     }
   });
 
+  // Set-aside items (change orders etc.) are left out: never linked, never a problem.
+  const aside = await setAsideItemIds(deps.db);
+  const planItems = items.filter((i) => !aside.has(i.id));
+
   // 2. Look the ids up in Salesforce.
-  const { lineIds, oppIds } = idsToFetch(items);
+  const { lineIds, oppIds } = idsToFetch(planItems);
   const lineItems = new Map<string, SfLineRef>();
   for (const ids of chunk(lineIds, 150)) {
     const rows = await deps.salesforce.query<any>(
@@ -69,13 +77,17 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
   }
 
   // 3. Plan against what's already linked.
-  const { rows: existing } = await deps.db.query<{ item: string; line: string }>(
+  // A link held by a set-aside item doesn't claim its line, so the other item with
+  // the same Salesforce ID (usually the real deal behind a change order) can take it.
+  const { rows: allLinks } = await deps.db.query<{ item: string; line: string }>(
     'select monday_item_id::text as item, sf_line_item_id as line from sf_link');
+  const existing = allLinks.filter((e) => !aside.has(e.item));
   const plan = planBackfill({
-    items, lineItems, avLinesByOpp,
+    items: planItems, lineItems, avLinesByOpp,
     alreadyLinkedItems: new Set(existing.map((e) => e.item)),
     alreadyLinkedLines: new Set(existing.map((e) => e.line)),
   });
+  const handed = allLinks.filter((e) => aside.has(e.item) && plan.links.some((l) => key15(l.sfLineItemId) === key15(e.line)));
 
   const report: BackfillReport = {
     preview: opts.preview,
@@ -83,11 +95,16 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
     problems: Object.fromEntries(Object.entries(plan.problems).map(([k, ms]) => [k, { count: ms.length, examples: ms.slice(0, 5).map((m) => m.label) }])) as BackfillReport['problems'],
     linked: 0,
     reconcilesQueued: 0,
+    setAside: items.length - planItems.length,
+    handedOver: handed.length,
   };
   if (opts.preview) return report;
 
   // 4. Persist: links (stage-only baseline in BOTH columns), problem tasks, reconciles.
   await deps.db.tx(async (q) => {
+    if (handed.length > 0) {
+      await q.query('delete from sf_link where monday_item_id = any($1::bigint[])', [handed.map((h) => h.item)]);
+    }
     if (plan.links.length > 0) {
       const { rows } = await q.query<{ id: string }>(
         `insert into sf_link (monday_item_id, sf_opportunity_id, sf_line_item_id, last_synced_values, dry_run_synced_values)

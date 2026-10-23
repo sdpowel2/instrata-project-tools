@@ -141,6 +141,8 @@ export interface EngineInfo {
 export interface CleanlinessItems {
   at: string;
   fields: Record<string, { title: string; board: string; count: number; items: { id: string; name: string }[] }>;
+  /** board → in-scope items left out of the count because they were set aside */
+  setAside?: Record<string, number>;
 }
 
 export async function engineInfo(schema: SyncSchema): Promise<EngineInfo> {
@@ -245,6 +247,63 @@ export function unmappedEngineers(tasks: QueueTask[]): { mondayUserId: string | 
     const who = t.dedupeKey.slice(prefix.length, t.dedupeKey.lastIndexOf(':'));
     const label = who.startsWith('triage-label:') ? Number(who.slice('triage-label:'.length)) : null;
     return { mondayUserId: label === null ? who : null, triageLabelId: label, title: t.title, taskId: t.id };
+  });
+}
+
+// ── Set aside (sync_set_aside.sql, Seth 2026-10-23) ──────────────────────────
+// Items that can never agree with Salesforce (mostly change orders). The engine skips
+// them: no blank-field count, no backfill problem, no "isn't linked" task. Restore = delete.
+export type SetAsideReason = 'change_order' | 'other';
+export const SET_ASIDE_REASONS: { key: SetAsideReason; label: string }[] = [
+  { key: 'change_order', label: 'Change order' },
+  { key: 'other', label: 'Other' },
+];
+
+export interface SetAsideItem {
+  id: string;
+  mondayItemId: string;
+  boardKey: string;
+  itemName: string;
+  reason: SetAsideReason;
+  note: string;
+  setByName: string;
+  setAt: string;
+}
+
+interface SetAsideDbRow {
+  id: string; monday_item_id: string | number; board_key: string; item_name: string; reason: SetAsideReason;
+  note: string; set_by_name: string; set_at: string;
+}
+
+export async function listSetAside(schema: SyncSchema): Promise<SetAsideItem[]> {
+  if (!isSupabaseConfigured()) return [];
+  const r = await db(schema).from('item_set_aside').select('*').order('set_at', { ascending: false });
+  // Before sync_set_aside.sql has run the table doesn't exist: the page works without it.
+  if (r.error && /item_set_aside|does not exist|schema cache/i.test(r.error.message)) return [];
+  return (must(r) as SetAsideDbRow[]).map((x) => ({
+    id: x.id, mondayItemId: String(x.monday_item_id), boardKey: x.board_key, itemName: x.item_name,
+    reason: x.reason, note: x.note, setByName: x.set_by_name, setAt: x.set_at,
+  }));
+}
+
+export async function setItemAside(schema: SyncSchema, item: { mondayItemId: string; boardKey: string; itemName: string; reason: SetAsideReason; note: string; setByName: string }): Promise<void> {
+  must(await db(schema).from('item_set_aside').insert({
+    monday_item_id: Number(item.mondayItemId), board_key: item.boardKey, item_name: item.itemName,
+    reason: item.reason, note: item.note.trim(), set_by_name: item.setByName,
+  }).select('id'));
+}
+
+export async function restoreSetAside(schema: SyncSchema, id: string): Promise<void> {
+  must(await db(schema).from('item_set_aside').delete().eq('id', id).select('id'));
+}
+
+/** The items a grouped backfill task lists (source_ref.members), with the deal name split off the label. */
+export function backfillMembers(t: QueueTask): { id: string; name: string }[] {
+  if (!t.dedupeKey.startsWith('sync_failure:backfill:') || !Array.isArray(t.sourceRef.members)) return [];
+  return (t.sourceRef.members as { id: string; label?: string }[]).map((m) => {
+    const label = m.label ?? '';
+    const at = label.lastIndexOf(' (monday item ');
+    return { id: String(m.id), name: at > 0 ? label.slice(0, at) : label || `Item ${m.id}` };
   });
 }
 

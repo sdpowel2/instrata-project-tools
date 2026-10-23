@@ -46,6 +46,7 @@ import { openRecurringTasks } from './queue/recurring.ts';
 import { closeOpenedJobs } from './queue/jobs.ts';
 import { runCleanliness } from './queue/cleanliness.ts';
 import { snapshotMondayLabels } from './queue/labels.ts';
+import { pruneSetAside } from './queue/setAside.ts';
 import { errMessage, log } from './log.ts';
 
 const env = loadEnv();
@@ -133,6 +134,9 @@ async function queuePush(): Promise<void> {
   queueBusy = true;
   try {
     const cfg = await getConfig();
+    // Items Hope set aside leave their open tasks before the push.
+    const pruned = await pruneSetAside(db).catch((e) => { log.warn('set-aside prune failed', { error: errMessage(e) }); return 0; });
+    if (pruned > 0) log.info('set-aside prune', { removed: pruned });
     // Report tasks (open once per period) go out with the same push.
     const reports = cfg.settings.queue_push === true ? await openRecurringTasks(db, cfg.settings, new Date()) : 0;
     const r = await syncQueueBoard({ db, gate: queueGate, monday, cfg, salesforceLoginUrl: env.salesforce.loginUrl });

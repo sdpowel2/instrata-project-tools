@@ -7,18 +7,19 @@
 // every profile with profiles.is_ops_coordinator (named "Coordinator", Seth 2026-10-20).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink, Loader2, Plus, RefreshCw, Save } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, PageHeader } from '../components/ui';
 import {
-  LABEL_MAPS, QUEUE_GROUPS, TASK_STATUSES,
-  cleanlinessTrend, engineInfo, groupFor, listEstimators, listLabelMap, listTasks, mondayItemUrl, salesforceUrl,
-  saveEstimator, saveLabelMap, setTaskStatus, taskTypeLabel, unmappedEngineers, unmappedValues,
-  type EngineInfo, type EstimatorRow, type LabelMapRow, type LabelMapTable, type QueueTask, type SyncSchema, type TaskStatus,
+  LABEL_MAPS, QUEUE_GROUPS, SET_ASIDE_REASONS, TASK_STATUSES,
+  backfillMembers, cleanlinessTrend, engineInfo, groupFor, listEstimators, listLabelMap, listSetAside, listTasks, mondayItemUrl,
+  restoreSetAside, salesforceUrl, saveEstimator, saveLabelMap, setItemAside, setTaskStatus, taskTypeLabel, unmappedEngineers, unmappedValues,
+  type EngineInfo, type EstimatorRow, type LabelMapRow, type LabelMapTable, type QueueTask, type SetAsideItem, type SetAsideReason,
+  type SyncSchema, type TaskStatus,
 } from '../lib/syncQueue';
 
 const SCHEMA_KEY = 'coordinator.schema';
-type Tab = 'queue' | 'cleanliness' | 'mappings';
+type Tab = 'queue' | 'cleanliness' | 'mappings' | 'setaside';
 
 function readSchemaPref(): SyncSchema {
   try { return localStorage.getItem(SCHEMA_KEY) === 'sync_sandbox' ? 'sync_sandbox' : 'public'; } catch { return 'public'; }
@@ -43,6 +44,7 @@ export function CoordinatorPage() {
   const [tasks, setTasks] = useState<QueueTask[]>([]);
   const [info, setInfo] = useState<EngineInfo | null>(null);
   const [trend, setTrend] = useState<{ date: string; total: number }[]>([]);
+  const [aside, setAside] = useState<SetAsideItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,10 +52,11 @@ export function CoordinatorPage() {
     setLoading(true);
     setError(null);
     try {
-      const [t, i, tr] = await Promise.all([listTasks(schema), engineInfo(schema), cleanlinessTrend(schema)]);
+      const [t, i, tr, a] = await Promise.all([listTasks(schema), engineInfo(schema), cleanlinessTrend(schema), listSetAside(schema)]);
       setTasks(t);
       setInfo(i);
       setTrend(tr);
+      setAside(a);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -62,6 +65,7 @@ export function CoordinatorPage() {
   }, [schema]);
 
   useEffect(() => { void load(); }, [load]);
+  const asideIds = useMemo(() => new Set(aside.map((a) => a.mondayItemId)), [aside]);
   // The engine works on a one-minute cycle; refresh on the same rhythm.
   useEffect(() => {
     const t = setInterval(() => { void load(); }, 60_000);
@@ -115,7 +119,7 @@ export function CoordinatorPage() {
       <Tiles tasks={tasks} trend={trend} />
 
       <div className="flex gap-1 mb-4 border-b border-border">
-        {([['queue', 'Queue'], ['cleanliness', 'Data Cleanliness'], ['mappings', 'Mappings']] as const).map(([k, label]) => (
+        {([['queue', 'Queue'], ['cleanliness', 'Data Cleanliness'], ['mappings', 'Mappings'], ['setaside', `Set aside (${aside.length})`]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2.5 text-[14px] font-medium border-b-2 -mb-px ${tab === k ? 'border-orange text-navy' : 'border-transparent text-fg-2 hover:text-navy'}`}>
             {label}
@@ -123,9 +127,10 @@ export function CoordinatorPage() {
         ))}
       </div>
 
-      {tab === 'queue' && info && <QueueTab schema={schema} tasks={tasks} info={info} onChanged={load} />}
-      {tab === 'cleanliness' && info && <CleanlinessTab info={info} />}
+      {tab === 'queue' && info && <QueueTab schema={schema} tasks={tasks} info={info} asideIds={asideIds} onChanged={load} />}
+      {tab === 'cleanliness' && info && <CleanlinessTab schema={schema} info={info} asideIds={asideIds} onChanged={load} />}
       {tab === 'mappings' && info && <MappingsTab schema={schema} tasks={tasks} info={info} onChanged={load} />}
+      {tab === 'setaside' && info && <SetAsideTab schema={schema} items={aside} info={info} onChanged={load} />}
     </div>
   );
 }
@@ -178,7 +183,7 @@ function Sparkline({ points }: { points: number[] }) {
 }
 
 // ── Queue ────────────────────────────────────────────────────────────────────
-function QueueTab({ schema, tasks, info, onChanged }: { schema: SyncSchema; tasks: QueueTask[]; info: EngineInfo; onChanged: () => Promise<void> }) {
+function QueueTab({ schema, tasks, info, asideIds, onChanged }: { schema: SyncSchema; tasks: QueueTask[]; info: EngineInfo; asideIds: Set<string>; onChanged: () => Promise<void> }) {
   const byGroup = useMemo(() => {
     const m = new Map<string, QueueTask[]>();
     for (const t of tasks) m.set(groupFor(t), [...(m.get(groupFor(t)) ?? []), t]);
@@ -193,7 +198,7 @@ function QueueTab({ schema, tasks, info, onChanged }: { schema: SyncSchema; task
           <Card key={g.key} title={`${g.label} (${list.length})`} flush>
             {list.length === 0
               ? <div className="px-5 py-4 text-[13px] text-fg-3">Nothing here.</div>
-              : list.map((t) => <TaskRow key={t.id} schema={schema} task={t} info={info} onChanged={onChanged} />)}
+              : list.map((t) => <TaskRow key={t.id} schema={schema} task={t} info={info} asideIds={asideIds} onChanged={onChanged} />)}
           </Card>
         );
       })}
@@ -201,10 +206,15 @@ function QueueTab({ schema, tasks, info, onChanged }: { schema: SyncSchema; task
   );
 }
 
-function TaskRow({ schema, task, info, onChanged }: { schema: SyncSchema; task: QueueTask; info: EngineInfo; onChanged: () => Promise<void> }) {
+function TaskRow({ schema, task, info, asideIds, onChanged }: { schema: SyncSchema; task: QueueTask; info: EngineInfo; asideIds: Set<string>; onChanged: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const type = taskTypeLabel(task);
+  // Items Hope can set aside from this task: a backfill task's deals, or the one unlinked item.
+  const settable = task.status === 'done' ? []
+    : task.taskType === 'writeback_no_link' && task.sourceRef.monday_item_id
+      ? [{ id: String(task.sourceRef.monday_item_id), name: task.title.replace(/^Price\/GM% not sent to Salesforce: /, '') }]
+      : backfillMembers(task);
   const itemUrl = task.sourceRef.monday_item_id ? mondayItemUrl(info, task.sourceRef.board_key, String(task.sourceRef.monday_item_id)) : null;
   const sfUrl = task.sourceRef.sf_opportunity_id ? salesforceUrl(schema, String(task.sourceRef.sf_opportunity_id)) : null;
   const change = async (s: TaskStatus) => {
@@ -231,26 +241,126 @@ function TaskRow({ schema, task, info, onChanged }: { schema: SyncSchema; task: 
         </select>
       </div>
       {open && <pre className="px-12 pb-3 text-[12.5px] text-fg-2 whitespace-pre-wrap font-sans m-0">{task.details || 'No details.'}</pre>}
+      {open && settable.length > 0 && (
+        <div className="px-12 pb-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-fg-3 mb-1">Can't be fixed? Set it aside</div>
+          <ul className="m-0 p-0 list-none">
+            {settable.filter((m) => !asideIds.has(m.id)).map((m) => {
+              const href = mondayItemUrl(info, 'presales', m.id);
+              return (
+                <li key={m.id} className="flex items-center gap-3 py-0.5 text-[13px]">
+                  <span className="flex-1 min-w-0 truncate">{href ? <a href={href} target="_blank" rel="noreferrer" className="text-blue hover:underline">{m.name}</a> : m.name}</span>
+                  <SetAsideControl schema={schema} item={{ mondayItemId: m.id, boardKey: 'presales', itemName: m.name }} onDone={onChanged} />
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Set aside ────────────────────────────────────────────────────────────────
+// For items that can never agree with Salesforce (mostly change orders): the engine
+// stops counting and flagging them; they wait on the Set aside tab for a later cleanup.
+function SetAsideControl({ schema, item, onDone }: {
+  schema: SyncSchema; item: { mondayItemId: string; boardKey: string; itemName: string }; onDone: () => Promise<void>;
+}) {
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<SetAsideReason>('change_order');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      await setItemAside(schema, { ...item, reason, note, setByName: user?.fullName || user?.email || '' });
+      await onDone();
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="flex items-center gap-1 text-[12px] text-fg-3 hover:text-navy whitespace-nowrap" title="Can't be fixed: stop counting and flagging it">
+        <EyeOff size={13} /> Set aside
+      </button>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      <select value={reason} onChange={(e) => setReason(e.target.value as SetAsideReason)} className="text-[12px] border border-border rounded-md px-1.5 py-0.5 bg-white">
+        {SET_ASIDE_REASONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+      </select>
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" className="text-[12px] border border-border rounded-md px-1.5 py-0.5 w-[150px]" />
+      <button disabled={busy} onClick={() => void save()} className="text-[12px] px-2 py-0.5 rounded-md bg-orange text-white disabled:opacity-50">Set aside</button>
+      <button onClick={() => setOpen(false)} className="text-[12px] text-fg-3 hover:text-navy">Cancel</button>
+    </span>
+  );
+}
+
+function SetAsideTab({ schema, items, info, onChanged }: { schema: SyncSchema; items: SetAsideItem[]; info: EngineInfo; onChanged: () => Promise<void> }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const restore = async (a: SetAsideItem) => {
+    if (!confirm(`Put "${a.itemName}" back? The sync will count and flag it again.`)) return;
+    setBusy(a.id);
+    try { await restoreSetAside(schema, a.id); await onChanged(); } catch (e) { alert(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
+  };
+  const reasonLabel = (r: SetAsideReason) => SET_ASIDE_REASONS.find((x) => x.key === r)?.label ?? r;
+  const boardTitle: Record<string, string> = { presales: 'Pre-Sales', postsales: 'Post-Sales', programming: 'Programming' };
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[12px] text-fg-3">Items that can never match a Salesforce record, mostly change orders. The sync skips them: no blank-field count, no backfill problem, no "isn't linked" task. They stay here for a later cleanup; Restore puts one back.</div>
+      <Card title={`Set aside (${items.length})`} flush>
+        {items.length === 0
+          ? <div className="px-5 py-4 text-[13px] text-fg-3">Nothing set aside.</div>
+          : items.map((a) => {
+            const href = mondayItemUrl(info, a.boardKey, a.mondayItemId);
+            return (
+              <div key={a.id} className="flex items-center gap-3 px-5 py-2.5 border-b border-border-soft last:border-b-0 text-[13px]">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{href ? <a href={href} target="_blank" rel="noreferrer" className="text-blue hover:underline">{a.itemName || `Item ${a.mondayItemId}`}</a> : a.itemName}</div>
+                  {a.note && <div className="text-[12px] text-fg-2 truncate">{a.note}</div>}
+                </div>
+                <span className="text-[12px] text-fg-2 whitespace-nowrap">{boardTitle[a.boardKey] ?? a.boardKey}</span>
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap bg-status-neutral-bg text-status-neutral-fg">{reasonLabel(a.reason)}</span>
+                <span className="text-[12px] text-fg-3 whitespace-nowrap w-[170px] text-right">{a.setByName || 'Someone'}, {new Date(a.setAt).toLocaleDateString()}</span>
+                <button disabled={busy === a.id} onClick={() => void restore(a)} className="flex items-center gap-1 text-[12px] text-navy hover:underline disabled:opacity-50 whitespace-nowrap">
+                  <RotateCcw size={13} /> Restore
+                </button>
+              </div>
+            );
+          })}
+      </Card>
     </div>
   );
 }
 
 // ── Data cleanliness ─────────────────────────────────────────────────────────
-function CleanlinessTab({ info }: { info: EngineInfo }) {
+function CleanlinessTab({ schema, info, asideIds, onChanged }: { schema: SyncSchema; info: EngineInfo; asideIds: Set<string>; onChanged: () => Promise<void> }) {
   const c = info.cleanliness;
   if (!c) return <Card><div className="text-[13px] text-fg-3">No count yet — the engine refreshes it hourly.</div></Card>;
   const boards = [['presales', 'Pre-Sales'], ['postsales', 'Post-Sales'], ['programming', 'Programming']] as const;
+  // Items set aside since the engine's last hourly count drop out here straight away.
+  const visible = (f: { count: number; items: { id: string; name: string }[] }) => {
+    const items = f.items.filter((it) => !asideIds.has(it.id));
+    return { items, count: f.count - (f.items.length - items.length) };
+  };
   return (
     <div className="flex flex-col gap-4">
-      <div className="text-[12px] text-fg-3">As of {new Date(c.at).toLocaleString()}. Active work only: Pre-Sales Follow Up + this year's Won; Post-Sales In Progress, Install, Close Out; Programming On Radar, Active, Close Out.</div>
+      <div className="text-[12px] text-fg-3">As of {new Date(c.at).toLocaleString()}. Active work only: Pre-Sales Follow Up + this year's Won; Post-Sales In Progress, Install, Close Out; Programming On Radar, Active, Close Out. An item that can never match Salesforce (a change order, say) can be set aside.</div>
       {boards.map(([key, title]) => {
-        const fields = Object.entries(c.fields).filter(([, f]) => f.board === key && f.count > 0).sort((a, b) => b[1].count - a[1].count);
-        const total = fields.reduce((a, [, f]) => a + f.count, 0);
+        const fields = Object.entries(c.fields).filter(([, f]) => f.board === key).map(([k, f]) => [k, f.title, visible(f)] as const)
+          .filter(([, , v]) => v.count > 0).sort((a, b) => b[2].count - a[2].count);
+        const total = fields.reduce((a, [, , v]) => a + v.count, 0);
+        const parked = c.setAside?.[key] ? ` · ${c.setAside[key]} set aside` : '';
         return (
-          <Card key={key} title={`${title} — ${total} blank`} flush>
+          <Card key={key} title={`${title} — ${total} blank${parked}`} flush>
             {fields.length === 0
               ? <div className="px-5 py-4 text-[13px] text-fg-3">All clear.</div>
-              : fields.map(([k, f]) => <FieldRow key={k} title={f.title} items={f.items} count={f.count} url={(id) => mondayItemUrl(info, key, id)} />)}
+              : fields.map(([k, t, v]) => (
+                <FieldRow key={k} title={t} items={v.items} count={v.count} url={(id) => mondayItemUrl(info, key, id)}
+                  action={(it) => <SetAsideControl schema={schema} item={{ mondayItemId: it.id, boardKey: key, itemName: it.name }} onDone={onChanged} />} />
+              ))}
           </Card>
         );
       })}
@@ -258,7 +368,10 @@ function CleanlinessTab({ info }: { info: EngineInfo }) {
   );
 }
 
-function FieldRow({ title, items, count, url }: { title: string; items: { id: string; name: string }[]; count: number; url: (id: string) => string | null }) {
+function FieldRow({ title, items, count, url, action }: {
+  title: string; items: { id: string; name: string }[]; count: number; url: (id: string) => string | null;
+  action: (item: { id: string; name: string }) => React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="border-b border-border-soft last:border-b-0">
@@ -268,10 +381,15 @@ function FieldRow({ title, items, count, url }: { title: string; items: { id: st
         <span className="text-[14px] font-semibold text-navy">{count}</span>
       </button>
       {open && (
-        <ul className="px-12 pb-3 m-0 list-none columns-1 md:columns-2 gap-6">
+        <ul className="px-12 pb-3 m-0 list-none">
           {items.map((it) => {
             const href = url(it.id);
-            return <li key={it.id} className="text-[13px] py-0.5">{href ? <a href={href} target="_blank" rel="noreferrer" className="text-blue hover:underline">{it.name}</a> : it.name}</li>;
+            return (
+              <li key={it.id} className="flex items-center gap-3 text-[13px] py-0.5">
+                <span className="flex-1 min-w-0 truncate">{href ? <a href={href} target="_blank" rel="noreferrer" className="text-blue hover:underline">{it.name}</a> : it.name}</span>
+                {action(it)}
+              </li>
+            );
           })}
           {count > items.length && <li className="text-[12px] text-fg-3 py-0.5">…and {count - items.length} more</li>}
         </ul>
