@@ -20,7 +20,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/pool.ts';
-import { appendEvents, closeTask, eventRowFromIntent, insertLink, openTask, updateLink, type EventRow } from '../db/store.ts';
+import { appendEvents, closeTask, eventRowFromIntent, insertLink, openTask, setAsideItemIds, updateLink, type EventRow } from '../db/store.ts';
 import type { RuntimeConfig } from '../config/load.ts';
 import { encodeColumnValues } from '../monday/encode.ts';
 import type { WriteGate } from '../writeGate.ts';
@@ -59,6 +59,11 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
     return id;
   };
   const columnIdFor = (k: string) => cfg.planner.columns[k]?.columnId;
+  // A set-aside item (a change order, say) still holds its link but is never written
+  // to and raises no tasks; the next backfill may hand the link to the real deal.
+  const aside = await setAsideItemIds(db);
+  const items = plan.items.filter((ip) => !aside.has(ip.mondayItemId));
+  const tasks = plan.tasks.filter((t) => !(t.op === 'open' && t.sourceRef.monday_item_id && aside.has(String(t.sourceRef.monday_item_id))));
   // ── Outbound writes ──
   let createdId: string | null = null;
   if (plan.create) {
@@ -75,7 +80,7 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
     }
   }
 
-  for (const ip of plan.items) {
+  for (const ip of items) {
     const boardKey = ip.boardKey ?? 'presales';
     // Column writes land on the board the item is on now, before any move.
     if (ip.columnWrites.length > 0) {
@@ -99,7 +104,7 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   const resolveItemLabel = (s: string) => s.split(`monday item ${CREATED_ITEM}`).join(createdId ? `monday item ${createdId}` : 'not on the board yet');
 
   const events: EventRow[] = plan.events
-    .filter((e) => live || e.eventType === 'sync_failure')
+    .filter((e) => (live || e.eventType === 'sync_failure') && !aside.has(e.entityId))
     .map((e) => ({ ...eventRowFromIntent(e), entity_id: resolve(e.entityId) }));
 
   if (!live) {
@@ -116,7 +121,7 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   // stage-check / won tasks describe writes that didn't happen, and so does any task
   // keyed to an item dry run only pretended to create (no such item on any board).
   const keepTask = (t: TaskIntent) => live || (t.dedupeKey.startsWith('sync_failure:') && !t.dedupeKey.includes(CREATED_ITEM));
-  for (const t of plan.tasks) {
+  for (const t of tasks) {
     if (!keepTask(t) && t.op === 'open') {
       events.push({
         source: 'engine', entity_type: 'task', entity_id: resolve(t.dedupeKey), event_type: 'dry_run_write', actor: 'engine',
@@ -127,11 +132,11 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
 
   await db.tx(async (q) => {
     if (plan.create && createdId) await updateLink(q, createdId, plan.create.baseline, gate.mode);
-    for (const ip of plan.items) {
+    for (const ip of items) {
       await updateLink(q, ip.mondayItemId, ip.baseline, gate.mode, live && ip.newLinkState ? { linkState: ip.newLinkState } : {});
     }
     await appendEvents(q, events, correlationId);
-    for (const t of plan.tasks.filter(keepTask)) {
+    for (const t of tasks.filter(keepTask)) {
       if (t.op === 'open') {
         const ref = { ...t.sourceRef, ...(t.sourceRef.monday_item_id ? { monday_item_id: resolve(t.sourceRef.monday_item_id) } : {}) };
         const member = t.member ? { ...t.member, label: resolveItemLabel(t.member.label) } : undefined;

@@ -234,6 +234,18 @@ function taskEvent(taskId: string, eventType: string, dedupeKey: string, details
   return { source: 'engine', entity_type: 'task', entity_id: taskId, event_type: eventType, actor: 'engine', details: { dedupe_key: dedupeKey, ...details } };
 }
 
+// ── set-aside items (sync_set_aside.sql, Seth 2026-10-23) ──────────────────
+/**
+ * monday item ids the coordinator set aside (change orders etc.): never linked,
+ * written to, counted or flagged. Empty until the migration has run.
+ */
+export async function setAsideItemIds(q: Queryable): Promise<Set<string>> {
+  const { rows: t } = await q.query<{ ok: boolean }>(`select to_regclass('item_set_aside') is not null as ok`);
+  if (!t[0]?.ok) return new Set();
+  const { rows } = await q.query<{ id: string }>('select monday_item_id::text as id from item_set_aside');
+  return new Set(rows.map((r) => r.id));
+}
+
 // ── watermark + engine_status ───────────────────────────────────────────────
 export async function getWatermark(q: Queryable, name: string): Promise<Date | null> {
   const { rows } = await q.query<{ value: string }>('select value from watermark where name = $1', [name]);

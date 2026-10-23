@@ -438,6 +438,7 @@ Data model for the sync engine (`sync-engine/`, separate Fly app — see §5) pe
 | `config_cleanliness_rule`, `config_settings` | Data-cleanliness rules (spec §7) and tunables (creation stages, excluded groups, report schedules O-6/O-7, handoff SLA O-3). Coordinator-editable. `SYNC_MODE` is deliberately **not** here — it's a Fly secret. |
 | `map_business_unit` / `map_win_pct` / `map_sales_rep` / `map_stage_action` | Salesforce value → monday label ID (spec §3.2). `monday_label_id` null = known but unmapped → failure task. `map_sales_rep` reserves `(blank)` → House. Coordinator-editable; every edit is audited into `event_log`. |
 | `map_estimator` (`sync_triage_and_estimator.sql`) | monday Pre-Sales Engineer (user id) → Salesforce user **name**, resolved to an active user at write time (so one seed serves sandbox and production). `ignore` = never an estimator of record (skipped, no task); no row / no name → "map this engineer" task. Coordinator-editable, audited. |
+| `item_set_aside` (`sync_set_aside.sql`) | monday items the coordinator set aside (reason `change_order` / `other`, note, who / when): skipped by backfill, reconcile writes, writeback tasks and the cleanliness count. Coordinator-editable, audited; Restore = delete. |
 | `sf_link` | One row per pre-sales item mirroring a Salesforce AV line item. `last_synced_values` is the comparison baseline (last SF value the sync wrote, plus `sf.stage` and `miss:*` markers); `dry_run_synced_values` is the separate baseline used in dry run so dry-run never advances the live one. |
 | `task` | Hope's Queue (spec §3.3). App/MCP may update `status` only (column grant); a BEFORE trigger sets `monday_dirty` and `pg_notify('sync_task_changed')`. Everything else is engine-owned. |
 | `webhook_inbox`, `event_log`, `watermark`, `engine_status`, `cleanliness_snapshot`, `dry_run_report` | Inbound webhooks (persist-then-process), the append-only event log (UPDATE/DELETE rejected by trigger), sweep watermarks, engine heartbeat, daily cleanliness counts, daily dry-run diff. |
@@ -832,6 +833,9 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 ### YYYY-MM-DD
 - **Area** — what changed and why.
 -->
+
+### 2026-10-23 — Coordinator: set aside items that can never match Salesforce
+- **Set aside** (Seth): change orders and other monday items that will never agree with a Salesforce record can be set aside from the Coordinator page, from the Data Cleanliness item lists or from a backfill / "isn't linked" task's item list, with a reason (Change order / Other) and a note. The sync then skips them: no blank-field count (the count shows how many were set aside), no backfill link or problem, no writes, no "isn't linked" task; open tasks drop them within a minute. A new **Set aside** tab lists them with who / when and a **Restore** button. A set-aside item that holds a Salesforce link hands it to the other item with the same Salesforce ID at the next backfill (the real deal behind a change order). Proposal Type (Bid / Negotiated) is untouched because management reporting uses it. Migration `sync_set_aside.sql` (both schemas; table `item_set_aside`, audited).
 
 ### 2026-10-21 — Sync production rollout: engine in dry run; Hope's Queue live during the dry run
 - **Production engine** `instrata-sync-engine` deployed in dry run against production Salesforce and the production monday boards (rollout P1–P10: integration user and permission sets, External Client App, credentials, both Flows, board columns, backfill of 440 links and 50 problem tasks, diff report).
