@@ -16,7 +16,7 @@
  * countExceptions is pure (test/queue.test.mts); runCleanliness does the I/O, hourly.
  */
 import type { Db } from '../db/pool.ts';
-import { openTask, setEngineStatus } from '../db/store.ts';
+import { openTask, setAsideItemIds, setEngineStatus } from '../db/store.ts';
 import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient, MondayItemRaw } from '../monday/client.ts';
 import { etDate } from '../monday/encode.ts';
@@ -59,6 +59,8 @@ export interface CleanResult {
   itemsByField: Record<string, { id: string; name: string }[]>;
   /** board → items in scope */
   inScope: Record<string, number>;
+  /** board → in-scope items left out because the coordinator set them aside */
+  setAside: Record<string, number>;
 }
 
 export function countExceptions(input: {
@@ -71,8 +73,10 @@ export function countExceptions(input: {
   programmingNumbers: Set<string>;
   /** Current year (ET). */
   year: number;
+  /** monday item ids set aside (sync_set_aside.sql): not counted. */
+  setAside?: Set<string>;
 }): CleanResult {
-  const out: CleanResult = { total: 0, byField: {}, itemsByField: {}, inScope: {} };
+  const out: CleanResult = { total: 0, byField: {}, itemsByField: {}, inScope: {}, setAside: {} };
   for (const board of BOARDS) {
     const sc = input.scope[board];
     if (!sc) continue;
@@ -90,8 +94,10 @@ export function countExceptions(input: {
       }
       return false;
     };
-    const items = (input.items[board] ?? []).filter((it) => it.state === 'active' && inScope(it));
+    const active = (input.items[board] ?? []).filter((it) => it.state === 'active' && inScope(it));
+    const items = active.filter((it) => !input.setAside?.has(String(it.id)));
     out.inScope[board] = items.length;
+    out.setAside[board] = active.length - items.length;
     for (const r of rules) {
       const col = input.columns[r.semanticKey];
       if (!col?.columnId) continue;
@@ -122,11 +128,12 @@ export function cleanlinessText(r: CleanResult, columns: Record<string, { title?
     const fields = Object.entries(r.byField).filter(([k, n]) => k.startsWith(`${board}.`) && n > 0)
       .sort((a, b) => b[1] - a[1]).map(([k, n]) => `${titles[k] ?? k} ${n}`);
     const sum = Object.entries(r.byField).filter(([k]) => k.startsWith(`${board}.`)).reduce((a, [, n]) => a + n, 0);
-    lines.push(`${BOARD_TITLE[board]} (${r.inScope[board]} active items): ${sum} blank${fields.length ? ` — ${fields.join(', ')}` : ''}`);
+    const aside = r.setAside?.[board] ? `, ${r.setAside[board]} set aside` : '';
+    lines.push(`${BOARD_TITLE[board]} (${r.inScope[board]} active items${aside}): ${sum} blank${fields.length ? ` — ${fields.join(', ')}` : ''}`);
   }
   return {
     title: `Data cleanliness: ${r.total} blank required field${r.total === 1 ? '' : 's'}`,
-    details: `${lines.join('\n')}\n\nCounts active work only (Pre-Sales: Follow Up + this year's Won; Post-Sales: In Progress, Install, Close Out; Programming: On Radar, Active, Close Out). Refreshed hourly. The item list behind each count is coming to Hope's Dashboard in Project Tools.`,
+    details: `${lines.join('\n')}\n\nCounts active work only (Pre-Sales: Follow Up + this year's Won; Post-Sales: In Progress, Install, Close Out; Programming: On Radar, Active, Close Out). Refreshed hourly. The items behind each count are on the Coordinator page in Project Tools, where an item that can never match Salesforce (a change order, say) can be set aside.`,
   };
 }
 
@@ -165,7 +172,8 @@ export async function runCleanliness(deps: { db: Db; monday: MondayClient; cfg: 
   }).filter(Boolean));
 
   const year = Number(etDate(now.toISOString()).slice(0, 4));
-  const result = countExceptions({ items, rules, columns: cfg.planner.columns, groups: cfg.planner.groups, scope, programmingNumbers, year });
+  const setAside = await setAsideItemIds(deps.db);
+  const result = countExceptions({ items, rules, columns: cfg.planner.columns, groups: cfg.planner.groups, scope, programmingNumbers, year, setAside });
   const text = cleanlinessText(result, cfg.planner.columns, titles);
 
   await deps.db.tx(async (q) => {
@@ -176,6 +184,7 @@ export async function runCleanliness(deps: { db: Db; monday: MondayClient; cfg: 
     await setEngineStatus(q, 'cleanliness_items', {
       at: now.toISOString(), slug,
       boards: Object.fromEntries(BOARDS.map((b) => [b, cfg.boards[b] ?? null])),
+      setAside: result.setAside,
       fields: Object.fromEntries(Object.entries(result.itemsByField).map(([k, list]) => [k, {
         title: titles[k] ?? k, board: k.split('.')[0], count: result.byField[k], items: list.slice(0, 300),
       }])),
