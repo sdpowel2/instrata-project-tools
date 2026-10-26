@@ -47,6 +47,40 @@ export interface WriteGate {
   };
 }
 
+/**
+ * A live gate that can do ONE thing: write OpportunityLineItem.Estimator__c. For the
+ * Estimator first pass run while the engine is still in dry run (Seth 2026-10-26: the
+ * executives wanted the Estimators fixed before go-live). Every other write — monday,
+ * price / GM%, emails — throws, so nothing else can leak out of dry run.
+ */
+export function createEstimatorOnlyGate(monday: MondayClient, salesforce: SalesforceClient): WriteGate {
+  const live = createWriteGate('live', monday, salesforce);
+  const refuse = (what: string) => async (): Promise<never> => { throw new Error(`estimator-only gate: ${what} is not allowed`); };
+  const gate: WriteGate = {
+    mode: 'live',
+    drain: () => live.drain(),
+    fork: () => createEstimatorOnlyGate(monday, salesforce),
+    monday: {
+      changeColumnValues: refuse('a monday write'),
+      createItem: refuse('a monday write'),
+      moveItemToGroup: refuse('a monday write'),
+      moveItemToBoard: refuse('a monday write'),
+      archiveItem: refuse('a monday write'),
+      createUpdate: refuse('a monday write'),
+      createNotification: refuse('a monday write'),
+    },
+    salesforce: {
+      async patchLineItem(id, values) {
+        const keys = Object.keys(values);
+        if (keys.length !== 1 || keys[0] !== 'Estimator__c') throw new Error(`estimator-only gate: only Estimator__c may be written, got ${keys.join(', ')}`);
+        await live.salesforce.patchLineItem(id, values);
+      },
+      sendEmail: refuse('an email'),
+    },
+  };
+  return gate;
+}
+
 export function createWriteGate(mode: SyncMode, monday: MondayClient, salesforce: SalesforceClient): WriteGate {
   let journal: JournalEntry[] = [];
   const live = mode === 'live';

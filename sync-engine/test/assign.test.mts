@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { createTestDb, type TestDb } from './helpers/pglite.mts';
 import { fakeMonday, fakeSalesforce } from './helpers/fakes.mts';
 import { loadRuntimeConfig, type RuntimeConfig } from '../src/config/load.ts';
-import { createWriteGate } from '../src/writeGate.ts';
+import { createEstimatorOnlyGate, createWriteGate } from '../src/writeGate.ts';
 import { insertLink } from '../src/db/store.ts';
 import { pickEstimator, planEstimator, planTriage, unmappedEngineerKey, type AssignItem, type EstimatorInput } from '../src/assign/plan.ts';
 import { retryUnmappedEngineers, runAssignment, runEstimatorFirstPass } from '../src/assign/run.ts';
@@ -345,6 +345,25 @@ test('estimator_writeback off → Triage moves still run, Salesforce untouched',
   const r = await runAssignment(h.deps(), ITEM, null, 'engineer');
   assert.equal(r.triage, 'R7');
   assert.equal(h.sf.patches.length, 0);
+});
+
+test('first pass in a dry-run engine: the Estimator-only gate writes the Estimator and nothing else', async () => {
+  const h = harness({ mode: 'dry_run', estimator: { estimatorId: SHAUN.Id, estimatorName: SHAUN.Name } });
+  await link();
+  h.put(PRESALES, 'new_group12986', { engineers: [U.lee] });
+  const applied = await runEstimatorFirstPass({ ...h.deps(), gate: createEstimatorOnlyGate(h.monday.client, h.sf.client) }, { apply: true });
+  assert.deepEqual([applied.counts, applied.failed], [{ replace: 1 }, []]);
+  assert.deepEqual(h.sf.patches, [{ id: LINE, values: { Estimator__c: LEE.Id } }]);
+  assert.equal((await rows(`select count(*)::int n from event_log where event_type = 'writeback' and field = 'Estimator__c'`))[0].n, 1, 'logged as a real write');
+
+  // Anything else is refused outright.
+  const g = createEstimatorOnlyGate(h.monday.client, h.sf.client);
+  await assert.rejects(g.salesforce.patchLineItem(LINE, { UnitPrice: 10 }), /only Estimator__c/);
+  await assert.rejects(g.salesforce.patchLineItem(LINE, { Estimator__c: LEE.Id, UnitPrice: 10 }), /only Estimator__c/);
+  await assert.rejects(g.monday.changeColumnValues('1', ITEM, {}), /monday write/);
+  await assert.rejects(g.salesforce.sendEmail({ to: 'x@y.z', subject: 's', body: 'b' } as any), /email/);
+  assert.equal(h.monday.writes.length, 0);
+  assert.equal(h.sf.emails.length, 0);
 });
 
 test('first pass: preview writes nothing; apply overwrites, emails no rep, skips closed deals', async () => {

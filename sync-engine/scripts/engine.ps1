@@ -42,7 +42,8 @@ Write-Host "  got it - clipboard cleared" -ForegroundColor Green
 $headers = @{ 'x-internal-secret' = $secret }
 
 function Call([string]$method, [string]$path, $body) {
-  $request = @{ Method = $method; Uri = "$base$path"; Headers = $headers; TimeoutSec = 300 }
+  # 15 minutes: an Estimator first pass writes one line at a time and Salesforce runs its flows on each.
+  $request = @{ Method = $method; Uri = "$base$path"; Headers = $headers; TimeoutSec = 900 }
   if ($null -ne $body) { $request.Body = ($body | ConvertTo-Json -Compress); $request.ContentType = 'application/json' }
   try {
     return Invoke-RestMethod @request
@@ -84,9 +85,11 @@ switch ($Command) {
     return
   }
   'estimator-first-pass' {
-    $answer = Read-Host 'This WRITES the Estimator on every open linked deal (each engineer gets the Salesforce email). Type YES to continue'
+    # live = true: writes the Estimators even while the engine is in dry run (only that
+    # field; the engine refuses every other write on this run).
+    $answer = Read-Host 'This WRITES the Estimator in Salesforce on every open linked deal, even in dry run (each engineer gets the Salesforce alert email). Type YES to continue'
     if ($answer -cne 'YES') { Write-Host 'Cancelled.'; return }
-    $r = Call 'POST' '/admin/estimator-first-pass' @{ apply = $true }
+    $r = Call 'POST' '/admin/estimator-first-pass' @{ apply = $true; live = $true }
   }
   'reconcile' {
     if ($OpportunityId -notmatch '^006[a-zA-Z0-9]{12}([a-zA-Z0-9]{3})?$') { throw 'Give an opportunity id: engine.ps1 reconcile 006...' }

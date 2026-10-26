@@ -30,7 +30,7 @@ import { ensurePresalesWebhooks } from './monday/webhooks.ts';
 import { PRESALES_BOARD_KEYS } from './worker/mondayEvents.ts';
 import { createSalesforceClient } from './salesforce/client.ts';
 import { assertSfId } from './salesforce/soql.ts';
-import { createWriteGate } from './writeGate.ts';
+import { createEstimatorOnlyGate, createWriteGate } from './writeGate.ts';
 import { reconcileOpportunities } from './reconcile/service.ts';
 import { ingressRouter } from './ingress/routes.ts';
 import { safeEqual } from './ingress/parse.ts';
@@ -251,17 +251,21 @@ app.get('/admin/diff-report', internalOnly, async (req, res) => {
 });
 
 // Estimator cleanup over every linked open deal. Body {"apply": true} writes; otherwise a preview.
+// {"apply": true, "live": true} writes the Estimators even in dry run, through a gate that
+// can write nothing else (Seth 2026-10-26).
 app.post('/admin/estimator-first-pass', internalOnly, async (req, res) => {
   const apply = req.body?.apply === true;
+  const liveNow = apply && req.body?.live === true && env.syncMode === 'dry_run';
   try {
     const cfg = await getConfig();
+    const runGate = liveNow ? createEstimatorOnlyGate(monday, salesforce) : gate;
     const report = await db.withLock('estimator_first_pass', () =>
-      runEstimatorFirstPass({ db, gate, monday, salesforce, cfg, salesforceLoginUrl: env.salesforce.loginUrl }, { apply }));
+      runEstimatorFirstPass({ db, gate: runGate, monday, salesforce, cfg, salesforceLoginUrl: env.salesforce.loginUrl }, { apply }));
     if (!report) {
       res.status(409).json({ error: 'an estimator first pass is already running' });
       return;
     }
-    log.info('estimator first pass', { apply, mode: env.syncMode, counts: report.counts, failed: report.failed.length });
+    log.info('estimator first pass', { apply, mode: env.syncMode, estimatorOnlyLive: liveNow, counts: report.counts, failed: report.failed.length });
     if (req.query.format === 'csv') {
       res.type('text/csv').send(firstPassCsv(report));
       return;
