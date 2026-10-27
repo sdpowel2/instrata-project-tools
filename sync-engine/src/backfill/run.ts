@@ -35,6 +35,8 @@ export interface BackfillReport {
   setAside: number;
   /** Links a set-aside item held that go to the other item with the same Salesforce ID. */
   handedOver: number;
+  /** "isn't linked" writeback tasks closed because their item now has a link. */
+  unlinkedTasksClosed: number;
 }
 
 const chunk = <T>(xs: T[], n: number): T[][] => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
@@ -97,6 +99,7 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
     reconcilesQueued: 0,
     setAside: items.length - planItems.length,
     handedOver: handed.length,
+    unlinkedTasksClosed: 0,
   };
   if (opts.preview) return report;
 
@@ -114,6 +117,15 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
         [JSON.stringify(plan.links.map((l) => ({ item: l.mondayItemId, opp: l.sfOpportunityId, line: l.sfLineItemId, stage: l.stage })))]);
       report.linked = rows.length;
     }
+
+    // "Price/GM% not sent: item isn't linked" closes once the item has a link. A live
+    // writeback closes it too, but dry run never writes, so the backfill does it (Oct 27).
+    const { rows: noLink } = await q.query<{ dedupe_key: string }>(
+      `select t.dedupe_key from task t
+         join sf_link l on t.dedupe_key = 'writeback_no_link:' || l.monday_item_id::text
+        where t.status <> 'done'`);
+    for (const t of noLink) await closeTask(q, t.dedupe_key, 'auto', null);
+    report.unlinkedTasksClosed = noLink.length;
 
     for (const kind of Object.keys(plan.problems) as BackfillProblemKind[]) {
       const key = backfillTaskKey(kind);

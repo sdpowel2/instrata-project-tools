@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { planBackfill, idsToFetch, type BackfillItem, type SfLineRef } from '../src/backfill/plan.ts';
 import { runBackfill } from '../src/backfill/run.ts';
 import { loadRuntimeConfig } from '../src/config/load.ts';
+import { openTask } from '../src/db/store.ts';
 import { createTestDb, type TestDb } from './helpers/pglite.mts';
 import { fakeMonday, fakeSalesforce } from './helpers/fakes.mts';
 
@@ -121,4 +122,21 @@ test('run: links with a stage-only baseline in both columns, opens grouped probl
   monday.setCol(monday.items.get('1002')!, 'text_mkv2656m', JSON.stringify(''));
   await runBackfill(deps, { preview: false, reconcile: false });
   assert.equal((await rows(`select status from task where dedupe_key = 'sync_failure:backfill:bad_id'`))[0].status, 'done');
+});
+
+test('"isn\'t linked" writeback tasks close once the item has a link (dry run never writes, so the backfill closes them)', async () => {
+  const { deps } = await setup();
+  const noLink = (id: string) => openTask(db, { op: 'open', taskType: 'writeback_no_link', dedupeKey: `writeback_no_link:${id}`, title: 'Price/GM% not sent', details: '', sourceRef: {} }, null);
+  await noLink('1001');   // linked by this run
+  await noLink('1002');   // junk id: stays unlinked, task stays open
+  const r = await runBackfill(deps, { preview: false, reconcile: false });
+  assert.equal(r.unlinkedTasksClosed, 1);
+  const status = async (id: string) => (await rows(`select status from task where dedupe_key = 'writeback_no_link:${id}'`))[0].status;
+  assert.deepEqual([await status('1001'), await status('1002')], ['done', 'not_started']);
+
+  // An item linked on an earlier run with its task still open: closed on the next run.
+  await noLink('1001');
+  assert.equal(await status('1001'), 'not_started', 'reopened for the test');
+  assert.equal((await runBackfill(deps, { preview: false, reconcile: false })).unlinkedTasksClosed, 1);
+  assert.equal(await status('1001'), 'done');
 });
