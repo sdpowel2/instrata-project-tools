@@ -834,6 +834,12 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-28 — Sync live in production; status changes stay manual
+- **Go-live** (Seth): the three Zaps are off and `instrata-sync-engine` runs live since 10:22 ET. The first pass wrote 111 open opportunities (Win %, quote #, Sales Person, BU, due time), created nothing and raised no errors. Estimator writeback is on, and the Estimator catch-up wrote 8 lines.
+- **No status changes from Salesforce** (Seth, after leadership pushback the same morning): Rebid, On Hold, Closed Won, Closed Lost, Declined to Bid and Canceled now use the new stage action `notify`. The engine changes nothing in monday and emails Lee, Isaac and Kelina (`config_settings.stage_change_recipients`) through Salesforce's Send Email action. A person moves the item. Stage-check tasks, intake-board moves and No-Bid → Declined to Bid are unchanged.
+- **99% / 100% Win % show as 75%** instead of meaning Confirmed to Win (`confirmed_win_pcts` = `[]`).
+- Engine v8; migration `sync_stage_notify.sql` (run after the deploy); code `sync-engine/src/reconcile/notify.ts`; tests 124 + 49 planner cases.
+
 ### 2026-10-23 — Coordinator: set aside items that can never match Salesforce
 - **Set aside** (Seth): change orders and other monday items that will never agree with a Salesforce record can be set aside from the Coordinator page, from the Data Cleanliness item lists or from a backfill / "isn't linked" task's item list, with a reason (Change order / Other) and a note. The sync then skips them: no blank-field count (the count shows how many were set aside), no backfill link or problem, no writes, no "isn't linked" task; open tasks drop them within a minute. A new **Set aside** tab lists them with who / when and a **Restore** button. A set-aside item that holds a Salesforce link hands it to the other item with the same Salesforce ID at the next backfill (the real deal behind a change order). Proposal Type (Bid / Negotiated) is untouched because management reporting uses it. Migration `sync_set_aside.sql` (both schemas; table `item_set_aside`, audited).
 

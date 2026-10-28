@@ -86,7 +86,8 @@ export async function loadRuntimeConfig(
   const boardIds = Object.fromEntries(boards.rows.map((b) => [b.board_key, b.monday_board_id]));
   planner.intake = !!boardIds.prequal && !!boardIds.triage;
   const cw = settingsMap.confirmed_win_pcts;
-  planner.confirmedWinPcts = Array.isArray(cw) && cw.length > 0 ? cw.map(String) : ['100%'];
+  // [] = no Win % means Won: 99% / 100% map to a label like any other (Seth 2026-10-28).
+  planner.confirmedWinPcts = Array.isArray(cw) ? cw.map(String) : ['100%'];
 
   const dead = new Set(drift.deadMapRows.map((d) => `${d.table}|${d.sfValue}`));
   const maps: PlannerMaps = { businessUnit: {}, winPct: {}, salesRep: {}, stageAction: {} };

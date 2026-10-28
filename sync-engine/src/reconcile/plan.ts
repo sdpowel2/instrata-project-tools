@@ -38,6 +38,7 @@ import {
   type ReconcilePlan,
   type SfOpportunity,
   type StageActionRow,
+  type StageNotice,
   type TaskIntent,
 } from './types.ts';
 import {
@@ -71,6 +72,7 @@ interface Ctx {
   maps: PlannerMaps;
   tasks: TaskIntent[];
   events: EventIntent[];
+  notices: StageNotice[];
 }
 
 type Writability = 'ok' | 'blocked' | 'unconfigured';
@@ -526,6 +528,7 @@ function applyStageAction(ctx: Ctx, row: StageActionRow, item: MondayItemSnapsho
   const ref = { board_key: 'presales', monday_item_id: item.id, sf_opportunity_id: ctx.opp.Id };
   switch (row.action) {
     case 'none':
+    case 'notify': // syncStage queues the email; monday is left for a person to move
       return;
 
     case 'set_status':
@@ -587,6 +590,19 @@ function applyStageAction(ctx: Ctx, row: StageActionRow, item: MondayItemSnapsho
   }
 }
 
+/** One email per opportunity, listing every linked item (a duplicate item makes two). */
+function notifyStageChange(ctx: Ctx, fromStage: string, item: MondayItemSnapshot): void {
+  let notice = ctx.notices[0];
+  if (!notice) {
+    notice = {
+      opportunityId: ctx.opp.Id, opportunityName: ctx.opp.Name, fromStage, toStage: ctx.opp.StageName,
+      salesRep: ctx.opp.Sales_Rep__r?.Name ?? null, changedBy: ctx.opp.LastModifiedBy?.Name ?? null, items: [],
+    };
+    ctx.notices.push(notice);
+  }
+  notice.items.push({ mondayItemId: item.id, boardKey: boardOf(item), groupId: item.groupId, statusLabelId: item.statusLabelId, quotedPrice: item.quotedPrice });
+}
+
 /**
  * Stage change (or first sight) + Win-100% → Won. Mutates baseline and fx.
  */
@@ -595,10 +611,11 @@ function syncStage(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, fx: I
   const has = Object.prototype.hasOwnProperty.call(baseline, STAGE_KEY);
   const row = ctx.maps.stageAction[cur];
   let ranWon = false;
-  const changed = !has || baseline[STAGE_KEY] !== cur;
+  const prev = baseline[STAGE_KEY];
+  const changed = !has || prev !== cur;
 
   if (changed) {
-    if (has) ctx.events.push(sfEvent(ctx, { eventType: 'stage_changed', field: 'StageName', oldValue: baseline[STAGE_KEY], newValue: cur }));
+    if (has) ctx.events.push(sfEvent(ctx, { eventType: 'stage_changed', field: 'StageName', oldValue: prev, newValue: cur }));
     baseline[STAGE_KEY] = cur;
     if (!row) {
       openFailure(
@@ -610,6 +627,8 @@ function syncStage(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, fx: I
     } else {
       applyStageAction(ctx, row, item, fx);
       ranWon = row.action === 'won';
+      // Only a real change emails: never a first sight (create, a fresh link).
+      if (row.action === 'notify' && has) notifyStageChange(ctx, prev ?? '', item);
     }
   }
 
@@ -621,7 +640,7 @@ function syncStage(ctx: Ctx, baseline: Baseline, item: MondayItemSnapshot, fx: I
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 export function planReconcile(input: ReconcileInput): ReconcilePlan {
-  const plan: ReconcilePlan = { opportunityId: input.opportunityId, create: null, items: [], tasks: [], events: [] };
+  const plan: ReconcilePlan = { opportunityId: input.opportunityId, create: null, items: [], tasks: [], events: [], notices: [] };
   const { opportunity: opp, config, maps } = input;
 
   if (!opp) {
@@ -638,7 +657,7 @@ export function planReconcile(input: ReconcileInput): ReconcilePlan {
     return plan;
   }
 
-  const ctx: Ctx = { opp, config, maps, tasks: plan.tasks, events: plan.events };
+  const ctx: Ctx = { opp, config, maps, tasks: plan.tasks, events: plan.events, notices: plan.notices };
   const avLines = opp.lineItems.filter(isAvLineItem);
   const target = createTargetFor(config, opp.StageName);
   const eligibleStage = target !== null;
@@ -826,7 +845,7 @@ function reviewEstimateDue(ctx: Ctx, baseline: Baseline, item: MondayItemSnapsho
 // ── First-pass review of Confirmed-to-Win items (Seth 2026-10-12) ───────────
 const REVIEW_MARK = 'review:won';
 
-function humanStatus(cfg: PlannerConfig, id: number | null): string {
+export function humanStatus(cfg: PlannerConfig, id: number | null): string {
   if (id === null) return 'blank';
   const hit = Object.entries(cfg.labels).find(([k, v]) => k.startsWith('presales.status.') && v === id);
   if (!hit) return `label ${id}`;
@@ -874,6 +893,7 @@ function reviewConfirmedWin(ctx: Ctx, baseline: Baseline, item: MondayItemSnapsh
 export function planHasEffects(plan: ReconcilePlan): boolean {
   if (plan.create) return true;
   if (plan.events.length > 0) return true;
+  if (plan.notices.length > 0) return true;
   if (plan.tasks.some((t) => t.op === 'open')) return true;
   return plan.items.some(
     (i) => i.columnWrites.length > 0 || i.moveTo || i.postUpdate || i.archive || i.newLinkState,

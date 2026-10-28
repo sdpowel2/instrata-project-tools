@@ -33,6 +33,7 @@ export interface SfOpportunity {
   Lost_To__c: string | null;
   SystemModstamp: string;
   LastModifiedById?: string | null; // optional: event actor for rework analysis
+  LastModifiedBy?: { Name: string | null } | null; // optional: "changed by" in the stage-change email
   lineItems: SfLineItem[]; // AV-filtered by the query, re-checked by the planner
 }
 
@@ -89,8 +90,12 @@ export interface ColumnDef {
   owner: 'salesforce' | 'monday' | 'shared' | 'engine';
 }
 
+/**
+ * 'notify' (Seth 2026-10-28): leadership moves items by hand. The engine changes
+ * nothing in monday and emails config_settings.stage_change_recipients instead.
+ */
 export type StageActionKind =
-  | 'none' | 'set_status' | 'stage_check_delivered' | 'stage_check_contract' | 'won' | 'lost' | 'declined' | 'canceled';
+  | 'none' | 'set_status' | 'stage_check_delivered' | 'stage_check_contract' | 'won' | 'lost' | 'declined' | 'canceled' | 'notify';
 
 export interface StageActionRow {
   action: StageActionKind;
@@ -249,10 +254,22 @@ export interface ItemPlan {
   baseline: Baseline;
 }
 
+/** A real StageName change to a 'notify' stage; the executor turns it into one email. */
+export interface StageNotice {
+  opportunityId: string;
+  opportunityName: string;
+  fromStage: string;
+  toStage: string;
+  salesRep: string | null;
+  changedBy: string | null;
+  items: { mondayItemId: string; boardKey: string; groupId: string | null; statusLabelId: number | null; quotedPrice: number | null }[];
+}
+
 export interface ReconcilePlan {
   opportunityId: string;
   create: CreatePlan | null;
   items: ItemPlan[];
   tasks: TaskIntent[];
   events: EventIntent[];
+  notices: StageNotice[];
 }

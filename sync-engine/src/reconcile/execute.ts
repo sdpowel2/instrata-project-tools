@@ -28,11 +28,15 @@ import { CREATED_ITEM, type ReconcilePlan, type TaskIntent } from './types.ts';
 import { STAGE_KEY } from './normalize.ts';
 import { handoffSlaDays } from '../queue/won.ts';
 import { businessDaysAfter } from '../queue/time.ts';
+import { errMessage } from '../log.ts';
+import { stageChangeRecipients, stageNoticeEmail } from './notify.ts';
 
 export interface ExecuteDeps {
   db: Db;
   gate: WriteGate;
   cfg: RuntimeConfig;
+  /** Links in the stage-change email; absent → the email goes out without them. */
+  links?: { sfBase: string | null; mondaySlug: string | null };
 }
 
 export interface ExecuteResult {
@@ -95,6 +99,22 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
     if (ip.archive) await gate.monday.archiveItem(ip.mondayItemId);
   }
 
+  // Stage-change emails (Seth 2026-10-28). A failed send is logged, never retried:
+  // it must not hold back the opportunity's field sync.
+  const noticeEvents: EventRow[] = [];
+  const to = stageChangeRecipients(cfg.settings);
+  for (const n of plan.notices) {
+    if (to.length === 0 || n.items.every((it) => aside.has(it.mondayItemId))) continue;
+    const msg = stageNoticeEmail(n, { to, cfg: cfg.planner, boards: cfg.boards, sfBase: deps.links?.sfBase ?? null, mondaySlug: deps.links?.mondaySlug ?? null });
+    const base = { source: 'engine' as const, entity_type: 'opportunity' as const, entity_id: n.opportunityId, event_type: 'notified', actor: 'engine' };
+    try {
+      await gate.salesforce.sendEmail(msg);
+      noticeEvents.push({ ...base, details: { kind: 'stage_change', email_to: msg.to, subject: msg.subject, from_stage: n.fromStage, to_stage: n.toStage } });
+    } catch (e) {
+      noticeEvents.push({ ...base, applied: false, details: { kind: 'stage_change', email_to: msg.to, from_stage: n.fromStage, to_stage: n.toStage, error: errMessage(e) } });
+    }
+  }
+
   const journal = gate.drain();
 
   // ── Persist ──
@@ -106,6 +126,7 @@ export async function executePlan(deps: ExecuteDeps, plan: ReconcilePlan): Promi
   const events: EventRow[] = plan.events
     .filter((e) => (live || e.eventType === 'sync_failure') && !aside.has(e.entityId))
     .map((e) => ({ ...eventRowFromIntent(e), entity_id: resolve(e.entityId) }));
+  if (live) events.push(...noticeEvents);
 
   if (!live) {
     for (const j of journal) {

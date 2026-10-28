@@ -30,7 +30,7 @@ export function opportunityQuery(ids: string[]): string {
   return [
     'SELECT Id, Name, StageName, Estimate_Due_Date_Time__c, Estimate_Number__c,',
     '       Win_Likelihood__c, Business_Unit__c, Sales_Rep__c, Sales_Rep__r.Name,',
-    '       Lost_Reason__c, Other_lost_reason__c, Lost_To__c, SystemModstamp, LastModifiedById,',
+    '       Lost_Reason__c, Other_lost_reason__c, Lost_To__c, SystemModstamp, LastModifiedById, LastModifiedBy.Name,',
     `       (SELECT Id, isAVProduct__c, Technology__c, UnitPrice, Quantity, ${LINE_ITEM_MARGIN_FIELD}, CreatedDate`,
     '          FROM OpportunityLineItems',
     "         WHERE isAVProduct__c = true OR Technology__c = 'AV')",
@@ -106,6 +106,7 @@ export function mapOpportunity(r: any): SfOpportunity {
     Lost_To__c: r.Lost_To__c ?? null,
     SystemModstamp: r.SystemModstamp,
     LastModifiedById: r.LastModifiedById ?? null,
+    LastModifiedBy: r.LastModifiedBy ? { Name: r.LastModifiedBy.Name ?? null } : null,
     lineItems: lines,
   };
 }

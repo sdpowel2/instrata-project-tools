@@ -39,7 +39,7 @@ function labelsFor(cfg: RuntimeConfig, semanticKey: string): Record<string, numb
 }
 
 let slugCache: string | null = null;
-async function accountSlug(monday: MondayClient): Promise<string | null> {
+export async function accountSlug(monday: MondayClient): Promise<string | null> {
   if (slugCache) return slugCache;
   const r = await monday.query<{ account: { slug: string } | null }>('query { account { slug } }').catch(() => null);
   slugCache = r?.account?.slug ?? null;

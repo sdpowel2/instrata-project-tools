@@ -10,7 +10,9 @@ import type { MondayClient } from '../monday/client.ts';
 import type { SalesforceClient } from '../salesforce/client.ts';
 import type { WriteGate } from '../writeGate.ts';
 import { errMessage, log } from '../log.ts';
-import { executePlan, type ExecuteResult } from './execute.ts';
+import { executePlan, type ExecuteDeps, type ExecuteResult } from './execute.ts';
+import { accountSlug } from '../queue/run.ts';
+import { lightningBase } from '../report/run.ts';
 import { planReconcile } from './plan.ts';
 import { snapshotColumnIds, toSnapshot } from './snapshot.ts';
 import type { MondayItemSnapshot } from './types.ts';
@@ -21,6 +23,8 @@ export interface ReconcileDeps {
   monday: MondayClient;
   salesforce: SalesforceClient;
   getConfig: () => Promise<RuntimeConfig>;
+  /** Salesforce login URL, for the opportunity link in stage-change emails. */
+  salesforceLoginUrl?: string;
 }
 
 export interface ReconcileSummary {
@@ -47,6 +51,7 @@ export async function reconcileOpportunities(deps: ReconcileDeps, ids: string[])
     }
   }
 
+  let emailLinks: ExecuteDeps['links'];
   for (const opportunityId of unique) {
     try {
       const plan = planReconcile({
@@ -57,7 +62,10 @@ export async function reconcileOpportunities(deps: ReconcileDeps, ids: string[])
         config: cfg.planner,
         maps: cfg.maps,
       });
-      const result = await executePlan({ db: deps.db, gate: deps.gate, cfg }, plan);
+      if (plan.notices.length > 0 && !emailLinks) {
+        emailLinks = { sfBase: deps.salesforceLoginUrl ? lightningBase(deps.salesforceLoginUrl) : null, mondaySlug: await accountSlug(deps.monday) };
+      }
+      const result = await executePlan({ db: deps.db, gate: deps.gate, cfg, links: emailLinks }, plan);
       summary.results.push({ opportunityId, result });
       if (result.externalWrites > 0 || plan.create) {
         log.info('reconciled', { opportunityId, mode: deps.gate.mode, writes: result.externalWrites, created: result.createdItemId, correlationId: result.correlationId });
