@@ -33,7 +33,7 @@ export interface BackfillReport {
   reconcilesQueued: number;
   /** Items the coordinator set aside: skipped entirely. */
   setAside: number;
-  /** Links a set-aside item held that go to the other item with the same Salesforce ID. */
+  /** Links a set-aside item (or a deleted / archived item) held that go to the other item with the same Salesforce ID. */
   handedOver: number;
   /** "isn't linked" writeback tasks closed because their item now has a link. */
   unlinkedTasksClosed: number;
@@ -42,6 +42,7 @@ export interface BackfillReport {
 const chunk = <T>(xs: T[], n: number): T[][] => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 const inList = (ids: string[]) => ids.map((id) => `'${assertSfId(id)}'`).join(', ');
 const key15 = (id: string) => id.slice(0, 15);
+const BACKFILL_BOARDS = ['presales', 'prequal', 'triage'] as const;
 
 /** The Salesforce side of planBackfill: line items by id, AV lines per opportunity id. */
 export async function lookupSfIds(salesforce: SalesforceClient, items: BackfillItem[]): Promise<{ lineItems: Map<string, SfLineRef>; avLinesByOpp: Map<string, SfLineRef[]> }> {
@@ -64,18 +65,26 @@ export async function lookupSfIds(salesforce: SalesforceClient, items: BackfillI
 }
 
 export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; reconcile: boolean }): Promise<BackfillReport> {
-  const boardId = deps.cfg.boards.presales;
   const sfCol = deps.cfg.planner.columns['presales.sf_id']?.columnId;
-  if (!boardId || !sfCol) throw new Error('presales board / presales.sf_id column not configured');
+  if (!deps.cfg.boards.presales || !sfCol) throw new Error('presales board / presales.sf_id column not configured');
 
-  // 1. Every item on the board, with its Salesforce ID text.
+  // 1. Every item on the three pre-sales boards (same column ids), with its Salesforce
+  // ID text. Pre-Qualification and Triage since Oct 30: Hope moves old Lead /
+  // Qualified items there and types their IDs in.
   const items: BackfillItem[] = [];
-  await deps.monday.pageBoardItems(boardId, [sfCol], (page) => {
-    for (const it of page) {
-      const c = it.column_values.find((x) => x.id === sfCol);
-      items.push({ id: String(it.id), name: it.name, sfId: c?.text ?? readText(c?.value ?? null) });
-    }
-  });
+  const seen = new Set<string>();
+  for (const key of BACKFILL_BOARDS) {
+    const boardId = deps.cfg.boards[key];
+    if (!boardId) continue;
+    await deps.monday.pageBoardItems(boardId, [sfCol], (page) => {
+      for (const it of page) {
+        if (seen.has(String(it.id))) continue; // moved between boards mid-read
+        seen.add(String(it.id));
+        const c = it.column_values.find((x) => x.id === sfCol);
+        items.push({ id: String(it.id), name: it.name, sfId: c?.text ?? readText(c?.value ?? null) });
+      }
+    });
+  }
 
   // Set-aside items (change orders etc.) are left out: never linked, never a problem.
   const aside = await setAsideItemIds(deps.db);
@@ -87,15 +96,18 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
   // 3. Plan against what's already linked.
   // A link held by a set-aside item doesn't claim its line, so the other item with
   // the same Salesforce ID (usually the real deal behind a change order) can take it.
-  const { rows: allLinks } = await deps.db.query<{ item: string; line: string }>(
-    'select monday_item_id::text as item, sf_line_item_id as line from sf_link');
-  const existing = allLinks.filter((e) => !aside.has(e.item));
+  // Neither does an archived link (its item was deleted or archived; Oct 30, as linkOne).
+  const { rows: allLinks } = await deps.db.query<{ item: string; line: string; state: string }>(
+    'select monday_item_id::text as item, sf_line_item_id as line, link_state as state from sf_link');
+  const released = (e: { item: string; state: string }) => aside.has(e.item) || e.state === 'archived';
+  const existing = allLinks.filter((e) => !released(e));
   const plan = planBackfill({
     items: planItems, lineItems, avLinesByOpp,
     alreadyLinkedItems: new Set(existing.map((e) => e.item)),
     alreadyLinkedLines: new Set(existing.map((e) => e.line)),
   });
-  const handed = allLinks.filter((e) => aside.has(e.item) && plan.links.some((l) => key15(l.sfLineItemId) === key15(e.line)));
+  const handed = allLinks.filter((e) => released(e)
+    && plan.links.some((l) => key15(l.sfLineItemId) === key15(e.line) || l.mondayItemId === e.item));
 
   const report: BackfillReport = {
     preview: opts.preview,

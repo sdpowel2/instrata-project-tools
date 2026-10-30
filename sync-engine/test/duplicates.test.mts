@@ -13,7 +13,12 @@ import { reconcileOpportunities } from '../src/reconcile/service.ts';
 import { handleMondayEvent } from '../src/worker/mondayEvents.ts';
 import { findDuplicates, possibleDuplicateKey, type PoolItem } from '../src/reconcile/duplicates.ts';
 import { insertLink } from '../src/db/store.ts';
+import { runBackfill } from '../src/backfill/run.ts';
 import type { SfOpportunity } from '../src/reconcile/types.ts';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const INTAKE = fileURLToPath(new URL('../../supabase/migrations/sync_intake_boards.sql', import.meta.url));
 
 // ── Matcher ──
 const p = (id: string, name: string, quote: string | null = null, sfId: string | null = null): PoolItem => ({ id, name, boardKey: 'presales', groupId: 'g', quote, sfId });
@@ -152,6 +157,28 @@ test('a line held by an archived link (deleted Triage item) moves to the pasted 
   const r = await h.paste('12792560071', LINE);
   assert.equal(r.kind === 'done' && r.note, `linked to ${LINE}`);
   assert.deepEqual((await rows('select monday_item_id::text as item, link_state from sf_link')).map((l) => [l.item, l.link_state]), [['12792560071', 'active']]);
+});
+
+test('backfill reads Pre-Qualification and Triage too, and takes lines from archived links', async () => {
+  await db.pg.exec(`reset role; ${readFileSync(INTAKE, 'utf8')} set role sync_engine;`);
+  const h = await harness();
+  const prequal = String(h.cfg.boards.prequal);
+  const LINE2 = '00kAAA000000002';
+  h.existing('12016646886', 'Project Baccara / Project Eagle - Monterra', LINE);
+  h.monday.items.get('12016646886')!.board = { id: prequal };
+  h.existing('12792560071', 'Cardinal Infrastructure Group Cabling & AV (Acorn) - Base Bid', LINE2);
+  await insertLink(db, { mondayItemId: '13421241584', sfOpportunityId: '006AAA000000002', sfLineItemId: LINE2, baseline: {} }, 'live');
+  await db.query(`update sf_link set link_state = 'archived'`);
+  h.sf.setQueryResults({ 'FROM OpportunityLineItem WHERE Id IN': [
+    { Id: LINE, OpportunityId: OPP, Opportunity: { StageName: 'Lead' } },
+    { Id: LINE2, OpportunityId: '006AAA000000002', Opportunity: { StageName: 'Contract In House' } },
+  ] });
+  const r = await runBackfill({ db, monday: h.monday.client, salesforce: h.sf.client, cfg: await loadRuntimeConfig(db) }, { preview: false, reconcile: false });
+  assert.equal(r.linked, 2);
+  assert.equal(r.handedOver, 1, 'the deleted Triage item\'s link');
+  assert.equal(r.problems.duplicate.count, 0);
+  assert.deepEqual((await rows('select monday_item_id::text as item, link_state from sf_link order by 1')).map((l) => [l.item, l.link_state]),
+    [['12016646886', 'active'], ['12792560071', 'active']]);
 });
 
 test('a line held by a LIVE item is not stolen: duplicate problem for Hope', async () => {
