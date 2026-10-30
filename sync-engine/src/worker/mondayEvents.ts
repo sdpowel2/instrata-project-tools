@@ -22,6 +22,7 @@ import { assignColumnIds, runAssignment, type AssignTrigger } from '../assign/ru
 import { log } from '../log.ts';
 import { handleQueueEvent } from '../queue/run.ts';
 import { openWonTasksForItem, withdrawWonTasksForItem } from '../queue/jobs.ts';
+import { linkPastedId } from '../backfill/linkOne.ts';
 import type { InboxRow } from './inbox.ts';
 
 export interface MondayEventDeps {
@@ -92,6 +93,13 @@ export async function handleMondayEvent(deps: MondayEventDeps, row: InboxRow): P
   if (!key) return { kind: 'done', note: 'untracked column' };
 
   if (WRITEBACK_KEYS.includes(key)) return writeback(deps, row, ev);
+
+  // A person typed / pasted a Salesforce ID → link the item now (Seth 2026-10-30).
+  if (key === 'presales.sf_id') {
+    const r = await linkPastedId(deps, ev.itemId);
+    if (r.kind !== 'skipped') log.info('pasted Salesforce ID', { itemId: ev.itemId, ...r });
+    return { kind: 'done', note: r.kind === 'linked' ? `linked to ${r.sfLineItemId}` : r.kind === 'problem' ? `not linked: ${r.problem}` : r.note };
+  }
 
   const col = deps.cfg.planner.columns[key];
   if (col.owner === 'salesforce' || key === 'presales.status') {

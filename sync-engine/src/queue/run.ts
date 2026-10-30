@@ -16,7 +16,7 @@ import type { RuntimeConfig } from '../config/load.ts';
 import type { MondayClient } from '../monday/client.ts';
 import { encodeColumnValues, readStatusLabelId } from '../monday/encode.ts';
 import type { MondayEvent } from '../ingress/parse.ts';
-import { isMondayRemoval } from '../ingress/parse.ts';
+import { isMondayRemoval, sha256 } from '../ingress/parse.ts';
 import { lightningBase } from '../report/run.ts';
 import type { WriteGate } from '../writeGate.ts';
 import { errMessage, log } from '../log.ts';
@@ -218,6 +218,13 @@ export async function handleQueueEvent(deps: QueueDeps, ev: MondayEvent): Promis
   await deps.db.tx(async (q) => {
     if (status === 'done') {
       await closeTask(q, task.dedupe_key, 'manual', correlationId);
+      // "Different project" on a held create → reconcile now; the engine creates the item.
+      const held = /^sync_failure:possible_duplicate:([^:]+):create$/.exec(task.dedupe_key);
+      if (held) {
+        await q.query(
+          `insert into webhook_inbox (source, payload, dedupe_hash) values ('salesforce', $1::jsonb, $2) on conflict (dedupe_hash) do nothing`,
+          [JSON.stringify({ object: 'NotDuplicate', opportunity_id: held[1] }), sha256('not_duplicate', held[1], correlationId)]);
+      }
     } else if (task.status === 'done') {
       await q.query(
         `update task set status = $2, synced_status = $2, close_mode = null, closed_at = null, open_since = now(),

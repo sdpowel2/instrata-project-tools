@@ -834,6 +834,11 @@ Claude client ──(Streamable HTTP, Authorization: Bearer <access token>)─�
 - **Area** — what changed and why.
 -->
 
+### 2026-10-30 — Sync: duplicate check before creating; a pasted Salesforce ID links at once
+- **Possible duplicate** (Seth): before the engine creates an item on Pre-Qualification / Triage, it looks for an unlinked item on the three pre-sales boards with the same Salesforce ID, quote number or a near-identical name. If an item already holds the ID, the engine links it. Any other match holds the create and opens a "Possible duplicate" task on Hope's Queue listing the matches. Hope pastes the ID into the right item, or marks the task Done and the engine creates the item.
+- **Pasting a Salesforce ID links the item within a minute** on any of the three boards (before, only the daily backfill linked). If the ID belonged to a deleted or archived item, the link moves over.
+- Engine v9, no migration; code `sync-engine/src/reconcile/duplicates.ts`, `holdCreate.ts`, `src/backfill/linkOne.ts`; tests 131 + 49 planner cases.
+
 ### 2026-10-28 — Sync live in production; status changes stay manual
 - **Go-live** (Seth): the three Zaps are off and `instrata-sync-engine` runs live since 10:22 ET. The first pass wrote 111 open opportunities (Win %, quote #, Sales Person, BU, due time), created nothing and raised no errors. Estimator writeback is on, and the Estimator catch-up wrote 8 lines.
 - **No status changes from Salesforce** (Seth, after leadership pushback the same morning): Rebid, On Hold, Closed Won, Closed Lost, Declined to Bid and Canceled now use the new stage action `notify`. The engine changes nothing in monday and emails Lee, Isaac and Kelina (`config_settings.stage_change_recipients`) through Salesforce's Send Email action. A person moves the item. Stage-check tasks, intake-board moves and No-Bid → Declined to Bid are unchanged.

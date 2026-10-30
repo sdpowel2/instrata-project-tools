@@ -43,6 +43,26 @@ const chunk = <T>(xs: T[], n: number): T[][] => Array.from({ length: Math.ceil(x
 const inList = (ids: string[]) => ids.map((id) => `'${assertSfId(id)}'`).join(', ');
 const key15 = (id: string) => id.slice(0, 15);
 
+/** The Salesforce side of planBackfill: line items by id, AV lines per opportunity id. */
+export async function lookupSfIds(salesforce: SalesforceClient, items: BackfillItem[]): Promise<{ lineItems: Map<string, SfLineRef>; avLinesByOpp: Map<string, SfLineRef[]> }> {
+  const { lineIds, oppIds } = idsToFetch(items);
+  const lineItems = new Map<string, SfLineRef>();
+  for (const ids of chunk(lineIds, 150)) {
+    const rows = await salesforce.query<any>(
+      `SELECT Id, OpportunityId, Opportunity.StageName FROM OpportunityLineItem WHERE Id IN (${inList(ids)})`);
+    for (const r of rows) lineItems.set(r.Id, { id: r.Id, opportunityId: r.OpportunityId, stage: r.Opportunity?.StageName ?? '' });
+  }
+  const avLinesByOpp = new Map<string, SfLineRef[]>();
+  for (const ids of chunk(oppIds, 100)) {
+    const rows = await salesforce.query<any>(
+      `SELECT Id, StageName, (SELECT Id FROM OpportunityLineItems WHERE isAVProduct__c = true OR Technology__c = 'AV') FROM Opportunity WHERE Id IN (${inList(ids)})`);
+    for (const r of rows) {
+      avLinesByOpp.set(key15(r.Id), (r.OpportunityLineItems?.records ?? []).map((l: any) => ({ id: l.Id, opportunityId: r.Id, stage: r.StageName })));
+    }
+  }
+  return { lineItems, avLinesByOpp };
+}
+
 export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; reconcile: boolean }): Promise<BackfillReport> {
   const boardId = deps.cfg.boards.presales;
   const sfCol = deps.cfg.planner.columns['presales.sf_id']?.columnId;
@@ -62,21 +82,7 @@ export async function runBackfill(deps: BackfillDeps, opts: { preview: boolean; 
   const planItems = items.filter((i) => !aside.has(i.id));
 
   // 2. Look the ids up in Salesforce.
-  const { lineIds, oppIds } = idsToFetch(planItems);
-  const lineItems = new Map<string, SfLineRef>();
-  for (const ids of chunk(lineIds, 150)) {
-    const rows = await deps.salesforce.query<any>(
-      `SELECT Id, OpportunityId, Opportunity.StageName FROM OpportunityLineItem WHERE Id IN (${inList(ids)})`);
-    for (const r of rows) lineItems.set(r.Id, { id: r.Id, opportunityId: r.OpportunityId, stage: r.Opportunity?.StageName ?? '' });
-  }
-  const avLinesByOpp = new Map<string, SfLineRef[]>();
-  for (const ids of chunk(oppIds, 100)) {
-    const rows = await deps.salesforce.query<any>(
-      `SELECT Id, StageName, (SELECT Id FROM OpportunityLineItems WHERE isAVProduct__c = true OR Technology__c = 'AV') FROM Opportunity WHERE Id IN (${inList(ids)})`);
-    for (const r of rows) {
-      avLinesByOpp.set(key15(r.Id), (r.OpportunityLineItems?.records ?? []).map((l: any) => ({ id: l.Id, opportunityId: r.Id, stage: r.StageName })));
-    }
-  }
+  const { lineItems, avLinesByOpp } = await lookupSfIds(deps.salesforce, planItems);
 
   // 3. Plan against what's already linked.
   // A link held by a set-aside item doesn't claim its line, so the other item with

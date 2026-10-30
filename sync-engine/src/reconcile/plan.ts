@@ -51,6 +51,7 @@ import {
   type SfFieldKey,
 } from './normalize.ts';
 import { etDate, mondayValueMatches, readEtDate } from '../monday/encode.ts';
+import { possibleDuplicateKey } from './duplicates.ts';
 
 const FIELD_META: Record<SfFieldKey, { label: string; mondayColumn: string; map?: keyof Omit<PlannerMaps, 'stageAction'>; table?: string }> = {
   'presales.due_date': { label: 'Due Date', mondayColumn: 'Due Date' },
@@ -675,6 +676,8 @@ export function planReconcile(input: ReconcileInput): ReconcilePlan {
     const unlinked = avLines.filter((li) => !linkedIds.has(li.Id));
     if (unlinked.length > 0 && eligibleStage) openMulti(avLines.length);
     else closeTask(ctx, multiKey);
+    // A held create (Possible duplicate) is settled once the deal has a link.
+    closeTask(ctx, possibleDuplicateKey(opp.Id));
 
     for (const link of input.links) {
       const itemPlan = planLink(ctx, link, input.items[link.mondayItemId], avLines.some((li) => li.Id === link.sfLineItemId));

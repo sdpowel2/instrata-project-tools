@@ -13,6 +13,7 @@ import { errMessage, log } from '../log.ts';
 import { executePlan, type ExecuteDeps, type ExecuteResult } from './execute.ts';
 import { accountSlug } from '../queue/run.ts';
 import { lightningBase } from '../report/run.ts';
+import { checkBeforeCreate, holdCreate } from './holdCreate.ts';
 import { planReconcile } from './plan.ts';
 import { snapshotColumnIds, toSnapshot } from './snapshot.ts';
 import type { MondayItemSnapshot } from './types.ts';
@@ -62,6 +63,21 @@ export async function reconcileOpportunities(deps: ReconcileDeps, ids: string[])
         config: cfg.planner,
         maps: cfg.maps,
       });
+      // Duplicate check before a create (Seth 2026-10-30): link an item that already
+      // holds the ID, or hold the create for Hope when an unlinked item looks the same.
+      const opp = opps.get(opportunityId);
+      if (plan.create && opp) {
+        const check = await checkBeforeCreate(deps, cfg, opp, plan.create.sfLineItemId);
+        if (check.kind === 'linked') {
+          log.info('linked existing item', { opportunityId, itemId: check.itemId, mode: deps.gate.mode });
+          summary.results.push({ opportunityId, result: { correlationId: '', createdItemId: null, externalWrites: 0 } });
+          continue; // linkPastedId queued the reconcile of the linked item
+        }
+        if (check.kind === 'hold') {
+          holdCreate(plan, opp, check.matches, cfg, await accountSlug(deps.monday));
+          log.info('create held: possible duplicate', { opportunityId, matches: check.matches.length, first: check.matches[0].item.id, why: check.matches[0].why });
+        }
+      }
       if (plan.notices.length > 0 && !emailLinks) {
         emailLinks = { sfBase: deps.salesforceLoginUrl ? lightningBase(deps.salesforceLoginUrl) : null, mondaySlug: await accountSlug(deps.monday) };
       }

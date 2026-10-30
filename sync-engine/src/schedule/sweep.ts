@@ -41,6 +41,14 @@ export async function runSweep(deps: { db: Db; salesforce: SalesforceClient }, n
     `select distinct m->>'id' as opp
        from task, jsonb_array_elements(coalesce(source_ref->'members', '[]'::jsonb)) as m
       where dedupe_key like 'sync_failure:unmapped_value:%' and status <> 'done'`);
+  // "Different project" set on a held create from Project Tools (no monday webhook):
+  // still unlinked → reconcile, and the engine creates the item (Seth 2026-10-30).
+  const { rows: dismissed } = await deps.db.query<{ opp: string }>(
+    `select split_part(t.dedupe_key, ':', 3) as opp from task t
+      where t.dedupe_key like 'sync_failure:possible_duplicate:%' and t.status = 'done' and t.close_mode = 'manual'
+        and t.closed_at > now() - interval '7 days'
+        and not exists (select 1 from sf_link l where l.sf_opportunity_id = split_part(t.dedupe_key, ':', 3))`);
+  retry.push(...dismissed);
   const all = new Set([...changed, ...retry.map((r) => r.opp).filter(Boolean)]);
 
   let enqueued = 0;

@@ -8,7 +8,7 @@ import type { EmailMessage } from '../salesforce/client.ts';
 import { humanStatus } from './plan.ts';
 import type { PlannerConfig, StageNotice } from './types.ts';
 
-const BOARD_TITLE: Record<string, string> = { presales: 'Pre-Sales Summary', prequal: 'Pre-Qualification', triage: 'Triage' };
+export const BOARD_TITLE: Record<string, string> = { presales: 'Pre-Sales Summary', prequal: 'Pre-Qualification', triage: 'Triage' };
 
 /** Valid recipient list from the setting (an array of addresses); [] = emails off. */
 export function stageChangeRecipients(settings: Record<string, unknown>): string[] {
@@ -17,7 +17,7 @@ export function stageChangeRecipients(settings: Record<string, unknown>): string
 }
 
 /** 'presales.follow_up' → 'Follow Up' for the group the item is in on its board. */
-function groupTitle(cfg: PlannerConfig, boardKey: string, groupId: string | null): string {
+export function groupTitle(cfg: PlannerConfig, boardKey: string, groupId: string | null): string {
   const hit = Object.entries(cfg.groups).find(([k, v]) => k.startsWith(`${boardKey}.`) && v === groupId);
   if (!hit) return groupId ?? 'unknown group';
   return hit[0].slice(boardKey.length + 1).split('_').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
