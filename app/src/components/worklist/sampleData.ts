@@ -15,7 +15,7 @@ export const SAMPLE_BRIEFING: Briefing = {
     { id: 'e3', start: '11:00', end: '12:00', subject: 'Design review – Riverside Medical lobby', location: 'Conf Rm B', isOrganizer: true },
     { id: 'e4', start: '14:00', end: '14:30', subject: '1:1 with Jordan', location: 'Teams' },
   ],
-  openBlocks: ['10:00–11:00', '12:00–2:00', '2:30–5:00'],
+  openBlocks: ['10:00–11:00', '12:00–14:00', '14:30–17:00'],
   items: [
     {
       id: 'w1', kind: 'respond', source: 'email',
