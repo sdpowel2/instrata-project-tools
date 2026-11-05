@@ -1,6 +1,6 @@
-// Data model for the My Day worklist. Mirrors what the morning-worklist skill
-// produces today (as markdown) and what the Supabase work_items / briefings
-// tables will hold once storage lands.
+// Data model for the My Day worklist. The page view of the Supabase
+// worklist_briefings / worklist_items tables (supabase/migrations/add_worklist.sql),
+// which the morning-worklist skill fills through the save_briefing MCP tool.
 
 /** respond = reply owed, do = work owed, decide = a call only Seth can make,
  *  question = Claude is blocked and needs Seth's input (Phase 2). */
@@ -34,6 +34,14 @@ export interface WorkItem {
   userOverridden?: boolean;
   /** Phase 2 questions: the options Claude is offering. */
   options?: string[];
+  /** One or two lines of context from the briefing (never a message body). */
+  summary?: string;
+  /** Claude's own urgency; differs from `urgency` when Seth overrode it. */
+  claudeUrgency?: Urgency;
+  /** YYYY-MM-DD the item comes back, when snoozed. */
+  snoozedUntil?: string;
+  /** Seth's pick, for an answered question. */
+  answer?: string;
 }
 
 export interface CalendarEvent {

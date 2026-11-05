@@ -11,6 +11,24 @@ function dayNumber(ymd: string): number {
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** Whole calendar days from a to b (b - a), both YYYY-MM-DD. */
+export function daysBetween(a: string, b: string): number {
+  return dayNumber(b) - dayNumber(a);
+}
+
+/** YYYY-MM-DD plus n days. */
+export function addDays(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** The Eastern calendar day (YYYY-MM-DD) of a moment, default now. */
+export function easternDate(at: Date | string = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(typeof at === 'string' ? new Date(at) : at);
+}
+
 /** "Today", "Tomorrow", "Fri", "Nov 13", or "3d overdue". */
 export function formatDue(due: string, today: string): { label: string; overdue: boolean } {
   const diff = dayNumber(due) - dayNumber(today);

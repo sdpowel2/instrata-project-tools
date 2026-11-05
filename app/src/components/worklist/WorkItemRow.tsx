@@ -32,9 +32,11 @@ interface Props {
   today: string;
   onStatus: (id: string, status: WorkItem['status']) => void;
   onUrgency: (id: string, urgency: Urgency) => void;
+  /** Questions: record the picked option (falls back to marking done). */
+  onAnswer?: (id: string, option: string) => void;
 }
 
-export function WorkItemRow({ item, today, onStatus, onUrgency }: Props) {
+export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer }: Props) {
   const SourceIcon = SOURCE_ICON[item.source];
   const due = item.due ? formatDue(item.due, today) : null;
   const isDone = item.status === 'done';
@@ -60,7 +62,10 @@ export function WorkItemRow({ item, today, onStatus, onUrgency }: Props) {
           <span className={`text-[10px] font-bold uppercase tracking-[0.08em] border rounded px-1.5 py-px ${KIND_STYLE[item.kind]}`}>
             {KIND_LABEL[item.kind]}
           </span>
-          <span className={`text-sm font-medium leading-snug ${isDone ? 'line-through text-fg-3' : 'text-fg'}`}>
+          <span
+            className={`text-sm font-medium leading-snug ${isDone ? 'line-through text-fg-3' : 'text-fg'}`}
+            title={item.summary}
+          >
             {item.title}
           </span>
         </div>
@@ -101,7 +106,7 @@ export function WorkItemRow({ item, today, onStatus, onUrgency }: Props) {
             {item.options.map((opt) => (
               <button
                 key={opt}
-                onClick={() => onStatus(item.id, 'done')}
+                onClick={() => (onAnswer ? onAnswer(item.id, opt) : onStatus(item.id, 'done'))}
                 className="text-xs font-medium px-2.5 py-1 rounded-lg border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100 transition-colors"
               >
                 {opt}

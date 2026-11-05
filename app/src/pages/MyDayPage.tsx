@@ -1,17 +1,18 @@
 // My Day: Seth's personal worklist, built each morning by the
-// morning-worklist skill. Scaffold stage: renders a fictional sample briefing
-// with local-only state. Storage (Supabase work_items/briefings) comes next.
+// morning-worklist skill and saved to Supabase through the save_briefing MCP
+// tool. useWorklist reads it live; ?sample=1 (or offline demo mode) shows the
+// fictional sample briefing instead.
 
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw } from 'lucide-react';
+import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, PageHeader } from '../components/ui';
 import { WorkItemRow } from '../components/worklist/WorkItemRow';
 import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard } from '../components/worklist/SidePanels';
-import { SAMPLE_BRIEFING } from '../components/worklist/sampleData';
-import { formatClock, formatDayClock, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
+import { useWorklist } from '../hooks/useWorklist';
+import { formatClock, formatDayClock, formatDue, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
 import type { Briefing, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
 import { KIND_LABEL, URGENCY_LABEL } from '../components/worklist/types';
 
@@ -19,8 +20,8 @@ type KindFilter = 'all' | Exclude<WorkItemKind, 'question'>;
 
 export function MyDayPage() {
   const { isAdmin } = useAuth();
-  const briefing = SAMPLE_BRIEFING;
-  const [items, setItems] = useState<WorkItem[]>(briefing.items);
+  const wl = useWorklist();
+  const { briefing, items, today, setStatus, setUrgency, addTask, answer } = wl;
   const [filter, setFilter] = useState<KindFilter>('all');
 
   const questions = items.filter((i) => i.kind === 'question' && i.status === 'open');
@@ -36,19 +37,16 @@ export function MyDayPage() {
 
   if (!isAdmin) return <Navigate to="/" replace />;
 
-  const setStatus = (id: string, status: WorkItem['status']) =>
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status } : i)));
-  const setUrgency = (id: string, urgency: Urgency) =>
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, urgency, userOverridden: true } : i)));
-  const addTask = (title: string, due: string | null) =>
-    setItems((prev) => [
-      {
-        id: `m-${Date.now()}`, kind: 'do', source: 'manual', title, from: 'manual',
-        due, dueBasis: due ? 'stated' : 'none', urgency: 3,
-        urgencyReason: 'Added by you', carriedDays: 0, status: 'open',
-      },
-      ...prev,
-    ]);
+  if (wl.loading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 h-64">
+        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-orange" />
+        {wl.error && <p className="text-sm text-status-warn-fg">{wl.error}</p>}
+      </div>
+    );
+  }
+
+  const rowProps = { today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer };
 
   const counts = (k: KindFilter) => (k === 'all' ? open.length : open.filter((i) => i.kind === k).length);
 
@@ -56,13 +54,15 @@ export function MyDayPage() {
     <div className="p-8 max-w-[1320px]">
       <PageHeader
         eyebrow="My Day"
-        title={formatLongDate(briefing.date)}
-        subtitle={<RunHealth briefing={briefing} />}
+        title={formatLongDate(today)}
+        subtitle={briefing ? <RunHealth briefing={briefing} /> : 'No briefing yet. Run /morning-worklist in Claude Code.'}
         actions={
           <>
-            <span className="self-center text-[11px] font-semibold uppercase tracking-[0.08em] text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-2.5 py-1">
-              Sample data
-            </span>
+            {wl.mode === 'sample' && (
+              <span className="self-center text-[11px] font-semibold uppercase tracking-[0.08em] text-violet-700 bg-violet-50 border border-violet-200 rounded-full px-2.5 py-1">
+                Sample data
+              </span>
+            )}
             <button
               disabled
               title="Coming later: run the briefing from here"
@@ -73,6 +73,20 @@ export function MyDayPage() {
           </>
         }
       />
+
+      {wl.error && (
+        <div role="alert" className="flex items-start justify-between gap-3 mb-4 bg-status-danger-bg border border-red-200 rounded-xl px-4 py-2.5 text-sm text-status-danger-fg">
+          <span>{wl.error}</span>
+          <button onClick={wl.dismissError} aria-label="Dismiss" className="flex-shrink-0 hover:opacity-70"><X size={15} /></button>
+        </div>
+      )}
+
+      {wl.stale && briefing && (
+        <div className="mb-4 bg-status-warn-bg border border-yellow-300/60 rounded-xl px-4 py-2.5 text-sm text-status-warn-fg">
+          Today's briefing hasn't run yet. Showing open items, with the schedule and read-me from{' '}
+          <span className="font-semibold">{formatLongDate(briefing.date)}</span>.
+        </div>
+      )}
 
       {/* Urgency summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -96,7 +110,7 @@ export function MyDayPage() {
               flush
             >
               {questions.map((q) => (
-                <WorkItemRow key={q.id} item={q} today={briefing.date} onStatus={setStatus} onUrgency={setUrgency} />
+                <WorkItemRow key={q.id} item={q} {...rowProps} />
               ))}
             </Card>
           )}
@@ -130,7 +144,7 @@ export function MyDayPage() {
                     {URGENCY_LABEL[u]} <span className="text-fg-3 font-medium">· {byUrgency[u].length}</span>
                   </div>
                   {byUrgency[u].map((i) => (
-                    <WorkItemRow key={i.id} item={i} today={briefing.date} onStatus={setStatus} onUrgency={setUrgency} />
+                    <WorkItemRow key={i.id} item={i} {...rowProps} />
                   ))}
                 </section>
               ),
@@ -147,14 +161,16 @@ export function MyDayPage() {
                 </summary>
                 <div className="opacity-70">
                   {done.map((i) => (
-                    <WorkItemRow key={i.id} item={i} today={briefing.date} onStatus={setStatus} onUrgency={setUrgency} />
+                    <WorkItemRow key={i.id} item={i} {...rowProps} />
                   ))}
                 </div>
                 {snoozedOrDismissed.map((i) => (
                   <div key={i.id} className="flex items-center justify-between gap-3 px-5 py-2 border-t border-border-soft text-xs text-fg-3">
                     <span className="truncate">{i.title}</span>
                     <span className="flex items-center gap-2 flex-shrink-0">
-                      {i.status === 'snoozed' ? 'Snoozed to tomorrow' : 'Dismissed'}
+                      {i.status === 'snoozed'
+                        ? `Snoozed until ${i.snoozedUntil ? formatDue(i.snoozedUntil, today).label.toLowerCase() : 'later'}`
+                        : 'Dismissed'}
                       <button onClick={() => setStatus(i.id, 'open')} className="text-navy font-medium hover:underline">Undo</button>
                     </span>
                   </div>
@@ -173,12 +189,14 @@ export function MyDayPage() {
         </div>
 
         {/* Side column */}
-        <div className="space-y-6">
-          <ScheduleCard briefing={briefing} />
-          <ReadMeCard briefing={briefing} />
-          <ClosedCard briefing={briefing} />
-          <SetAsideCard briefing={briefing} />
-        </div>
+        {briefing && (
+          <div className="space-y-6">
+            {!wl.stale && <ScheduleCard briefing={briefing} />}
+            <ReadMeCard briefing={briefing} />
+            <ClosedCard briefing={briefing} />
+            <SetAsideCard briefing={briefing} />
+          </div>
+        )}
       </div>
     </div>
   );

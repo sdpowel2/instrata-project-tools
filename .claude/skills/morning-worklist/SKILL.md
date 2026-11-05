@@ -46,7 +46,8 @@ Every task needs a `source_key`. It's how a re-run updates an item instead of du
 
 | Item | source | source_key |
 |---|---|---|
-| Email thread | `email` | `email:<subject>\|<counterpart>`: subject lowercased, every leading `re:` / `fw:` / `fwd:` stripped (repeat until none), whitespace collapsed to single spaces, trimmed; counterpart is the other person's email address, lowercased. |
+| Email thread | `email` | `email:<subject>\|<counterpart>`: subject lowercased, every leading `re:` / `fw:` / `fwd:` and bracketed tag such as `[external]` or `[ext]` stripped (repeat until none), whitespace collapsed to single spaces, trimmed; counterpart is the other person's email address, lowercased. |
+| Construction-platform notice (Procore, BuildingConnected, etc.) | `email` | `<platform>:<project>:<record type> <number>`, lowercased, e.g. `procore:the district n1:rfq ce #182`. Never key these on the subject: notification subjects change ("1 overdue request" → "2 overdue requests"). If there's no record number, fall back to the email rule. |
 | Teams 1:1 or group chat ask | `teams` | `teams:<chatId>:<id of the earliest unanswered ask message>` |
 | Teams channel @mention | `teams` | `teams-channel:<message id from its uri>` |
 | monday item (assigned, dated, new, or Triage) | `monday` | `monday:<item id>` |
