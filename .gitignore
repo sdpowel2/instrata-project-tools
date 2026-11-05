@@ -19,3 +19,6 @@ Reference/
 # Supabase CLI scratch state (project ref, pooler host, tool versions) — not
 # part of the app and shouldn't be versioned.
 supabase/.temp/
+
+# Morning worklist output (email/Teams summaries) - personal, never committed.
+personal-worklist/
