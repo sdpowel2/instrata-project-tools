@@ -48,26 +48,35 @@ export function formatLongDate(ymd: string): string {
   return `${weekday}, ${MONTH[m - 1]} ${d}`;
 }
 
-/** "6:04 AM" from an ISO timestamp, in Eastern time. */
+/** " PM" → "pm": the compact US style used across My Day ("5:00pm"). */
+const compactAmPm = (s: string) => s.replace(/\s?([AP])M\b/g, (_, ap: string) => `${ap.toLowerCase()}m`);
+
+/** "6:04am" from an ISO timestamp, in Eastern time. */
 export function formatClock(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', {
+  return compactAmPm(new Date(iso).toLocaleTimeString('en-US', {
     hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York',
-  });
+  }));
 }
 
-/** "Wed 5:00 PM" from an ISO timestamp, in Eastern time. */
+/** "Wed 5:00pm" from an ISO timestamp, in Eastern time. */
 export function formatDayClock(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
+  return compactAmPm(new Date(iso).toLocaleString('en-US', {
     weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York',
-  });
+  }));
 }
 
-/** "14:00" → "2:00 PM" */
+/** "14:00" → "2:00pm" */
 export function formatHHMM(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number);
-  const suffix = h >= 12 ? 'PM' : 'AM';
+  const suffix = h >= 12 ? 'pm' : 'am';
   const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}:${String(m).padStart(2, '0')} ${suffix}`;
+  return `${hour}:${String(m).padStart(2, '0')}${suffix}`;
+}
+
+/** "08:00–17:00" (24h, any dash) → "8:00am–5:00pm". Anything else is shown as-is. */
+export function formatTimeRange(range: string): string {
+  const m = range.trim().match(/^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$/);
+  return m ? `${formatHHMM(m[1])}–${formatHHMM(m[2])}` : range;
 }
 
 /** Tailwind classes for the urgency pill. */
