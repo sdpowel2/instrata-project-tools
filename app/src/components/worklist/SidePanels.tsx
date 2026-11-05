@@ -1,7 +1,7 @@
 import { Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { Card } from '../ui';
 import type { Briefing, WorkItemSource } from './types';
-import { formatHHMM } from './format';
+import { formatHHMM, formatTimeRange } from './format';
 
 const SOURCE_ICON: Record<WorkItemSource, typeof Mail> = {
   email: Mail,
@@ -38,7 +38,7 @@ export function ScheduleCard({ briefing }: { briefing: Briefing }) {
           <div className="text-[11px] font-semibold text-status-success-fg uppercase tracking-[0.08em] mb-1">Open blocks</div>
           <div className="flex flex-wrap gap-1.5">
             {briefing.openBlocks.map((b) => (
-              <span key={b} className="text-xs font-mono bg-white border border-border rounded px-1.5 py-0.5 text-fg-2">{b}</span>
+              <span key={b} className="text-xs font-mono bg-white border border-border rounded px-1.5 py-0.5 text-fg-2">{formatTimeRange(b)}</span>
             ))}
           </div>
         </div>

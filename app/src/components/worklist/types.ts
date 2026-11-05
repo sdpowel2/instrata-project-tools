@@ -80,7 +80,7 @@ export interface Briefing {
   missing: { source: string; error: string }[];
   sourceCounts: { mail: number; teams: number; monday: number; manual: number };
   schedule: CalendarEvent[];
-  /** Open 60+ minute blocks, e.g. "10:00–11:30". */
+  /** Open 60+ minute blocks, 24h "HH:MM–HH:MM" (the page shows "10:00am–11:30am"). */
   openBlocks: string[];
   items: WorkItem[];
   readMe: ReadMeItem[];

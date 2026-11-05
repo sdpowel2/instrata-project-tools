@@ -73,7 +73,7 @@ If one monday item has both an unanswered @mention and an assignment date, make 
 
 - Keep canceled events (`isCancelled`), marked canceled.
 - For each event: local start and end time (HH:MM, 24h), subject, location, and whether Seth is the organizer.
-- Note the open blocks of 60 minutes or more between 8:00 AM and 5:00 PM. Those are when the "Do" items can get done.
+- Note the open blocks of 60 minutes or more between 8:00am and 5:00pm. Those are when the "Do" items can get done. In `save_briefing`, send them as 24-hour `HH:MM–HH:MM` (e.g. `08:00–17:00`); the page shows them as 8:00am–5:00pm. In the markdown and chat, write them 12-hour (8:00am–5:00pm).
 
 ## Step 2 - Email
 
@@ -244,8 +244,8 @@ The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_ma
 Window: since <since, Eastern> · Sources: mail N, Teams N, monday N, manual N · Run at <time> · Saved: inserted N, updated N, resolved N
 
 ## Today's schedule
-- 9:00-10:00 AM  Subject (location) [organizer]
-- Open blocks: 10:00-12:00, 2:00-4:30
+- 9:00am–10:00am  Subject (location) [organizer]
+- Open blocks: 10:00am–12:00pm, 2:00pm–4:30pm
 - Canceled: ...
 
 ## Respond (N)
