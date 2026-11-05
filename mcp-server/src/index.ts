@@ -1,7 +1,7 @@
 /**
  * Instrata Project Tools — MCP server. Read tools plus scoped write tools for
- * the cutsheet submittal workflow (submittalTools.ts) and the project wiki
- * (wikiTools.ts).
+ * the cutsheet submittal workflow (submittalTools.ts), the project wiki
+ * (wikiTools.ts) and, for admins only, the My Day worklist (worklistTools.ts).
  *
  * Auth: this process is its own OAuth 2.1 authorization server (src/oauth/).
  * Clients discover it from a 401 on /mcp, register (DCR/CIMD or the admin
@@ -31,6 +31,7 @@ import { clientForUser } from './supabase.js';
 import { registerTools } from './tools.js';
 import { registerSubmittalTools } from './submittalTools.js';
 import { registerWikiTools } from './wikiTools.js';
+import { isWorklistUser, registerWorklistTools } from './worklistTools.js';
 import { assertToolScopesComplete, collectingRegistrar, scopedRegistrar } from './toolHelpers.js';
 import { allow, keyFor } from './rateLimit.js';
 import { ProjectToolsOAuthProvider } from './oauth/provider.js';
@@ -47,6 +48,7 @@ const SERVER_INFO = { name: 'instrata-project-tools', version: '2.0.0' };
   registerTools(collector, noClient, '');
   registerSubmittalTools(collector, noClient, '');
   registerWikiTools(collector, noClient, '');
+  registerWorklistTools(collector, noClient, '');
   assertToolScopesComplete(names);
 }
 
@@ -199,6 +201,8 @@ async function handleMcp(req: Request, res: Response): Promise<void> {
     registerTools(registrar, supa, userId);
     registerSubmittalTools(registrar, supa, userId);
     registerWikiTools(registrar, supa, userId);
+    // Personal My Day worklist: admins only, so nobody else's Claude sees these tools.
+    if (await isWorklistUser(supa, userId)) registerWorklistTools(registrar, supa, userId);
 
     // Stateless mode: no session id generator.
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

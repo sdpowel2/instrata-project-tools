@@ -139,13 +139,15 @@ try {
 
   const list = await mcp(access1, 'tools/list');
   const tools = ((list.json.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name).sort();
-  // Twin of the mcp:write entries in src/oauth/scopes.ts (submittal + project wiki).
+  // Twin of the mcp:write entries in src/oauth/scopes.ts (submittal + project wiki
+  // + the admin-only worklist). Counts assume SMOKE_USER_ID is an admin, who also
+  // gets the two worklist tools (get_worklist_state, save_briefing).
   const WRITE = [
     'attach_cutsheet', 'create_submittal', 'detach_cutsheet', 'populate_submittal_from_bom', 'update_submittal',
     'upsert_project_wiki', 'upsert_project_room', 'set_room_status', 'append_room_decision', 'set_room_labor',
-    'raise_room_question', 'answer_room_question', 'link_room_bom_lines', 'link_room_files',
+    'raise_room_question', 'answer_room_question', 'link_room_bom_lines', 'link_room_files', 'save_briefing',
   ];
-  const READ_COUNT = 19; // mcp:read tools in src/oauth/scopes.ts
+  const READ_COUNT = 20; // mcp:read tools in src/oauth/scopes.ts
   const ALL_COUNT = READ_COUNT + WRITE.length;
   assert(`B4 tools/list → ${tools.length} tools incl. all ${WRITE.length} write tools`, list.status === 200 && tools.length === ALL_COUNT && WRITE.every((w) => tools.includes(w)), tools);
 

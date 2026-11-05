@@ -2,8 +2,9 @@
  * OAuth scopes and the tool → scope map.
  *
  *   mcp:read        every read tool
- *   mcp:write       the cutsheet submittal write tools (submittalTools.ts) and
- *                   the project wiki write tools (wikiTools.ts)
+ *   mcp:write       the cutsheet submittal write tools (submittalTools.ts), the
+ *                   project wiki write tools (wikiTools.ts) and save_briefing
+ *                   (worklistTools.ts, admins only)
  *   offline_access  issue a refresh token so the client stays connected
  *
  * TOOL_SCOPES must list EVERY registered tool. index.ts checks this at startup
@@ -63,6 +64,9 @@ export const TOOL_SCOPES: Record<string, ToolScope> = {
   answer_room_question: 'mcp:write',
   link_room_bom_lines: 'mcp:write',
   link_room_files: 'mcp:write',
+  // worklistTools.ts — personal My Day worklist (registered for admins only)
+  get_worklist_state: 'mcp:read',
+  save_briefing: 'mcp:write',
 };
 
 export function isSupportedScope(s: string): s is Scope {
