@@ -42,6 +42,8 @@ copy .env.example .env   # DATABASE_URL etc.; leave DATABASE_URL empty for a loc
 
 ## Deploy
 
+**Interim Fly deploy: leads only.** Until the worker moves to the company Docker host, it runs on Fly with no volume and `DOCUMENTS_ENABLED=false`: fetching, scoring, offices, reviews, the run log, map and CSV all work; bid documents (SAM attachment downloads, uploads, downloads) and triage are switched off, and the tab hides them. To turn them back on: mount persistent disk at `LEADFINDER_DATA_DIR`, set `DOCUMENTS_ENABLED=true`, add `ANTHROPIC_API_KEY`, and load the old documents with `leadfinder docs import` (below). Secrets are staged by `scripts/set-fly-secrets.ps1`.
+
 `fly.toml` lists the secrets and the volume. Pushes to `main` that touch `leadfinder-worker/` run the tests and deploy (`.github/workflows/deploy-leadfinder.yml`, secret `FLY_API_TOKEN_LEADFINDER`). By hand: `fly deploy --remote-only` from this directory.
 
 ### Bid documents

@@ -326,3 +326,46 @@ def test_download_link_and_file(client):
     assert got.headers["content-disposition"].startswith("inline")
     tampered = c.get(url.replace("https://worker.test", "").replace("274100", "274200"))
     assert tampered.status_code == 403
+
+
+# ---------------------------------------------------------------- documents switched off (interim Fly deploy)
+
+@pytest.fixture
+def docs_off(monkeypatch):
+    from leadfinder.settings import get_settings
+    monkeypatch.setattr(get_settings(), "documents_enabled", False)
+
+
+def test_documents_off_jobs(av_lead, docs_root, inbox, docs_off, triage_env, monkeypatch):
+    factory, s, opp = av_lead
+    sam = run_job(factory, "sam_docs", opp.id)  # queued by the Pursue trigger: skipped quietly
+    assert sam.status == "done" and sam.result["skipped"] is True
+    for kind in ("rescan", "triage", "triage_resume"):
+        job = run_job(factory, kind, opp.id)
+        assert job.status == "failed" and "switched off" in job.error, kind
+    job = run_job(factory, "ingest_upload", opp.id, files=[{"local": f"{opp.id}/x/a.pdf", "name": "a.pdf"}])
+    assert job.status == "failed" and "switched off" in job.error
+    assert not docs_root.exists() or not any(docs_root.iterdir())
+    status = W.worker_status()
+    assert status["documents_enabled"] is False and status["triage_configured"] is False
+
+
+def test_documents_off_recover_does_not_resume_triage(av_lead, triage_env, monkeypatch):
+    factory, s, opp = av_lead
+    folder = D.lead_folder(opp, create=True)
+    (folder / "a.pdf").write_bytes(b"%PDF")
+    T.start(s, opp, FakeClient())
+    mirror_lead(s, opp)
+    from leadfinder.settings import get_settings
+    monkeypatch.setattr(get_settings(), "documents_enabled", False)
+    assert W.recover(factory) == []
+
+
+def test_documents_off_endpoints(client, docs_off):
+    c, factory, opp = client
+    files = [("files", ("a.pdf", b"%PDF", "application/pdf"))]
+    r = c.post(f"/documents/{opp.id}/upload", files=files, headers=GOOD)
+    assert r.status_code == 409 and "switched off" in r.json()["error"]
+    assert c.post(f"/documents/{opp.id}/link", json={"path": "a.pdf"}, headers=GOOD).status_code == 409
+    assert c.get(f"/documents/{opp.id}/file?path=a.pdf&exp=9999999999&sig=x").status_code == 409
+    assert c.post(f"/documents/{opp.id}/upload", files=files).status_code == 403  # auth still checked first

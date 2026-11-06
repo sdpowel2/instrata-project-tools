@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     app_url: str = "http://localhost:5173"
     # This worker's own public URL (the tab calls /bc/authorize on it), e.g. https://instrata-leadfinder.fly.dev
     public_url: str = "http://localhost:8080"
+    # Bid documents (SAM attachment downloads, uploads, downloads) and triage need persistent disk
+    # for the lead folders. Off where the worker has none (the interim Fly deploy); leads, scoring,
+    # offices and reviews work either way.
+    documents_enabled: bool = True
     # Daily scheduled run, local hour in America/New_York; negative disables it.
     schedule_hour_et: int = 6
 

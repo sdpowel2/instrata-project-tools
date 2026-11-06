@@ -222,6 +222,8 @@ export interface WorkerStatus {
   sam_key: boolean;
   aps_configured: boolean;
   aps_callback: string;
+  /** False on a worker without persistent disk: bid documents and triage are off. */
+  documents_enabled?: boolean;
   triage_configured: boolean;
   triage_budget_usd: number;
   auth_configured: boolean;

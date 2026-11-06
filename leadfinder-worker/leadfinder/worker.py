@@ -58,6 +58,19 @@ class JobFailed(Exception):
     """A handled failure: the message is shown to the person in the tab."""
 
 
+DOCUMENTS_OFF = ("Bid documents and triage are switched off on this worker (no persistent disk yet). "
+                 "They come back when the worker moves to a host with storage.")
+
+
+def documents_enabled() -> bool:
+    return get_settings().documents_enabled
+
+
+def _require_documents() -> None:
+    if not documents_enabled():
+        raise JobFailed(DOCUMENTS_OFF)
+
+
 @dataclass
 class Ctx:
     job_id: str
@@ -105,7 +118,7 @@ def h_run(ctx: Ctx) -> dict:
               "sources": {sr.source_id: {"status": sr.status, "fetched": sr.records_fetched, "new": sr.records_new,
                                          "updated": sr.records_updated, "calls": sr.api_calls_used,
                                          "error": sr.error} for sr in r.source_runs}}
-    if not sources or "sam_gov" in sources:
+    if documents_enabled() and (not sources or "sam_gov" in sources):
         result["documents"] = _sync_pursued(ctx)
     if r.status == "failed":
         errs = "; ".join(f"{k}: {v['error']}" for k, v in result["sources"].items() if v.get("error"))
@@ -133,6 +146,9 @@ def _sync_pursued(ctx: Ctx) -> dict:
 
 
 def h_sam_docs(ctx: Ctx) -> dict:
+    if not documents_enabled():
+        # Queued automatically when a SAM lead is marked Pursue; nothing to do without a disk.
+        return {"skipped": True, "message": DOCUMENTS_OFF}
     s = ctx.session_factory()
     try:
         opp = _opp(s, ctx)
@@ -156,6 +172,7 @@ def h_sam_docs(ctx: Ctx) -> dict:
 def h_ingest_upload(ctx: Ctx) -> dict:
     """Files the tab uploaded to this worker (saved under INBOX_DIR/<lead>/): move them into
     the lead folder, unpacking zips, then remove the inbox copies."""
+    _require_documents()
     files = [f for f in (ctx.params.get("files") or []) if isinstance(f, dict) and f.get("local")]
     if not files:
         raise JobFailed("No files to add.")
@@ -199,6 +216,7 @@ def h_ingest_upload(ctx: Ctx) -> dict:
 
 
 def h_rescan(ctx: Ctx) -> dict:
+    _require_documents()
     s = ctx.session_factory()
     try:
         opp = _opp(s, ctx)
@@ -212,6 +230,7 @@ def h_rescan(ctx: Ctx) -> dict:
 
 
 def h_triage(ctx: Ctx) -> dict:
+    _require_documents()
     if not T.configured():
         raise JobFailed("Triage isn't set up on the worker: ANTHROPIC_API_KEY and the av-triage skill are needed.")
     s = ctx.session_factory()
@@ -242,6 +261,7 @@ def h_triage(ctx: Ctx) -> dict:
 
 def h_triage_resume(ctx: Ctx) -> dict:
     """Pick up the latest unfinished triage (after a restart); never re-collects a finished run."""
+    _require_documents()
     s = ctx.session_factory()
     try:
         opp = _opp(s, ctx)
@@ -406,6 +426,8 @@ def recover(session_factory: Callable[[], Session]) -> list[str]:
         s.execute(update(Job).where(Job.status == "running")
                   .values(status="failed", finished_at=utcnow(), error="The worker restarted while this was running."))
         s.commit()
+        if not documents_enabled():
+            return queued
         opp_ids = {r.opportunity_id for r in s.execute(
             select(TriageRun).where(TriageRun.status.in_(("running", "uploading")))).scalars()}
         for oid in sorted(opp_ids):
@@ -544,7 +566,8 @@ def worker_status() -> dict:
         "sam_key": bool(st.sam_api_key),
         "aps_configured": aps_configured,
         "aps_callback": st.aps_callback_url,
-        "triage_configured": T.configured(),
+        "documents_enabled": documents_enabled(),
+        "triage_configured": documents_enabled() and T.configured(),
         "triage_budget_usd": st.triage_budget_usd,
         "auth_configured": bool(st.supabase_url and st.supabase_anon_key),
         "disk": disk,
@@ -649,10 +672,15 @@ def web(worker: Worker | None = None, session_factory: Callable[[], Session] | N
     def healthz() -> Response:
         return Response("ok")
 
+    def documents_off() -> JSONResponse:
+        return JSONResponse({"error": DOCUMENTS_OFF}, status_code=409)
+
     @app.post("/documents/{lead_id}/upload")
     def upload(lead_id: str, files: list[UploadFile] = File(...), authorization: str = Header("")):
         if admin(authorization) is None:
             return forbidden()
+        if not documents_enabled():
+            return documents_off()
         s = session_factory()
         try:
             if s.get(Opportunity, lead_id) is None:
@@ -679,6 +707,8 @@ def web(worker: Worker | None = None, session_factory: Callable[[], Session] | N
     def link(lead_id: str, body: dict = Body(...), authorization: str = Header("")):
         if admin(authorization) is None:
             return forbidden()
+        if not documents_enabled():
+            return documents_off()
         rel = str(body.get("path") or "")
         s = session_factory()
         try:
@@ -695,6 +725,8 @@ def web(worker: Worker | None = None, session_factory: Callable[[], Session] | N
 
     @app.get("/documents/{lead_id}/file")
     def file(lead_id: str, path: str = "", exp: int = 0, sig: str = "", inline: int = 0):
+        if not documents_enabled():
+            return Response(DOCUMENTS_OFF, status_code=409)
         if not verify_link(lead_id, path, exp, sig):
             return Response("This link has expired. Open the file again from Project Tools.", status_code=403)
         s = session_factory()

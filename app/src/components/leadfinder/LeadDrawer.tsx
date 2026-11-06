@@ -69,16 +69,30 @@ function DrawerBody({ detail, reload, onChanged, worker }: {
 }) {
   const { opp, score } = detail;
   const x = (opp.extra ?? {}) as Record<string, unknown>;
+  // The interim worker has no persistent disk, so bid documents and triage are off there.
+  const docsOff = worker?.documents_enabled === false;
   return (
     <>
-      <ReviewBox detail={detail} onSaved={() => { reload(); onChanged(); }} />
-      {!workerOnline(worker) && (
-        <div className="mt-4">
-          <Banner tone="warn">The Lead Finder worker hasn't checked in recently, so downloads, uploads and triage will wait until it's back.</Banner>
-        </div>
+      <ReviewBox detail={detail} documentsOn={!docsOff} onSaved={() => { reload(); onChanged(); }} />
+      {docsOff ? (
+        <>
+          <SectionTitle>Documents &amp; triage</SectionTitle>
+          <p className="text-[13px] text-fg-2 m-0">
+            Bid documents and triage are switched off for now; they come back when the Lead Finder worker moves to
+            the company server. Use {opp.url ? <a href={opp.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-navy hover:text-orange-dark">{opp.source_id === 'buildingconnected' ? 'Open in Bid Board' : 'Open listing'}</a> : 'the source listing'} for the package.
+          </p>
+        </>
+      ) : (
+        <>
+          {!workerOnline(worker) && (
+            <div className="mt-4">
+              <Banner tone="warn">The Lead Finder worker hasn't checked in recently, so downloads, uploads and triage will wait until it's back.</Banner>
+            </div>
+          )}
+          <DocumentsSection detail={detail} reload={reload} workerUrl={worker?.public_url ?? null} />
+          <TriageSection detail={detail} worker={worker} />
+        </>
       )}
-      <DocumentsSection detail={detail} reload={reload} workerUrl={worker?.public_url ?? null} />
-      <TriageSection detail={detail} worker={worker} />
 
       {opp.source_id === 'buildingconnected' && (
         <>
@@ -228,7 +242,7 @@ function MiniTable({ head, rows }: { head: string[]; rows: ReactNode[][] }) {
 
 // ── Review ───────────────────────────────────────────────────────────────────
 
-function ReviewBox({ detail, onSaved }: { detail: LeadDetail; onSaved: () => void }) {
+function ReviewBox({ detail, onSaved, documentsOn }: { detail: LeadDetail; onSaved: () => void; documentsOn: boolean }) {
   const [status, setStatus] = useState<ReviewStatus>(detail.review?.status ?? 'new');
   const [notes, setNotes] = useState(detail.review?.notes ?? '');
   const [busy, setBusy] = useState(false);
@@ -240,7 +254,7 @@ function ReviewBox({ detail, onSaved }: { detail: LeadDetail; onSaved: () => voi
     setMsg(null);
     try {
       await setReview(detail.opp.id, status, notes);
-      const pursueSam = status === 'pursue' && detail.review?.status !== 'pursue' && detail.opp.source_id === 'sam_gov';
+      const pursueSam = documentsOn && status === 'pursue' && detail.review?.status !== 'pursue' && detail.opp.source_id === 'sam_gov';
       setMsg({ tone: 'ok', text: pursueSam ? 'Saved. SAM.gov attachments are being downloaded.' : 'Saved.' });
       onSaved();
     } catch (e) {
