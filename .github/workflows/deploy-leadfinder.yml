@@ -1,0 +1,40 @@
+name: Deploy Lead Finder worker to Fly.io
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "leadfinder-worker/**"
+      - ".github/workflows/deploy-leadfinder.yml"
+
+jobs:
+  test:
+    name: Test leadfinder-worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: leadfinder-worker
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  deploy:
+    name: Deploy leadfinder-worker
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Runtime secrets live on the Fly app (see leadfinder-worker/fly.toml).
+      # FLY_API_TOKEN_LEADFINDER is a deploy token scoped to instrata-leadfinder.
+      - run: flyctl deploy --remote-only
+        working-directory: leadfinder-worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_LEADFINDER }}

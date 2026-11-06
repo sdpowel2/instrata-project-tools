@@ -22,3 +22,8 @@ supabase/.temp/
 
 # Morning worklist output (email/Teams summaries) - personal, never committed.
 personal-worklist/
+
+# Original standalone LeadFinder app: kept locally only for its data/ (SQLite DB,
+# bid documents, tokens) until the one-time migrate-to-supabase run. The code
+# now lives in leadfinder-worker/.
+/LeadFinder/

@@ -1,0 +1,53 @@
+# fly.toml — Lead Finder worker (instrata-leadfinder).
+#
+# One always-on machine: it runs the job queue the Project Tools Lead Finder tab
+# feeds (lf_job), the daily scheduled run, and the BuildingConnected OAuth
+# callback. A second machine would only contend for jobs.
+#
+# Secrets (fly secrets set -a instrata-leadfinder ...):
+#   DATABASE_URL                Supabase Postgres (session pooler URL, port 5432)
+#   SUPABASE_URL                https://<ref>.supabase.co
+#   SUPABASE_SERVICE_ROLE_KEY   Storage mirror + checking the admin on /bc/authorize
+#   SAM_API_KEY                 SAM.gov public API key (expires every 90 days)
+#   HTTP_USER_AGENT_CONTACT     contact email in the User-Agent sent to SAM.gov / Census
+#   APS_CLIENT_ID / APS_CLIENT_SECRET   Autodesk app for BuildingConnected
+#   ANTHROPIC_API_KEY           triage (Claude Managed Agents)
+#
+# Volume: bid documents and triage outputs (working copy; Storage holds the mirror).
+#   fly volumes create leadfinder_data --region iad --size 10 -a instrata-leadfinder
+app = "instrata-leadfinder"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LEADFINDER_DATA_DIR = "/data"
+  APP_URL = "https://instrata-project-tools.fly.dev"
+  PUBLIC_URL = "https://instrata-leadfinder.fly.dev"
+  APS_CALLBACK_URL = "https://instrata-leadfinder.fly.dev/oauth/callback"
+  SCHEDULE_HOUR_ET = "6"
+  TRIAGE_BUDGET_USD = "10"
+
+[mounts]
+  source = "leadfinder_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
