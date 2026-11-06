@@ -18,6 +18,7 @@ import { ReviewQueuePage } from './pages/ReviewQueue';
 import { BidLevelingPage } from './pages/BidLevelingPage';
 import { PersonalOpsPage } from './pages/PersonalOpsPage';
 import { MyDayPage } from './pages/MyDayPage';
+import { LeadFinderPage } from './pages/LeadFinderPage';
 import { CutsheetReviewPage } from './pages/CutsheetReview';
 import { CutsheetRepositoryPage } from './pages/CutsheetRepository';
 import { CutsheetMyUploadsPage } from './pages/CutsheetMyUploads';
@@ -125,6 +126,7 @@ export default function App() {
               <Route path="settings" element={<SettingsPage />} />
               <Route path="ops-queue" element={<CoordinatorPage />} />
               <Route path="my-day" element={<MyDayPage />} />
+              <Route path="lead-finder" element={<LeadFinderPage />} />
 
               {/* Routes below are not exposed in the sidebar but kept
                   reachable so the code remains warm and any deep links

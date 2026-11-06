@@ -1,0 +1,7 @@
+From: Procurement Alerts <noreply@alerts.example.org>
+Subject: FW: something posted
+Date: Mon, 02 Nov 2026 11:00:00 -0500
+Message-ID: <alert-002@alerts.example.org>
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Hello vendor,</p><p>There is a new posting for <b>Durham, NC</b>.</p><p><a href="https://www.example.org/unsubscribe">unsubscribe</a></p></body></html>

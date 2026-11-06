@@ -1,0 +1,35 @@
+{
+ "_note": "SYNTHETIC - shape unverified; Bonfire robots.txt disallows automated access (DECISIONS D-12)",
+ "success": 1,
+ "payload": {
+  "projects": {
+   "101": {
+    "ProjectID": "101",
+    "ReferenceID": "RFP 2026-044",
+    "ProjectName": "Council Chamber Audio Visual System Replacement",
+    "DateClose": "2026-12-10 14:00:00",
+    "DepartmentName": "General Services",
+    "ProjectType": "Request for Proposal"
+   },
+   "102": {
+    "ProjectID": "102",
+    "ReferenceID": "ITB 27-003",
+    "ProjectName": "Northside Library Renovation",
+    "DateClose": "2026-12-18 11:00:00",
+    "DepartmentName": "Engineering",
+    "ProjectType": "Invitation to Bid"
+   },
+   "103": {
+    "ProjectID": "103",
+    "ReferenceID": "IFB 27-010",
+    "ProjectName": "Pine Ave Paving",
+    "DateClose": "2026-11-25 10:00:00",
+    "DepartmentName": "Streets",
+    "ProjectType": "Invitation for Bid"
+   },
+   "bad": {
+    "ReferenceID": "no id"
+   }
+  }
+ }
+}

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, FolderOpen, FileText, MessageSquareWarning,
   ClipboardCheck, BookOpen, Settings, LogOut, Scale,
-  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser, NotebookPen, ListChecks, Sun,
+  Home, ScanLine, Package, Calendar, Truck, Library, Bug, BookUser, NotebookPen, ListChecks, Sun, Radar,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { useAuth } from '../contexts/AuthContext';
@@ -73,6 +73,7 @@ export function Layout() {
             badge={isAdmin && pendingCutsheets > 0 ? pendingCutsheets : undefined}
           />
           {isAdmin && <SidebarLink to="/my-day" icon={Sun} label="My Day" />}
+          {isAdmin && <SidebarLink to="/lead-finder" icon={Radar} label="Lead Finder" />}
           <SidebarLink to={PROJECTS_NAV.to} icon={PROJECTS_NAV.icon} label={PROJECTS_NAV.label} />
           <SidebarLink to={PRODUCTS_NAV.to} icon={PRODUCTS_NAV.icon} label={PRODUCTS_NAV.label} />
           <SidebarLink to="/directory" icon={BookUser} label="Directory" />

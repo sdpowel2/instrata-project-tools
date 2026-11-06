@@ -1,0 +1,59 @@
+{
+ "totalRecords": 4,
+ "limit": 2,
+ "offset": 1,
+ "opportunitiesData": [
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2026-12-17",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Combined Synopsis/Solicitation",
+   "classificationCode": "25",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=ffbe62d7730c49caaf47ed2213e954bd",
+   "fullParentPathCode": "097.97AS.DLA LAND.DLA LAND COLUMBUS.SPE7LX",
+   "fullParentPathName": "DEPT OF DEFENSE.DEFENSE LOGISTICS AGENCY.DLA LAND.DLA LAND COLUMBUS.DLA WEAPONS SUPPORT",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=ffbe62d7730c49caaf47ed2213e954bd&limit=1"
+    }
+   ],
+   "naicsCode": "336360",
+   "naicsCodes": [
+    "336360"
+   ],
+   "noticeId": "ffbe62d7730c49caaf47ed2213e954bd",
+   "officeAddress": {
+    "zipcode": "43218-3990",
+    "city": "COLUMBUS",
+    "countryCode": "USA",
+    "state": "OH"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": null,
+   "pointOfContact": [
+    {
+     "type": "primary",
+     "email": "DibbsBSM@dla.mil",
+     "fullName": "Questions regarding this solicitation should be emailed to the buyer listed in block 5 of the solicitation document which can be found under the Additional Information link.\nIf the Additional Information link does not work, please go to https://www.dibbs.bsm.dla.mil/Solicitations/ and type the solicitation number in the Global Search box.\n"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": null,
+   "responseDeadLine": "2026-11-17",
+   "solicitationNumber": "SPE7LX27U0492",
+   "title": "25--SEAT,VEHICULAR",
+   "type": "Combined Synopsis/Solicitation",
+   "typeOfSetAside": null,
+   "typeOfSetAsideDescription": null,
+   "uiLink": "https://sam.gov/workspace/contract/opp/ffbe62d7730c49caaf47ed2213e954bd/view"
+  },
+  {
+   "title": "Malformed item - no noticeId",
+   "postedDate": "2026-11-02"
+  }
+ ],
+ "links": []
+}

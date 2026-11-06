@@ -1,0 +1,15 @@
+# Seed offices, loaded by `leadfinder init`. After init the database is the source of truth.
+# ZIPs are quoted so leading zeros survive.
+default_radius_miles: 100
+offices:
+  - {name: Chandler,      street: "450 N. 54th Street, Suite 4",              city: Chandler,       state: AZ, zip: "85226", radius_miles: 100}
+  - {name: Trenton,       street: "572 Whitehead Road, Suite 201",            city: Trenton,        state: NJ, zip: "08619", radius_miles: 100}
+  - {name: Baltimore,     street: "1340 Charwood Rd",                         city: Hanover,        state: MD, zip: "21076", radius_miles: 100}
+  - {name: Stuarts Draft, street: "2412 Stuarts Draft Hwy",                   city: Stuarts Draft,  state: VA, zip: "22980", radius_miles: 100}
+  - {name: Tidewater,     street: "5257 Cleveland Street, Suite 101",         city: Virginia Beach, state: VA, zip: "23462", radius_miles: 100}
+  - {name: Richmond,      street: "5500 Cox Road, Suite A",                   city: Glen Allen,     state: VA, zip: "23060", radius_miles: 100}
+  - {name: Chantilly,     street: "3675 Concorde Parkway, Suite 800",         city: Chantilly,      state: VA, zip: "20151", radius_miles: 100}
+  - {name: Raleigh,       street: "516 South New Hope Road",                  city: Raleigh,        state: NC, zip: "27610", radius_miles: 100}
+  - {name: Charlotte,     street: "5019 West W.T. Harris Boulevard, Suite A", city: Charlotte,      state: NC, zip: "28269", radius_miles: 100}
+  - {name: Charleston,    street: "5828 Robinson Street",                     city: Charleston,     state: SC, zip: "29410", radius_miles: 100}
+  - {name: Myrtle Beach,  street: "1609 Executive Boulevard",                 city: Myrtle Beach,   state: SC, zip: "29577", radius_miles: 100}
