@@ -1,19 +1,15 @@
-"""Keep the database and Storage in step with the lead folders on the worker's volume.
+"""Keep the database in step with the lead folders on the worker's volume.
 
-After every document or triage action the worker calls mirror_lead(): it
+The bid documents themselves live only on the worker's volume (/data/documents); the tab
+uploads and downloads them through the worker (worker.web()). After every document or triage
+action the worker calls mirror_lead(), which
 
-  - upserts lf_document (one row per file) and uploads new or changed files to Storage
-    (zips that were unpacked are listed but not uploaded: their contents are),
-  - removes rows and objects for files that are gone,
+  - upserts lf_document (one row per file in the folder) and removes rows for files that are gone,
   - writes lf_lead_docs.summary (counts, SAM status, unpack errors, the folder manifest),
-  - copies the triage run history from the manifest into lf_triage_run, with the report text.
-
-hydrate_lead() is the reverse, for a worker whose volume was replaced: it restores the
-manifest and downloads mirrored files that are missing locally."""
+  - copies the triage run history from the manifest into lf_triage_run, with the report text."""
 from __future__ import annotations
 
 import logging
-import mimetypes
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,7 +19,6 @@ from sqlalchemy.orm import Session
 
 from leadfinder import documents as D
 from leadfinder.db.models import Document, LeadDocs, Opportunity, TriageRun
-from leadfinder.storage import Storage, StorageError, object_key
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +38,7 @@ def _dt(value: Any) -> datetime | None:
 def _summary_json(session: Session, opp: Opportunity, folder: Path) -> dict:
     s = D.summary(session, opp)
     return {
-        "folder": str(folder),
+        "folder": folder.name,
         "count": s["count"],
         "total_bytes": s["total_bytes"],
         "sam_links": s["sam_links"],
@@ -55,62 +50,38 @@ def _summary_json(session: Session, opp: Opportunity, folder: Path) -> dict:
     }
 
 
-def mirror_lead(session: Session, opp: Opportunity, storage: Storage | None = None) -> dict:
-    """Bring lf_document / lf_lead_docs / lf_triage_run (and Storage, if configured) in line
-    with the lead's folder. Returns counts. Commits."""
+def mirror_lead(session: Session, opp: Opportunity) -> dict:
+    """Bring lf_document / lf_lead_docs / lf_triage_run in line with the lead's folder.
+    Returns counts. Commits."""
     folder = D.lead_folder(opp)
     if folder is None:
-        return {"files": 0, "uploaded": 0, "removed": 0}
-    use_storage = storage is not None and storage.configured
+        return {"files": 0, "added": 0, "removed": 0}
     files = D.list_files(folder)
     existing = {d.path: d for d in session.execute(
         select(Document).where(Document.opportunity_id == opp.id)).scalars()}
-    uploaded = 0
-    stale_keys: list[str] = []
+    added = 0
     seen: set[str] = set()
     for f in files:
         seen.add(f.rel)
         row = existing.get(f.rel)
-        mirror = not (f.is_zip and f.unpacked)
-        key = row.storage_key if row is not None else None
-        if use_storage:
-            want = object_key(opp.id, f.rel) if mirror else None
-            if want and (row is None or row.size != f.size or row.storage_key != want):
-                ctype = mimetypes.guess_type(f.rel)[0] or "application/octet-stream"
-                try:
-                    storage.upload(want, folder / f.rel, ctype)
-                    uploaded += 1
-                except (StorageError, OSError) as exc:
-                    log.warning("document upload failed", extra={"opp": opp.id, "file": f.rel, "error": str(exc)})
-                    want = None
-            if key and key != want:
-                stale_keys.append(key)
-            key = want
         if row is None:
-            session.add(Document(opportunity_id=opp.id, path=f.rel, size=f.size, is_zip=f.is_zip,
-                                 unpacked=f.unpacked, storage_key=key))
+            session.add(Document(opportunity_id=opp.id, path=f.rel, size=f.size, is_zip=f.is_zip, unpacked=f.unpacked))
+            added += 1
         else:
-            row.size, row.is_zip, row.unpacked, row.storage_key = f.size, f.is_zip, f.unpacked, key
+            row.size, row.is_zip, row.unpacked = f.size, f.is_zip, f.unpacked
     removed = 0
     for path, row in existing.items():
         if path not in seen:
-            if row.storage_key:
-                stale_keys.append(row.storage_key)
             session.delete(row)
             removed += 1
-    if use_storage and stale_keys:
-        try:
-            storage.delete(stale_keys)
-        except StorageError as exc:
-            log.warning("document cleanup failed", extra={"opp": opp.id, "error": str(exc)})
 
-    docs = session.get(LeadDocs, opp.id) or LeadDocs(opportunity_id=opp.id, folder=str(folder))
-    docs.folder = str(folder)
+    docs = session.get(LeadDocs, opp.id) or LeadDocs(opportunity_id=opp.id, folder=folder.name)
+    docs.folder = folder.name
     docs.summary = _summary_json(session, opp, folder)
     session.add(docs)
     _mirror_triage(session, opp, docs.summary["manifest"])
     session.commit()
-    return {"files": len(files), "uploaded": uploaded, "removed": removed}
+    return {"files": len(files), "added": added, "removed": removed}
 
 
 def _mirror_triage(session: Session, opp: Opportunity, manifest: dict) -> None:
@@ -134,26 +105,15 @@ def _mirror_triage(session: Session, opp: Opportunity, manifest: dict) -> None:
         session.add(row)
 
 
-def hydrate_lead(session: Session, opp: Opportunity, storage: Storage | None = None) -> int:
-    """Restore a lead folder from the database and Storage when the local copy is missing
-    pieces (a new volume). Returns the number of files downloaded."""
-    docs = session.get(LeadDocs, opp.id)
-    if docs is None:
-        return 0
-    folder = D.lead_folder(opp, create=True)
-    assert folder is not None
-    manifest = (docs.summary or {}).get("manifest") or {}
-    if manifest and not (folder / D.MANIFEST).exists():
-        D.save_manifest(folder, manifest)
-    if storage is None or not storage.configured:
-        return 0
+def mirror_all(session: Session) -> int:
+    """Re-mirror every lead folder (after importing documents onto a new volume)."""
     n = 0
-    for d in session.execute(select(Document).where(Document.opportunity_id == opp.id)).scalars():
-        target = folder / d.path
-        if d.storage_key and not target.exists():
-            try:
-                storage.download(d.storage_key, target)
-                n += 1
-            except (StorageError, OSError) as exc:
-                log.warning("document restore failed", extra={"opp": opp.id, "file": d.path, "error": str(exc)})
+    for folder in D.iter_folders():
+        opp_id = D.load_manifest(folder).get("opportunity_id")
+        opp = session.get(Opportunity, opp_id) if opp_id else None
+        if opp is None:
+            log.warning("folder without a matching lead", extra={"folder": folder.name})
+            continue
+        mirror_lead(session, opp)
+        n += 1
     return n

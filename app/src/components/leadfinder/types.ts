@@ -196,7 +196,6 @@ export interface DocumentRow {
   size: number;
   is_zip: boolean;
   unpacked: boolean;
-  storage_key: string | null;
 }
 
 export interface TriageRun {
@@ -225,7 +224,8 @@ export interface WorkerStatus {
   aps_callback: string;
   triage_configured: boolean;
   triage_budget_usd: number;
-  storage_configured: boolean;
+  auth_configured: boolean;
+  disk: { free_bytes: number; total_bytes: number } | null;
   scorer_version: string | null;
   schedule_hour_et: number;
 }

@@ -11,8 +11,6 @@ import type {
   ReviewStatus, RunRow, Source, TriageRun, WorkerStatus,
 } from '../components/leadfinder/types';
 
-export const DOCS_BUCKET = 'lead-documents';
-
 function errText(e: unknown): string {
   if (!e) return 'Something went wrong.';
   if (typeof e === 'string') return e;
@@ -125,7 +123,7 @@ async function fetchLeadDetail(id: string): Promise<LeadDetail> {
       .eq('source_id', opp.source_id).eq('source_record_id', opp.source_record_id)
       .order('fetched_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('lf_lead_docs').select('summary').eq('opportunity_id', id).maybeSingle(),
-    supabase.from('lf_document').select('id, path, size, is_zip, unpacked, storage_key').eq('opportunity_id', id).order('path'),
+    supabase.from('lf_document').select('id, path, size, is_zip, unpacked').eq('opportunity_id', id).order('path'),
     supabase.from('lf_triage_run').select('*').eq('opportunity_id', id).order('started_at', { ascending: false }),
     supabase.from('lf_job').select('*').eq('opportunity_id', id).order('created_at', { ascending: false }).limit(20),
   ]);
@@ -218,32 +216,57 @@ export function useJobs(kinds?: JobKind[], limit = 30) {
 
 // ── Documents ────────────────────────────────────────────────────────────────
 
-function safeKeyName(name: string): string {
-  const ascii = name.normalize('NFKD').replace(/[^\x20-\x7e]/g, '');
-  return ascii.replace(/[^A-Za-z0-9._ ()-]+/g, '_').trim().slice(-120) || 'file';
+// Bid documents live on the worker's volume (not Supabase Storage), so uploads and
+// downloads go to the worker, authenticated with the signed-in admin's token.
+
+async function accessToken(): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Sign in again first.');
+  return token;
 }
 
-/** Upload files to the lead's Storage inbox, then ask the worker to file (and unzip) them. */
-export async function uploadDocuments(opportunityId: string, files: File[], onProgress?: (done: number) => void) {
-  const batch = crypto.randomUUID();
-  const queued: { key: string; name: string }[] = [];
-  for (const [i, f] of files.entries()) {
-    const key = `${opportunityId}/_inbox/${batch}/${i}-${safeKeyName(f.name)}`;
-    const { error } = await supabase.storage.from(DOCS_BUCKET).upload(key, f, {
-      contentType: f.type || 'application/octet-stream', upsert: false,
-    });
-    if (error) throw new Error(`${f.name}: ${errText(error)}`);
-    queued.push({ key, name: f.name });
-    onProgress?.(i + 1);
-  }
-  return queueJob('ingest_upload', { opportunityId, params: { files: queued } });
+function workerBase(workerUrl: string | null | undefined): string {
+  if (!workerUrl) throw new Error("The Lead Finder worker hasn't reported its address yet. Is it running?");
+  return workerUrl.replace(/\/$/, '');
 }
 
-export async function documentUrl(storageKey: string, filename: string) {
-  const { data, error } = await supabase.storage.from(DOCS_BUCKET)
-    .createSignedUrl(storageKey, 300, { download: filename.split('/').pop() || filename });
-  if (error || !data) throw new Error(errText(error));
-  return data.signedUrl;
+/** Upload files to the worker (with byte progress); it files them, unzipping zips, as a queued job. */
+export async function uploadDocuments(
+  workerUrl: string | null | undefined, opportunityId: string, files: File[],
+  onProgress?: (fraction: number) => void,
+): Promise<{ job_id: string }> {
+  const url = `${workerBase(workerUrl)}/documents/${encodeURIComponent(opportunityId)}/upload`;
+  const token = await accessToken();
+  const form = new FormData();
+  for (const f of files) form.append('files', f, f.name);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+    xhr.onerror = () => reject(new Error("Couldn't reach the Lead Finder worker."));
+    xhr.onload = () => {
+      let body: { job_id?: string; error?: string } = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300 && body.job_id) resolve({ job_id: body.job_id });
+      else reject(new Error(body.error || `The worker answered HTTP ${xhr.status}.`));
+    };
+    xhr.send(form);
+  });
+}
+
+/** A 5-minute signed link to one document on the worker. PDFs and images open in the browser. */
+export async function documentUrl(workerUrl: string | null | undefined, opportunityId: string, path: string) {
+  const inline = /\.(pdf|png|jpe?g|gif|webp|txt)$/i.test(path);
+  const res = await fetch(`${workerBase(workerUrl)}/documents/${encodeURIComponent(opportunityId)}/link`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, inline }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.url) throw new Error(body.error || `The worker answered HTTP ${res.status}.`);
+  return body.url as string;
 }
 
 // ── Offices, sources, runs, settings ─────────────────────────────────────────
@@ -305,11 +328,8 @@ export function workerOnline(w: WorkerStatus | null): boolean {
 }
 
 export async function startBuildingConnectedConnect(workerUrl: string) {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('Sign in again first.');
-  const res = await fetch(`${workerUrl.replace(/\/$/, '')}/bc/authorize`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+  const res = await fetch(`${workerBase(workerUrl)}/bc/authorize`, {
+    method: 'POST', headers: { Authorization: `Bearer ${await accessToken()}` },
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.url) throw new Error(body.error || `The worker answered HTTP ${res.status}.`);

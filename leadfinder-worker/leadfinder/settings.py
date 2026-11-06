@@ -33,11 +33,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     triage_budget_usd: float = 10.0        # hard cap per triage session, at list prices
     triage_output_dir: str = ""            # where CLAUDE OUTPUTS/<Project>/ goes; default data/CLAUDE OUTPUTS
-    # Supabase (Project Tools). DATABASE_URL above points at its Postgres; these are for Storage
-    # (bid documents mirrored for the tab) and for checking the signed-in user on /bc/authorize.
+    # Supabase (Project Tools). DATABASE_URL above points at its Postgres; these check the
+    # signed-in user's token on the worker's document and /bc/authorize endpoints.
     supabase_url: str = ""
-    supabase_service_role_key: str = ""
-    documents_bucket: str = "lead-documents"
+    supabase_anon_key: str = ""
+    # HMAC key for the 5-minute document download links. Empty: a random key per process.
+    download_signing_key: str = ""
     # Project Tools origin: CORS for /bc/authorize and where the OAuth callback sends people back.
     app_url: str = "http://localhost:5173"
     # This worker's own public URL (the tab calls /bc/authorize on it), e.g. https://instrata-leadfinder.fly.dev
@@ -93,7 +94,7 @@ def redact(text: str | None) -> str | None:
     if "://" in st.database_url and "@" in st.database_url:
         creds = st.database_url.split("://", 1)[1].rsplit("@", 1)[0]
         db_password = creds.split(":", 1)[1] if ":" in creds else None
-    for key in (st.sam_api_key, st.aps_client_secret, st.anthropic_api_key, st.supabase_service_role_key,
+    for key in (st.sam_api_key, st.aps_client_secret, st.anthropic_api_key, st.download_signing_key,
                 db_password, *_extra_secrets):
         if key:
             text = text.replace(key, "REDACTED")

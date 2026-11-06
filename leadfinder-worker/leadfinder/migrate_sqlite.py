@@ -1,8 +1,8 @@
 """One-time move of the standalone app's data into Supabase (`leadfinder migrate-to-supabase`).
 
 Copies every table from the old SQLite file (old, unprefixed table names) into the lf_* tables,
-mirrors each lead's document folder to Storage + lf_document / lf_lead_docs / lf_triage_run
-(the triage reports are read from the paths recorded in the folder manifests), and moves the
+records each lead's document folder in lf_document / lf_lead_docs / lf_triage_run (the triage
+reports are read from the paths recorded in the folder manifests), and moves the
 BuildingConnected tokens and triage agent ids into lf_secret. Upserts throughout, so it can be
 run again safely. --verify then checks lf_results() against the Python query on the same data."""
 from __future__ import annotations
@@ -78,11 +78,12 @@ def copy_tables(sqlite_path: Path, pg: Session, echo: Callable[[str], None] = pr
 
 
 def copy_documents(docs_dir: Path, pg: Session, echo: Callable[[str], None] = print) -> int:
-    """Mirror every lead folder under docs_dir to Storage and the document tables."""
+    """Record every lead folder under docs_dir in the document tables, with the triage reports
+    (read from the paths in the manifests, which only exist on this machine). The files
+    themselves go onto the worker's volume separately (`leadfinder docs import`)."""
     from leadfinder import documents as D
     from leadfinder.db.models import Opportunity
     from leadfinder.mirror import mirror_lead
-    from leadfinder.storage import Storage
 
     if not docs_dir.is_dir():
         echo(f"  no documents folder at {docs_dir}")
@@ -91,18 +92,15 @@ def copy_documents(docs_dir: Path, pg: Session, echo: Callable[[str], None] = pr
     D.DOCS_DIR = docs_dir  # read the old folders in place
     n = 0
     try:
-        with Storage() as storage:
-            if not storage.configured:
-                echo("  SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set: listing files without uploading them")
-            for folder in D.iter_folders(docs_dir):
-                opp_id = D.load_manifest(folder).get("opportunity_id")
-                opp = pg.get(Opportunity, opp_id) if opp_id else None
-                if opp is None:
-                    echo(f"  skipped {folder.name}: no matching lead")
-                    continue
-                r = mirror_lead(pg, opp, storage)
-                echo(f"  {folder.name[:60]:<60} {r['files']:>4} files, {r['uploaded']:>4} uploaded")
-                n += 1
+        for folder in D.iter_folders(docs_dir):
+            opp_id = D.load_manifest(folder).get("opportunity_id")
+            opp = pg.get(Opportunity, opp_id) if opp_id else None
+            if opp is None:
+                echo(f"  skipped {folder.name}: no matching lead")
+                continue
+            r = mirror_lead(pg, opp)
+            echo(f"  {folder.name[:60]:<60} {r['files']:>4} files")
+            n += 1
     finally:
         D.DOCS_DIR = saved
     return n
@@ -143,7 +141,11 @@ def verify(pg: Session, echo: Callable[[str], None] = print) -> bool:
     ok = True
     for params in cases:
         f = Filters.from_params(params)
-        py = [r.opp.id for r in query_results(pg, f)]
+        py_rows = query_results(pg, f)
+        py = [r.opp.id for r in py_rows]
+        # The Python sort has no tie-breaker (due, -score, title); lf_results adds id. Rows that
+        # tie on the sort key may come back in either order, so compare keys position by position.
+        sort_key = {r.opp.id: (r.opp.response_due_at, r.score, r.opp.title) for r in py_rows}
         body = {"office_id": f.office_id, "office_mode": f.office_mode, "in_range_only": f.in_range_only,
                 "lanes": f.lanes, "min_score": f.min_score, "status": f.status,
                 "due_after": f.due_after.isoformat() if f.due_after else None, "changed": f.changed,
@@ -154,7 +156,8 @@ def verify(pg: Session, echo: Callable[[str], None] = print) -> bool:
         res = pg.execute(text("select public.lf_results(cast(:p as jsonb))"), {"p": json.dumps(body)}).scalar()
         pg.rollback()
         sql = [r["id"] for r in res["rows"]]
-        same = py == sql
+        same = set(py) == set(sql) and len(py) == len(sql) and \
+            [sort_key[i] for i in py] == [sort_key[i] for i in sql]
         ok &= same
         echo(f"  {json.dumps(params)[:70]:<70} python={len(py):>5} sql={len(sql):>5} {'OK' if same else 'DIFFERENT'}")
         if not same:

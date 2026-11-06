@@ -1,11 +1,11 @@
-"""The Project Tools worker: job queue, handlers, mirroring to the document tables + Storage,
-database-backed token/agent state. SQLite + fakes only (no Supabase, no network)."""
+"""The Project Tools worker: job queue, handlers, document upload/download endpoints, mirroring
+to the document tables, database-backed token/agent state. SQLite + fakes only."""
 import io
+import tarfile
+import time
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
 
-import httpx
 import pytest
 import respx
 from sqlalchemy import select
@@ -17,42 +17,9 @@ from leadfinder import triage as T
 from leadfinder import worker as W
 from leadfinder.aps_auth import TokenSet, TokenStore, public_status
 from leadfinder.db.models import Document, Job, LeadDocs, Office, TriageRun
-from leadfinder.mirror import hydrate_lead, mirror_lead
-from leadfinder.storage import object_key
+from leadfinder.mirror import mirror_lead
 from tests.test_documents import L1, L2, av_lead, docs_root, sam_redirect  # noqa: F401  (fixtures)
 from tests.test_triage import FakeClient, triage_env  # noqa: F401  (fixtures)
-
-
-class FakeStorage:
-    """In-memory stand-in for leadfinder.storage.Storage."""
-
-    def __init__(self, objects=None, configured=True):
-        self.objects: dict[str, bytes] = objects if objects is not None else {}
-        self.configured = configured
-        self.uploads: list[str] = []
-        self.deleted: list[str] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return None
-
-    def close(self):
-        pass
-
-    def upload(self, key, path, content_type="application/octet-stream"):
-        self.objects[key] = Path(path).read_bytes()
-        self.uploads.append(key)
-
-    def download(self, key, dest):
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(self.objects[key])
-
-    def delete(self, keys):
-        for k in keys:
-            self.objects.pop(k, None)
-            self.deleted.append(k)
 
 
 def zip_bytes(members):
@@ -63,19 +30,26 @@ def zip_bytes(members):
     return buf.getvalue()
 
 
-def run_job(factory, storage, kind, opp_id=None, **params):
+def run_job(factory, kind, opp_id=None, **params):
     s = factory()
     s.add(Job(kind=kind, opportunity_id=opp_id, params=params))
     s.commit()
     s.close()
     job = W.claim_next(factory)
     assert job is not None and job.status == "running"
-    W.execute(job, factory, lambda: storage)
+    W.execute(job, factory)
     s = factory()
     try:
         return s.get(Job, job.id)
     finally:
         s.close()
+
+
+@pytest.fixture
+def inbox(tmp_path, monkeypatch):
+    root = tmp_path / "inbox"
+    monkeypatch.setattr(W, "INBOX_DIR", root)
+    return root
 
 
 # ---------------------------------------------------------------- key/value + tokens
@@ -101,95 +75,104 @@ def test_kv_and_db_token_store(engine):
 
 # ---------------------------------------------------------------- mirror
 
-def test_mirror_uploads_files_skips_unpacked_zips_and_removes_gone(av_lead, docs_root):
+def test_mirror_lists_files_and_removes_gone(av_lead, docs_root):
     factory, s, opp = av_lead
     folder = D.lead_folder(opp, create=True)
     (folder / "Spec.pdf").write_bytes(b"%PDF spec")
     (folder / "Dwgs.zip").write_bytes(zip_bytes({"A-101.pdf": b"%PDF a"}))
     D.unpack_pending(folder)
-    st = FakeStorage()
-    r = mirror_lead(s, opp, st)
-    assert r == {"files": 3, "uploaded": 2, "removed": 0}
+    assert mirror_lead(s, opp) == {"files": 3, "added": 3, "removed": 0}
     docs = {d.path: d for d in s.execute(select(Document).where(Document.opportunity_id == opp.id)).scalars()}
     assert set(docs) == {"Spec.pdf", "Dwgs.zip", "Dwgs/A-101.pdf"}
-    assert docs["Dwgs.zip"].unpacked and docs["Dwgs.zip"].storage_key is None
-    assert docs["Spec.pdf"].storage_key == object_key(opp.id, "Spec.pdf")
+    assert docs["Dwgs.zip"].unpacked and not docs["Spec.pdf"].is_zip
     summary = s.get(LeadDocs, opp.id).summary
     assert summary["count"] == 2 and summary["zips"] == ["Dwgs.zip"] and summary["sam_links"] == 2
+    assert summary["folder"] == folder.name  # never a server path
 
-    assert mirror_lead(s, opp, st)["uploaded"] == 0  # unchanged: nothing re-uploaded
+    assert mirror_lead(s, opp)["added"] == 0
     (folder / "Spec.pdf").unlink()
-    assert mirror_lead(s, opp, st)["removed"] == 1
-    assert object_key(opp.id, "Spec.pdf") in st.deleted
+    assert mirror_lead(s, opp)["removed"] == 1
 
 
-def test_object_keys_are_ascii_and_stable():
-    k = object_key("opp1", "Sky Harbor/Ítem #3: Plan?.pdf")
-    assert k.startswith("opp1/") and k.isascii() and "#" not in k and "?" not in k and ":" not in k.split("/", 1)[1]
-    assert k == object_key("opp1", "Sky Harbor/Ítem #3: Plan?.pdf") != object_key("opp1", "other/Ítem #3: Plan?.pdf")
+def test_docs_import_unpacks_tar_and_records_folders(av_lead, docs_root, tmp_path):
+    from typer.testing import CliRunner
 
+    from leadfinder.cli import app
+    from leadfinder.db import session as dbs
 
-def test_hydrate_restores_a_lost_volume(av_lead, docs_root, tmp_path, monkeypatch):
     factory, s, opp = av_lead
-    folder = D.lead_folder(opp, create=True)
-    (folder / "Spec.pdf").write_bytes(b"%PDF spec")
-    st = FakeStorage()
-    mirror_lead(s, opp, st)
-    monkeypatch.setattr(D, "DOCS_DIR", tmp_path / "new-volume")
-    assert hydrate_lead(s, opp, st) == 1
-    assert (D.lead_folder(opp) / "Spec.pdf").read_bytes() == b"%PDF spec"
+    old = tmp_path / "old" / "documents" / f"Lead__{opp.id[:8]}"
+    old.mkdir(parents=True)
+    (old / "Spec.pdf").write_bytes(b"%PDF")
+    D.save_manifest(old, {"opportunity_id": opp.id})
+    archive = tmp_path / "documents.tar"
+    with tarfile.open(archive, "w") as tf:
+        tf.add(tmp_path / "old" / "documents", arcname="documents")
+    dbs._SessionLocal, saved = factory, dbs._SessionLocal
+    dbs._engine, saved_engine = factory.kw["bind"], dbs._engine
+    try:
+        r = CliRunner().invoke(app, ["docs", "import", str(archive)])
+    finally:
+        dbs._SessionLocal, dbs._engine = saved, saved_engine
+    assert r.exit_code == 0, r.output
+    assert (docs_root / old.name / "Spec.pdf").read_bytes() == b"%PDF"
+    assert "1 lead folder(s) recorded" in r.output and not archive.exists()
+    assert factory().execute(select(Document.path).where(Document.opportunity_id == opp.id)).scalars().all() == ["Spec.pdf"]
 
 
 # ---------------------------------------------------------------- jobs
 
-def test_ingest_upload_job_moves_inbox_files_and_unpacks(av_lead, docs_root):
+def test_ingest_upload_job_files_inbox_uploads_and_unpacks(av_lead, docs_root, inbox):
     factory, s, opp = av_lead
-    inbox = f"{opp.id}/_inbox/u1"
-    st = FakeStorage({f"{inbox}/Bid Board.zip": zip_bytes({"Specs/274100.pdf": b"%PDF"}),
-                      f"{inbox}/Addendum 2.pdf": b"%PDF add"})
-    job = run_job(factory, st, "ingest_upload", opp.id,
-                  files=[{"key": f"{inbox}/Bid Board.zip", "name": "Bid Board.zip"},
-                         {"key": f"{inbox}/Addendum 2.pdf", "name": "Addendum 2.pdf"}])
+    batch = inbox / opp.id / "b1"
+    batch.mkdir(parents=True)
+    (batch / "0-Bid Board.zip").write_bytes(zip_bytes({"Specs/274100.pdf": b"%PDF"}))
+    (batch / "1-Addendum 2.pdf").write_bytes(b"%PDF add")
+    job = run_job(factory, "ingest_upload", opp.id,
+                  files=[{"local": f"{opp.id}/b1/0-Bid Board.zip", "name": "Bid Board.zip"},
+                         {"local": f"{opp.id}/b1/1-Addendum 2.pdf", "name": "Addendum 2.pdf"}])
     assert job.status == "done", job.error
     assert job.result["message"].startswith("Added 2 files; unpacked Bid Board.zip (1 files)")
-    assert not any(k.startswith(inbox) for k in st.objects)  # inbox cleared
+    assert not batch.exists()  # inbox cleared
     paths = {d.path for d in factory().execute(select(Document).where(Document.opportunity_id == opp.id)).scalars()}
     assert paths == {"Bid Board.zip", "Bid Board/Specs/274100.pdf", "Addendum 2.pdf"}
 
 
-def test_ingest_upload_rejects_another_leads_paths(av_lead, docs_root):
+def test_ingest_upload_rejects_another_leads_paths(av_lead, docs_root, inbox):
     factory, s, opp = av_lead
-    job = run_job(factory, FakeStorage({"other/_inbox/x/a.pdf": b"x"}), "ingest_upload", opp.id,
-                  files=[{"key": "other/_inbox/x/a.pdf", "name": "a.pdf"}])
-    assert job.status == "failed" and "don't belong" in job.error
+    (inbox / "other").mkdir(parents=True)
+    (inbox / "other" / "a.pdf").write_bytes(b"x")
+    for local in ("other/a.pdf", f"{opp.id}/../other/a.pdf"):
+        job = run_job(factory, "ingest_upload", opp.id, files=[{"local": local, "name": "a.pdf"}])
+        assert job.status == "failed" and "don't belong" in job.error
 
 
 def test_sam_docs_job_downloads_and_mirrors(av_lead, docs_root):
     factory, s, opp = av_lead
-    st = FakeStorage()
     with respx.mock:
         sam_redirect(L1, "aaaa1111.pdf", "spec.pdf", b"%PDF 1")
         sam_redirect(L2, "bbbb2222.pdf", "dwg.pdf", b"%PDF 2")
-        job = run_job(factory, st, "sam_docs", opp.id)
+        job = run_job(factory, "sam_docs", opp.id)
     assert job.status == "done", job.error
     assert job.result["downloaded"] == 2 and job.progress == {"total": 2, "done": 2, "failed": 0}
-    assert len(st.uploads) == 2 and D.JOBS == {}
+    assert len(factory().execute(select(Document).where(Document.opportunity_id == opp.id)).scalars().all()) == 2
+    assert D.JOBS == {}
 
 
 def test_rescan_and_unknown_lead(av_lead, docs_root):
     factory, s, opp = av_lead
     folder = D.lead_folder(opp, create=True)
     (folder / "Copied.zip").write_bytes(zip_bytes({"Q.pdf": b"%PDF"}))
-    job = run_job(factory, FakeStorage(), "rescan", opp.id)
+    job = run_job(factory, "rescan", opp.id)
     assert job.status == "done" and job.result["message"] == "Unpacked Copied.zip."
-    assert run_job(factory, FakeStorage(), "rescan", None).error == "Lead not found."
+    assert run_job(factory, "rescan", None).error == "Lead not found."
 
 
 def test_office_save_job_validates_and_saves(engine, seeded):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    bad = run_job(factory, FakeStorage(), "office_save", name="X", street="1 Main", city="Y", state="ZZ", zip="1")
+    bad = run_job(factory, "office_save", name="X", street="1 Main", city="Y", state="ZZ", zip="1")
     assert bad.status == "failed" and "Unknown state" in bad.error
-    ok = run_job(factory, FakeStorage(), "office_save", name="Columbia", street="1 Main St", city="Columbia",
+    ok = run_job(factory, "office_save", name="Columbia", street="1 Main St", city="Columbia",
                  state="SC", zip="29201", radius_miles=75, manual_lat="34.0", manual_lon="-81.03")
     assert ok.status == "done", ok.error
     assert "Geocode: manual" in ok.result["message"]
@@ -203,7 +186,7 @@ def test_triage_job_end_to_end(av_lead, triage_env, monkeypatch):
     (folder / "Spec 27 41 00.pdf").write_bytes(b"%PDF spec")
     fake = FakeClient()
     monkeypatch.setattr(T, "make_client", lambda: fake)
-    job = run_job(factory, FakeStorage(), "triage", opp.id)
+    job = run_job(factory, "triage", opp.id)
     assert job.status == "done", job.error
     assert job.result["rating"] == "YELLOW" and job.result["cost_usd"] == 3.12
     row = factory().execute(select(TriageRun).where(TriageRun.opportunity_id == opp.id)).scalar_one()
@@ -218,7 +201,7 @@ def test_triage_job_nda_gate_is_a_readable_failure(av_lead, triage_env, monkeypa
     folder = D.lead_folder(opp, create=True)
     (folder / "a.pdf").write_bytes(b"%PDF")
     monkeypatch.setattr(T, "make_client", lambda: FakeClient())
-    job = run_job(factory, FakeStorage(), "triage", opp.id)
+    job = run_job(factory, "triage", opp.id)
     assert job.status == "failed" and "NDA" in job.error
 
 
@@ -227,7 +210,7 @@ def test_recover_fails_stale_jobs_and_resumes_triage(av_lead, triage_env, monkey
     folder = D.lead_folder(opp, create=True)
     (folder / "a.pdf").write_bytes(b"%PDF")
     T.start(s, opp, FakeClient())  # a session left running by a restart
-    mirror_lead(s, opp, FakeStorage())
+    mirror_lead(s, opp)
     s.add(Job(kind="rescan", opportunity_id=opp.id, status="running"))
     s.commit()
     assert W.recover(factory) == [opp.id]
@@ -236,7 +219,7 @@ def test_recover_fails_stale_jobs_and_resumes_triage(av_lead, triage_env, monkey
 
     monkeypatch.setattr(T, "make_client", lambda: FakeClient())
     job = W.claim_next(factory)
-    W.execute(job, factory, lambda: FakeStorage())
+    W.execute(job, factory)
     done = factory().get(Job, job.id)
     assert done.status == "done" and done.result["rating"] == "YELLOW"
 
@@ -257,48 +240,89 @@ def test_scheduled_run_due_once_per_day(engine):
 def test_unknown_handler_and_unexpected_errors_are_recorded(engine, monkeypatch):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setitem(W.HANDLERS, "rescore", lambda ctx: 1 / 0)
-    job = run_job(factory, FakeStorage(), "rescore")
+    job = run_job(factory, "rescore")
     assert job.status == "failed" and job.error.startswith("Unexpected error: ZeroDivisionError")
     assert job.finished_at is not None
 
 
-def test_is_admin_token_rejects_without_supabase(monkeypatch):
+# ---------------------------------------------------------------- HTTP
+
+def test_admin_user_rejects_without_supabase(monkeypatch):
     from leadfinder.settings import get_settings
     monkeypatch.setattr(get_settings(), "supabase_url", "")
-    assert W.is_admin_token("tok") is False
+    assert W.admin_user("tok") is None
 
 
-def test_bc_authorize_requires_admin(monkeypatch):
+def test_signed_links():
+    exp = int(time.time()) + 60
+    sig = W.sign_link("opp", "a/b.pdf", exp)
+    assert W.verify_link("opp", "a/b.pdf", exp, sig)
+    assert not W.verify_link("opp", "a/c.pdf", exp, sig)
+    assert not W.verify_link("other", "a/b.pdf", exp, sig)
+    assert not W.verify_link("opp", "a/b.pdf", exp, sig, now=exp + 1)
+
+
+@pytest.fixture
+def client(av_lead, docs_root, inbox, monkeypatch):
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(W, "is_admin_token", lambda token, httpx_mod=None: token == "good")
     from leadfinder.settings import get_settings
+
+    factory, s, opp = av_lead
+    monkeypatch.setattr(W, "admin_user", lambda token: "uid-1" if token == "good" else None)
     st = get_settings()
     monkeypatch.setattr(st, "aps_client_id", "cid")
     monkeypatch.setattr(st, "aps_client_secret", "secret-0123456789")
-    with TestClient(W.web(None)) as c:
-        assert c.get("/healthz").text == "ok"
-        assert c.post("/bc/authorize").status_code == 403
-        assert c.post("/bc/authorize", headers={"Authorization": "Bearer bad"}).status_code == 403
-        r = c.post("/bc/authorize", headers={"Authorization": "Bearer good"})
-        assert r.status_code == 200 and r.json()["url"].startswith("https://developer.api.autodesk.com/")
-        cb = c.get("/oauth/callback", params={"code": "x", "state": "never-issued"}, follow_redirects=False)
-        assert cb.status_code == 303 and "/lead-finder?tab=settings&err=" in cb.headers["location"]
+    monkeypatch.setattr(st, "public_url", "https://worker.test")
+    with TestClient(W.web(None, session_factory=factory)) as c:
+        yield c, factory, opp
 
 
-def test_storage_client_against_supabase_api(tmp_path):
-    from leadfinder.storage import Storage
+GOOD = {"Authorization": "Bearer good"}
 
-    f = tmp_path / "a.pdf"
-    f.write_bytes(b"%PDF")
-    with respx.mock(base_url="https://proj.supabase.co") as m:
-        up = m.post("/storage/v1/object/lead-documents/opp/abc-a.pdf").mock(return_value=httpx.Response(200, json={}))
-        m.get("/storage/v1/object/lead-documents/opp/abc-a.pdf").mock(return_value=httpx.Response(200, content=b"%PDF"))
-        rm = m.delete("/storage/v1/object/lead-documents").mock(return_value=httpx.Response(200, json=[]))
-        with Storage(url="https://proj.supabase.co", key="service-key-0123456789") as st:
-            st.upload("opp/abc-a.pdf", f, "application/pdf")
-            st.download("opp/abc-a.pdf", tmp_path / "b.pdf")
-            st.delete(["opp/abc-a.pdf"])
-        assert up.calls[0].request.headers["x-upsert"] == "true"
-        assert up.calls[0].request.headers["authorization"] == "Bearer service-key-0123456789"
-        assert (tmp_path / "b.pdf").read_bytes() == b"%PDF" and rm.called
+
+def test_bc_authorize_requires_admin(client):
+    c, factory, opp = client
+    assert c.get("/healthz").text == "ok"
+    assert c.post("/bc/authorize").status_code == 403
+    assert c.post("/bc/authorize", headers={"Authorization": "Bearer bad"}).status_code == 403
+    r = c.post("/bc/authorize", headers=GOOD)
+    assert r.status_code == 200 and r.json()["url"].startswith("https://developer.api.autodesk.com/")
+    cb = c.get("/oauth/callback", params={"code": "x", "state": "never-issued"}, follow_redirects=False)
+    assert cb.status_code == 303 and "/lead-finder?tab=settings&err=" in cb.headers["location"]
+
+
+def test_upload_endpoint_queues_ingest_job(client, inbox):
+    c, factory, opp = client
+    files = [("files", ("Bid Board.zip", zip_bytes({"S.pdf": b"%PDF"}), "application/zip")),
+             ("files", ("Addendum 2.pdf", b"%PDF add", "application/pdf"))]
+    assert c.post(f"/documents/{opp.id}/upload", files=files).status_code == 403
+    assert c.post("/documents/nope/upload", files=files, headers=GOOD).status_code == 404
+    r = c.post(f"/documents/{opp.id}/upload", files=files, headers=GOOD)
+    assert r.status_code == 200 and r.json()["files"] == 2
+    job = factory().get(Job, r.json()["job_id"])
+    assert job.kind == "ingest_upload" and job.opportunity_id == opp.id
+    assert [f["name"] for f in job.params["files"]] == ["Bid Board.zip", "Addendum 2.pdf"]
+    assert all((inbox / f["local"]).is_file() for f in job.params["files"])
+
+    claimed = W.claim_next(factory)
+    W.execute(claimed, factory)
+    assert factory().get(Job, job.id).status == "done"
+
+
+def test_download_link_and_file(client):
+    c, factory, opp = client
+    folder = D.lead_folder(opp, create=True)
+    (folder / "Specs").mkdir()
+    (folder / "Specs" / "274100.pdf").write_bytes(b"%PDF body")
+    assert c.post(f"/documents/{opp.id}/link", json={"path": "Specs/274100.pdf"}).status_code == 403
+    assert c.post(f"/documents/{opp.id}/link", json={"path": "../../x"}, headers=GOOD).status_code == 404
+    assert c.post(f"/documents/{opp.id}/link", json={"path": D.MANIFEST}, headers=GOOD).status_code == 404
+    r = c.post(f"/documents/{opp.id}/link", json={"path": "Specs/274100.pdf", "inline": True}, headers=GOOD)
+    url = r.json()["url"]
+    assert url.startswith(f"https://worker.test/documents/{opp.id}/file?")
+    got = c.get(url.replace("https://worker.test", ""))
+    assert got.status_code == 200 and got.content == b"%PDF body"
+    assert got.headers["content-disposition"].startswith("inline")
+    tampered = c.get(url.replace("https://worker.test", "").replace("274100", "274200"))
+    assert tampered.status_code == 403

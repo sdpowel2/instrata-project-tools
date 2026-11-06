@@ -7,13 +7,15 @@
 # Secrets (fly secrets set -a instrata-leadfinder ...):
 #   DATABASE_URL                Supabase Postgres (session pooler URL, port 5432)
 #   SUPABASE_URL                https://<ref>.supabase.co
-#   SUPABASE_SERVICE_ROLE_KEY   Storage mirror + checking the admin on /bc/authorize
+#   SUPABASE_ANON_KEY           checking the signed-in admin's token (documents, /bc/authorize)
+#   DOWNLOAD_SIGNING_KEY        optional; signs 5-minute document links (random per boot if unset)
 #   SAM_API_KEY                 SAM.gov public API key (expires every 90 days)
 #   HTTP_USER_AGENT_CONTACT     contact email in the User-Agent sent to SAM.gov / Census
 #   APS_CLIENT_ID / APS_CLIENT_SECRET   Autodesk app for BuildingConnected
 #   ANTHROPIC_API_KEY           triage (Claude Managed Agents)
 #
-# Volume: bid documents and triage outputs (working copy; Storage holds the mirror).
+# Volume: bid documents and triage outputs. This is the only copy of the documents (Fly takes
+# daily volume snapshots, kept 5 days); the tab uploads and downloads them through this app.
 #   fly volumes create leadfinder_data --region iad --size 10 -a instrata-leadfinder
 app = "instrata-leadfinder"
 primary_region = "iad"

@@ -77,7 +77,7 @@ function DrawerBody({ detail, reload, onChanged, worker }: {
           <Banner tone="warn">The Lead Finder worker hasn't checked in recently, so downloads, uploads and triage will wait until it's back.</Banner>
         </div>
       )}
-      <DocumentsSection detail={detail} reload={reload} />
+      <DocumentsSection detail={detail} reload={reload} workerUrl={worker?.public_url ?? null} />
       <TriageSection detail={detail} worker={worker} />
 
       {opp.source_id === 'buildingconnected' && (
@@ -274,11 +274,11 @@ function liveJob(jobs: Job[], kinds: Job['kind'][]): Job | undefined {
   return jobs.find((j) => kinds.includes(j.kind) && (j.status === 'queued' || j.status === 'running'));
 }
 
-function DocumentsSection({ detail, reload }: { detail: LeadDetail; reload: () => void }) {
+function DocumentsSection({ detail, reload, workerUrl }: { detail: LeadDetail; reload: () => void; workerUrl: string | null }) {
   const { opp, docs, documents, jobs } = detail;
   const fileInput = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
-  const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null);
+  const [uploading, setUploading] = useState<{ pct: number; total: number } | null>(null);
   const [msg, setMsg] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
 
   const samJob = liveJob(jobs, ['sam_docs']);
@@ -299,9 +299,9 @@ function DocumentsSection({ detail, reload }: { detail: LeadDetail; reload: () =
     const files = Array.from(list);
     if (!files.length) return;
     setMsg(null);
-    setUploading({ done: 0, total: files.length });
+    setUploading({ pct: 0, total: files.length });
     try {
-      await uploadDocuments(opp.id, files, (done) => setUploading({ done, total: files.length }));
+      await uploadDocuments(workerUrl, opp.id, files, (f) => setUploading({ pct: Math.round(f * 100), total: files.length }));
       reload();
     } catch (e) {
       setMsg({ tone: 'error', text: (e as Error).message });
@@ -317,8 +317,15 @@ function DocumentsSection({ detail, reload }: { detail: LeadDetail; reload: () =
   };
 
   const open = async (d: DocumentRow) => {
-    if (!d.storage_key) return;
-    try { window.open(await documentUrl(d.storage_key, d.path), '_blank', 'noopener'); } catch (e) { setMsg({ tone: 'error', text: (e as Error).message }); }
+    // Open the tab now (inside the click) so the browser doesn't block it, then point it at the link.
+    const w = window.open('about:blank', '_blank');
+    try {
+      const url = await documentUrl(workerUrl, opp.id, d.path);
+      if (w) { w.opener = null; w.location.href = url; } else window.location.href = url;
+    } catch (e) {
+      w?.close();
+      setMsg({ tone: 'error', text: (e as Error).message });
+    }
   };
 
   const visible = documents.filter((d) => !(d.is_zip && d.unpacked));
@@ -377,7 +384,7 @@ function DocumentsSection({ detail, reload }: { detail: LeadDetail; reload: () =
         <input ref={fileInput} type="file" multiple hidden aria-label="Add bid documents"
           onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && void addFiles(e.target.files)} />
         {uploading ? (
-          <span className="inline-flex items-center gap-2 text-[13px] text-navy"><Spinner size={14} /> Uploading {uploading.done} of {uploading.total}…</span>
+          <span className="inline-flex items-center gap-2 text-[13px] text-navy"><Spinner size={14} /> Uploading {uploading.total} file{uploading.total === 1 ? '' : 's'}… {uploading.pct}%</span>
         ) : fileJob ? (
           <JobLine job={fileJob} label={fileJob.kind === 'rescan' ? 'Rescanning' : 'Filing and unpacking the upload'} />
         ) : (
@@ -404,9 +411,7 @@ function DocumentsSection({ detail, reload }: { detail: LeadDetail; reload: () =
             {visible.map((d) => (
               <div key={d.id} className="flex items-center gap-2.5 px-3 py-1.5 text-[13px]">
                 {d.is_zip ? <FileArchive size={14} className="text-fg-3 flex-shrink-0" /> : <FileText size={14} className="text-fg-3 flex-shrink-0" />}
-                {d.storage_key ? (
-                  <button onClick={() => void open(d)} className="text-left text-navy hover:text-orange-dark truncate flex-1" title={d.path}>{d.path}</button>
-                ) : <span className="truncate flex-1 text-fg-2" title={d.path}>{d.path}</span>}
+                <button onClick={() => void open(d)} className="text-left text-navy hover:text-orange-dark truncate flex-1" title={d.path}>{d.path}</button>
                 <span className="text-xs text-fg-3 font-mono flex-shrink-0">{fmtBytes(d.size)}</span>
               </div>
             ))}

@@ -10,8 +10,8 @@
 --                                   office save). The worker claims rows and writes
 --                                   progress back; realtime pushes it to the page.
 --   lf_lead_docs / lf_document      per-lead document summary and file list. The
---                                   worker's working copy is on its Fly volume; files
---                                   are mirrored to the lead-documents bucket.
+--                                   files themselves live on the worker's Fly volume;
+--                                   the tab uploads/downloads them through the worker.
 --   lf_triage_run                   av-triage results (rating, estimate, report).
 --   lf_setting                      small settings the tab edits (default radius).
 --   lf_secret                       worker-only state (BuildingConnected tokens,
@@ -250,8 +250,7 @@ create table if not exists public.lf_document (
   path            text not null,                 -- relative path in the lead folder
   size            bigint not null default 0,
   is_zip          boolean not null default false,
-  unpacked        boolean not null default false, -- zips: unpacked beside themselves (not mirrored)
-  storage_key     text,                           -- object in lead-documents; null = not mirrored
+  unpacked        boolean not null default false, -- zips: unpacked beside themselves
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
   unique (opportunity_id, path)
@@ -513,7 +512,7 @@ begin
      where d.is_nearest and d.opportunity_id in (select id from picked)
   ),
   out as (
-    select pk.response_due_at, pk.score, pk.title,
+    select pk.id, pk.response_due_at, pk.score, pk.title,
            jsonb_build_object(
              'id', pk.id, 'group_key', pk.group_key, 'source_id', pk.source_id,
              'source_record_id', pk.source_record_id, 'title', pk.title, 'url', pk.url,
@@ -541,7 +540,7 @@ begin
       left join group_value gv on gv.group_key = pk.group_key
       left join nearest n on n.opportunity_id = pk.id
   )
-  select coalesce(jsonb_agg(row order by response_due_at asc nulls last, score desc, title collate "C" asc), '[]'::jsonb)
+  select coalesce(jsonb_agg(row order by response_due_at asc nulls last, score desc, title collate "C" asc, id asc), '[]'::jsonb)
     into v_rows
     from out;
 
@@ -552,24 +551,15 @@ $$;
 revoke all on function public.lf_results(jsonb) from public, anon;
 grant execute on function public.lf_results(jsonb) to authenticated;
 
--- ── Storage: lead-documents (private) ────────────────────────────────────────
--- Keys: <opportunity_id>/<16-hex>-<ascii name> for mirrored files (worker),
---       <opportunity_id>/_inbox/<uuid>/<name> for files the tab uploads; the
---       worker moves those into the lead folder and deletes the inbox object.
--- The bucket limit only applies up to the project's global upload limit
--- (Storage settings): raise that to 500 MB as well.
-insert into storage.buckets (id, name, public, file_size_limit)
-values ('lead-documents', 'lead-documents', false, 524288000)  -- 500 MB
-on conflict (id) do nothing;
-
+-- ── Bid documents are not in Supabase Storage ───────────────────────────────
+-- They live on the worker's Fly volume and the tab uploads/downloads them
+-- through the worker (the free plan caps files at 50 MB and storage at 1 GB).
+-- An earlier draft of this file mirrored them to a 'lead-documents' bucket;
+-- these lines undo that draft where it was applied. (An empty bucket left
+-- behind can be deleted in the dashboard: Storage > lead-documents > Delete.)
 drop policy if exists "Admins read lead documents" on storage.objects;
-create policy "Admins read lead documents" on storage.objects for select
-  using (bucket_id = 'lead-documents' and public.is_admin());
-
 drop policy if exists "Admins upload lead documents" on storage.objects;
-create policy "Admins upload lead documents" on storage.objects for insert
-  with check (bucket_id = 'lead-documents' and public.is_admin()
-              and (storage.foldername(name))[2] = '_inbox');
+alter table public.lf_document drop column if exists storage_key;
 
 -- ── Realtime: job progress and document/triage updates reach the tab ─────────
 do $$

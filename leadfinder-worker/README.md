@@ -9,7 +9,7 @@ Surfaces open bids with likely AV scope within a set radius of each Instrata off
 | Data | Supabase Postgres, `lf_*` tables (`supabase/migrations/add_lead_finder.sql`), admin-only RLS |
 | UI | Project Tools, `app/src/pages/LeadFinderPage.tsx` (Leads, Run, Offices, Run log, Settings) |
 | Engine | This package, run as the Fly app `instrata-leadfinder` (`leadfinder worker`) |
-| Bid documents | Worker volume `/data/documents/` (working copy), mirrored to the Storage bucket `lead-documents` |
+| Bid documents | Worker volume `/data/documents/` only; the tab uploads and downloads through the worker |
 
 The tab reads the tables and the `lf_results()` RPC directly and queues work in `lf_job` (runs, SAM attachment downloads, uploaded files, rescans, triage, office saves). The worker claims jobs, mirrors progress back over realtime, runs every enabled source each morning at 06:00 Eastern, and serves the BuildingConnected OAuth callback.
 
@@ -46,13 +46,13 @@ copy .env.example .env   # DATABASE_URL etc.; leave DATABASE_URL empty for a loc
 
 ### Bid documents
 
-Each lead with documents has a folder on the worker's volume, `/data/documents/<title>__<id>/`, mirrored file by file to Storage (`lf_document` lists them; unpacked zips are listed but not uploaded, their contents are).
+Each lead with documents has a folder on the worker's volume, `/data/documents/<title>__<id>/`; `lf_document` lists the files for the tab. Documents are not in Supabase Storage (the free plan caps files at 50 MB and storage at 1 GB): the tab uploads with `POST /documents/<lead>/upload` and opens files through 5-minute signed links from `POST /documents/<lead>/link`, both checked against the signed-in admin's Supabase token.
 
 - **SAM.gov:** marking a lead **Pursue** queues a download of its attachments (a database trigger). Every run afterwards fetches attachments that amendments add. Up to 500 MB per file.
 - **BuildingConnected:** the API has no endpoint for invite files. Use **Open in Bid Board → Files → Download all** and drop the zip on the lead's drop zone in the tab.
-- **Anything else:** drop files on the drop zone. The tab uploads them to `lead-documents/<lead>/_inbox/`; the worker moves them into the folder and unpacks zips.
+- **Anything else:** drop files on the drop zone. They land in `/data/inbox/<lead>/` and an `ingest_upload` job moves them into the folder and unpacks zips.
 
-Zips are unpacked beside themselves, nested zips one level deep, with safe paths, a 10,000-file limit and an 8 GB limit. If the volume is ever replaced, the worker restores a folder from Storage the next time it needs it.
+Zips are unpacked beside themselves, nested zips one level deep, with safe paths, a 10,000-file limit and an 8 GB limit. The volume is the only copy: Fly keeps daily snapshots for 5 days (`fly volumes snapshots list`). To load documents onto a new volume, tar the `documents` folder, `fly ssh sftp shell` → `put`, then `leadfinder docs import /data/documents.tar` (`docs reindex` re-records folders already there).
 
 ### Triage (Claude API)
 

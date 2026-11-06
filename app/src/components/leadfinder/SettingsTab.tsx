@@ -6,7 +6,7 @@ import { Link2, Unlink, Server, Save } from 'lucide-react';
 import { Card } from '../ui';
 import type { BcStatus, Source, WorkerStatus } from './types';
 import { SOURCE_LABEL } from './types';
-import { fmtDateTime, relTime } from './format';
+import { fmtBytes, fmtDateTime, relTime } from './format';
 import { Banner, Chip, Spinner } from './ui';
 import {
   queueJob, saveSetting, startBuildingConnectedConnect, updateSource, waitForJob, workerOnline,
@@ -158,7 +158,8 @@ export function SettingsTab({ sources, defaultRadius, worker, bc, flash, onChang
                 <Row label="Status">{online ? <Chip tone="success">Online</Chip> : <Chip tone="danger">Offline</Chip>} <span className="text-xs text-fg-3">last check-in {relTime(worker.heartbeat_at)}</span></Row>
                 <Row label="SAM.gov API key">{worker.sam_key ? <Chip tone="success">Set</Chip> : <Chip tone="danger">Missing</Chip>}</Row>
                 <Row label="Triage (Claude API)">{worker.triage_configured ? <Chip tone="success">Ready</Chip> : <Chip tone="warn">Not set up</Chip>} <span className="text-xs text-fg-3">cap ${worker.triage_budget_usd} per run</span></Row>
-                <Row label="Document storage">{worker.storage_configured ? <Chip tone="success">Ready</Chip> : <Chip tone="danger">Not configured</Chip>}</Row>
+                <Row label="Sign-in check">{worker.auth_configured ? <Chip tone="success">Ready</Chip> : <Chip tone="danger">SUPABASE_URL / SUPABASE_ANON_KEY missing</Chip>}</Row>
+                <Row label="Documents disk">{worker.disk ? `${fmtBytes(worker.disk.free_bytes)} free of ${fmtBytes(worker.disk.total_bytes)}` : '—'}</Row>
                 <Row label="Daily run">{worker.schedule_hour_et >= 0 ? `${worker.schedule_hour_et}:00 Eastern` : 'Off'}</Row>
                 <Row label="Scoring config"><code className="font-mono text-xs">{worker.scorer_version ?? '—'}</code></Row>
               </div>

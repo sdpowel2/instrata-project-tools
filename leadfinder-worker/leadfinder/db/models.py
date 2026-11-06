@@ -310,7 +310,6 @@ class Document(Timestamped, Base):
     size: Mapped[int] = mapped_column(Integer, default=0)
     is_zip: Mapped[bool] = mapped_column(Boolean, default=False)
     unpacked: Mapped[bool] = mapped_column(Boolean, default=False)
-    storage_key: Mapped[str | None] = mapped_column(Text)
 
 
 class TriageRun(Timestamped, Base):

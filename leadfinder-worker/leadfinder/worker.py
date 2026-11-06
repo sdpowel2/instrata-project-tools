@@ -7,16 +7,22 @@ The Project Tools tab queues work in lf_job; this process:
   - mirrors live progress into lf_job.progress every couple of seconds (the tab gets it over
     realtime) and the outcome into lf_job.result / error,
   - after any document or triage change, mirrors the lead folder to lf_document /
-    lf_lead_docs / lf_triage_run and Storage (leadfinder.mirror),
+    lf_lead_docs / lf_triage_run (leadfinder.mirror),
   - queues the daily scheduled run (SCHEDULE_HOUR_ET, default 06:00 Eastern),
   - on boot, marks jobs a restart cut off and resumes triage sessions still running at Anthropic,
   - writes a heartbeat + capability flags to lf_setting 'worker_status' every minute,
-  - serves /healthz and the BuildingConnected OAuth endpoints (see web())."""
+  - serves the HTTP endpoints in web(): health check, document upload and download (the bid
+    documents live only on this worker's volume), and the BuildingConnected OAuth round trip."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
-import tempfile
+import secrets
+import shutil
 import threading
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -24,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from fastapi import File, Header, UploadFile
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -32,9 +39,8 @@ from leadfinder import documents as D
 from leadfinder import kv
 from leadfinder import triage as T
 from leadfinder.db.models import Job, Opportunity, TriageRun, utcnow
-from leadfinder.mirror import hydrate_lead, mirror_lead
+from leadfinder.mirror import mirror_lead
 from leadfinder.settings import DATA_DIR, get_settings, redact
-from leadfinder.storage import Storage, StorageError
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +49,9 @@ POLL_SECONDS = 2.0
 PROGRESS_SECONDS = 2.0
 HEARTBEAT_SECONDS = 60.0
 MAX_PARALLEL = 3
-VERSION = "1"
+VERSION = "2"
+INBOX_DIR = DATA_DIR / "inbox"          # uploads land here, then an ingest_upload job files them
+LINK_SECONDS = 300                      # signed download links
 
 
 class JobFailed(Exception):
@@ -57,7 +65,6 @@ class Ctx:
     opportunity_id: str | None
     params: dict[str, Any]
     session_factory: Callable[[], Session]
-    storage_factory: Callable[[], Storage]
     watch_fn: Callable[[], dict] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -111,14 +118,13 @@ def _sync_pursued(ctx: Ctx) -> dict:
     s = ctx.session_factory()
     counts = {"leads": 0, "downloaded": 0, "failed": 0}
     try:
-        with ctx.storage_factory() as storage:
-            def done(opp: Opportunity, r: dict) -> None:
-                counts["leads"] += 1
-                counts["downloaded"] += r["downloaded"]
-                counts["failed"] += r["failed"]
-                if r["downloaded"] or r["failed"]:
-                    mirror_lead(s, opp, storage)
-            D.sync_pursued(s, progress=done)
+        def done(opp: Opportunity, r: dict) -> None:
+            counts["leads"] += 1
+            counts["downloaded"] += r["downloaded"]
+            counts["failed"] += r["failed"]
+            if r["downloaded"] or r["failed"]:
+                mirror_lead(s, opp)
+        D.sync_pursued(s, progress=done)
     except Exception:  # never fail a run over documents
         log.exception("document sync after run failed")
     finally:
@@ -136,12 +142,10 @@ def h_sam_docs(ctx: Ctx) -> dict:
         if job is None:
             raise JobFailed("A download is already running for this lead.")
         try:
-            with ctx.storage_factory() as storage:
-                hydrate_lead(s, opp, storage)
-                ctx.watch(lambda: {"total": job.total, "done": job.done, "failed": job.failed})
-                with D.sam_client() as c:
-                    r = D.fetch_sam(s, opp, c, force=bool(ctx.params.get("force")), job=job)
-                mirror_lead(s, opp, storage)
+            ctx.watch(lambda: {"total": job.total, "done": job.done, "failed": job.failed})
+            with D.sam_client() as c:
+                r = D.fetch_sam(s, opp, c, force=bool(ctx.params.get("force")), job=job)
+            mirror_lead(s, opp)
         finally:
             D.release(opp.id)
         return r
@@ -150,49 +154,41 @@ def h_sam_docs(ctx: Ctx) -> dict:
 
 
 def h_ingest_upload(ctx: Ctx) -> dict:
-    """Files the tab uploaded to Storage under <opp>/_inbox/: move them into the lead folder
-    (unpacking zips), then delete the inbox copies."""
-    files = [f for f in (ctx.params.get("files") or []) if isinstance(f, dict) and f.get("key")]
+    """Files the tab uploaded to this worker (saved under INBOX_DIR/<lead>/): move them into
+    the lead folder, unpacking zips, then remove the inbox copies."""
+    files = [f for f in (ctx.params.get("files") or []) if isinstance(f, dict) and f.get("local")]
     if not files:
         raise JobFailed("No files to add.")
     s = ctx.session_factory()
     try:
         opp = _opp(s, ctx)
-        prefix = f"{opp.id}/_inbox/"
-        if any(not str(f["key"]).startswith(prefix) for f in files):
+        lead_inbox = (INBOX_DIR / opp.id).resolve()
+        paths = [(INBOX_DIR / str(f["local"])).resolve() for f in files]
+        if any(not p.is_relative_to(lead_inbox) for p in paths):
             raise JobFailed("Upload paths don't belong to this lead.")
-        with ctx.storage_factory() as storage:
-            if not storage.configured:
-                raise JobFailed("Storage isn't configured on the worker (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY).")
-            hydrate_lead(s, opp, storage)
-            folder = D.lead_folder(opp, create=True)
-            assert folder is not None
-            added, notes, errors = 0, [], []
-            state = {"done": 0, "total": len(files)}
-            ctx.watch(lambda: dict(state))
-            tmp_root = DATA_DIR / "tmp"
-            tmp_root.mkdir(parents=True, exist_ok=True)
-            for f in files:
-                with tempfile.TemporaryDirectory(dir=tmp_root) as td:
-                    local = Path(td) / "upload"
-                    try:
-                        storage.download(str(f["key"]), local)
-                        with open(local, "rb") as fh:
-                            rel, unpack = D.save_upload(folder, f.get("name") or Path(str(f["key"])).name, fh)
-                        added += 1
-                        if unpack is not None:
-                            if unpack.get("status") == "ok":
-                                notes.append(f"unpacked {rel} ({unpack['files']} files)")
-                            else:
-                                errors.append(f"Couldn't unpack {rel}: {unpack.get('error')}")
-                    except (StorageError, OSError) as exc:
-                        errors.append(f"{f.get('name') or f['key']}: {redact(str(exc))}")
-                state["done"] += 1
+        folder = D.lead_folder(opp, create=True)
+        assert folder is not None
+        added, notes, errors = 0, [], []
+        state = {"done": 0, "total": len(files)}
+        ctx.watch(lambda: dict(state))
+        for f, path in zip(files, paths):
             try:
-                storage.delete([str(f["key"]) for f in files])
-            except StorageError as exc:
-                log.warning("inbox cleanup failed", extra={"opp": opp.id, "error": str(exc)})
-            mirror_lead(s, opp, storage)
+                with open(path, "rb") as fh:
+                    rel, unpack = D.save_upload(folder, f.get("name") or path.name, fh)
+                added += 1
+                if unpack is not None:
+                    if unpack.get("status") == "ok":
+                        notes.append(f"unpacked {rel} ({unpack['files']} files)")
+                    else:
+                        errors.append(f"Couldn't unpack {rel}: {unpack.get('error')}")
+            except OSError as exc:
+                errors.append(f"{f.get('name') or path.name}: {redact(str(exc))}")
+            finally:
+                path.unlink(missing_ok=True)
+            state["done"] += 1
+        for p in {p.parent for p in paths}:
+            shutil.rmtree(p, ignore_errors=True)
+        mirror_lead(s, opp)
         message = (f"Added {added} file{'s' if added != 1 else ''}" + (f"; {'; '.join(notes)}" if notes else "")
                    + ".") if added else "No files added."
         if errors and not added:
@@ -206,11 +202,9 @@ def h_rescan(ctx: Ctx) -> dict:
     s = ctx.session_factory()
     try:
         opp = _opp(s, ctx)
-        with ctx.storage_factory() as storage:
-            hydrate_lead(s, opp, storage)
-            folder = D.lead_folder(opp)
-            done = D.unpack_pending(folder) if folder else []
-            mirror_lead(s, opp, storage)
+        folder = D.lead_folder(opp)
+        done = D.unpack_pending(folder) if folder else []
+        mirror_lead(s, opp)
         ok = [rel for rel, r in done if r.get("status") == "ok"]
         return {"message": f"Unpacked {', '.join(ok)}." if ok else "Rescanned; nothing new to unpack."}
     finally:
@@ -228,17 +222,15 @@ def h_triage(ctx: Ctx) -> dict:
             raise JobFailed("A triage is already running for this lead.")
         try:
             ctx.watch(lambda: {"stage": tjob.stage, "session_id": tjob.session_id})
-            with ctx.storage_factory() as storage:
-                hydrate_lead(s, opp, storage)
-                client = T.make_client()
-                try:
-                    run = T.start(s, opp, client, nda_ok=bool(ctx.params.get("nda_ok")), job=tjob)
-                except T.TriageError as exc:
-                    mirror_lead(s, opp, storage)
-                    raise JobFailed(str(exc))
-                mirror_lead(s, opp, storage)
-                run = T.wait(opp, run, client, job=tjob)
-                mirror_lead(s, opp, storage)
+            client = T.make_client()
+            try:
+                run = T.start(s, opp, client, nda_ok=bool(ctx.params.get("nda_ok")), job=tjob)
+            except T.TriageError as exc:
+                mirror_lead(s, opp)
+                raise JobFailed(str(exc))
+            mirror_lead(s, opp)
+            run = T.wait(opp, run, client, job=tjob)
+            mirror_lead(s, opp)
         finally:
             T.release(opp.id)
         if run.get("status") != "done":
@@ -253,29 +245,27 @@ def h_triage_resume(ctx: Ctx) -> dict:
     s = ctx.session_factory()
     try:
         opp = _opp(s, ctx)
-        with ctx.storage_factory() as storage:
-            hydrate_lead(s, opp, storage)
-            folder = D.lead_folder(opp)
-            latest = T.runs(folder)[:1]
-            if not latest or latest[0].get("status") not in ("running", "uploading"):
-                mirror_lead(s, opp, storage)
-                return {"message": "Nothing to resume."}
-            run = latest[0]
-            if run.get("status") == "uploading" or not run.get("session_id"):
-                T._record(folder, run["id"], status="failed", finished_at=T._now(),
-                          error="The worker stopped while uploading the documents; run triage again.")
-                mirror_lead(s, opp, storage)
-                return {"message": "The interrupted upload was marked failed."}
-            tjob = T.claim(opp.id)
-            if tjob is None:
-                raise JobFailed("A triage is already running for this lead.")
-            try:
-                tjob.session_id = run["session_id"]
-                ctx.watch(lambda: {"stage": tjob.stage, "session_id": tjob.session_id})
-                run = T.wait(opp, run, T.make_client(), job=tjob)
-            finally:
-                T.release(opp.id)
-            mirror_lead(s, opp, storage)
+        folder = D.lead_folder(opp)
+        latest = T.runs(folder)[:1]
+        if not latest or latest[0].get("status") not in ("running", "uploading"):
+            mirror_lead(s, opp)
+            return {"message": "Nothing to resume."}
+        run = latest[0]
+        if run.get("status") == "uploading" or not run.get("session_id"):
+            T._record(folder, run["id"], status="failed", finished_at=T._now(),
+                      error="The worker stopped while uploading the documents; run triage again.")
+            mirror_lead(s, opp)
+            return {"message": "The interrupted upload was marked failed."}
+        tjob = T.claim(opp.id)
+        if tjob is None:
+            raise JobFailed("A triage is already running for this lead.")
+        try:
+            tjob.session_id = run["session_id"]
+            ctx.watch(lambda: {"stage": tjob.stage, "session_id": tjob.session_id})
+            run = T.wait(opp, run, T.make_client(), job=tjob)
+        finally:
+            T.release(opp.id)
+        mirror_lead(s, opp)
         return {k: run.get(k) for k in ("id", "status", "rating", "tier", "estimate", "cost_usd")}
     finally:
         s.close()
@@ -376,10 +366,9 @@ def _finish(session_factory: Callable[[], Session], job_id: str, **fields: Any) 
         s.close()
 
 
-def execute(job: Job, session_factory: Callable[[], Session], storage_factory: Callable[[], Storage],
-            active: dict[str, Ctx] | None = None) -> None:
+def execute(job: Job, session_factory: Callable[[], Session], active: dict[str, Ctx] | None = None) -> None:
     """Run one claimed job to completion and record the outcome."""
-    ctx = Ctx(job.id, job.kind, job.opportunity_id, dict(job.params or {}), session_factory, storage_factory)
+    ctx = Ctx(job.id, job.kind, job.opportunity_id, dict(job.params or {}), session_factory)
     if active is not None:
         active[job.id] = ctx
     try:
@@ -427,15 +416,16 @@ def recover(session_factory: Callable[[], Session]) -> list[str]:
         s.close()
 
 
-def enqueue(s: Session, kind: str, opportunity_id: str | None = None, params: dict | None = None) -> bool:
-    """Queue a job from the worker itself. False if an equivalent one is already live."""
+def enqueue(s: Session, kind: str, opportunity_id: str | None = None, params: dict | None = None) -> str | None:
+    """Queue a job from the worker itself. Returns its id, or None if an equivalent one is live."""
     try:
-        s.add(Job(kind=kind, opportunity_id=opportunity_id, params=params or {}))
+        job = Job(kind=kind, opportunity_id=opportunity_id, params=params or {})
+        s.add(job)
         s.commit()
-        return True
+        return job.id
     except IntegrityError:
         s.rollback()
-        return False
+        return None
 
 
 def scheduled_due(s: Session, now: datetime, hour_et: int) -> bool:
@@ -455,13 +445,11 @@ def scheduled_due(s: Session, now: datetime, hour_et: int) -> bool:
 
 
 class Worker:
-    def __init__(self, session_factory: Callable[[], Session] | None = None,
-                 storage_factory: Callable[[], Storage] = Storage):
+    def __init__(self, session_factory: Callable[[], Session] | None = None):
         if session_factory is None:
             from leadfinder.db.session import SessionLocal
             session_factory = SessionLocal
         self.session_factory = session_factory
-        self.storage_factory = storage_factory
         self.pool = ThreadPoolExecutor(max_workers=MAX_PARALLEL, thread_name_prefix="job")
         self.active: dict[str, Ctx] = {}
         self.stop_event = threading.Event()
@@ -487,9 +475,9 @@ class Worker:
                 if len(self.active) < MAX_PARALLEL:
                     job = claim_next(self.session_factory)
                     if job is not None:
-                        self.active[job.id] = Ctx(job.id, job.kind, job.opportunity_id, {}, self.session_factory,
-                                                  self.storage_factory)  # reserve the slot
-                        self.pool.submit(execute, job, self.session_factory, self.storage_factory, self.active)
+                        # reserve the slot until execute() registers the real context
+                        self.active[job.id] = Ctx(job.id, job.kind, job.opportunity_id, {}, self.session_factory)
+                        self.pool.submit(execute, job, self.session_factory, self.active)
                         continue
             except Exception:  # noqa: BLE001 - database blip; try again shortly
                 log.exception("job claim failed")
@@ -544,6 +532,11 @@ def worker_status() -> dict:
     with Client() as c:
         aps = ApsAuth(c)
         aps_configured = aps.configured
+    try:
+        usage = shutil.disk_usage(DATA_DIR)
+        disk = {"free_bytes": usage.free, "total_bytes": usage.total}
+    except OSError:
+        disk = None
     return {
         "heartbeat_at": utcnow().isoformat(),
         "version": VERSION,
@@ -553,30 +546,79 @@ def worker_status() -> dict:
         "aps_callback": st.aps_callback_url,
         "triage_configured": T.configured(),
         "triage_budget_usd": st.triage_budget_usd,
-        "storage_configured": Storage().configured,
+        "auth_configured": bool(st.supabase_url and st.supabase_anon_key),
+        "disk": disk,
         "scorer_version": scoring_config().get("scorer_version"),
         "schedule_hour_et": st.schedule_hour_et,
     }
 
 
+# ---------------------------------------------------------------- signed download links
+
+_signing_key: bytes | None = None
+
+
+def _key() -> bytes:
+    global _signing_key
+    if _signing_key is None:
+        configured = get_settings().download_signing_key
+        # Without a configured key, links are signed per process (a restart expires them).
+        _signing_key = configured.encode() if configured else secrets.token_bytes(32)
+    return _signing_key
+
+
+def sign_link(opportunity_id: str, rel: str, expires: int) -> str:
+    msg = f"{opportunity_id}\n{rel}\n{expires}".encode("utf-8")
+    return hmac.new(_key(), msg, hashlib.sha256).hexdigest()
+
+
+def verify_link(opportunity_id: str, rel: str, expires: int, sig: str, now: float | None = None) -> bool:
+    if expires < (now if now is not None else time.time()):
+        return False
+    return hmac.compare_digest(sign_link(opportunity_id, rel, expires), sig or "")
+
+
+def document_path(opp: Opportunity, rel: str) -> Path | None:
+    """The file at rel inside the lead's folder, or None (missing, or outside the folder)."""
+    folder = D.lead_folder(opp)
+    if folder is None or not rel:
+        return None
+    root = folder.resolve()
+    p = (folder / rel).resolve()
+    if not p.is_relative_to(root) or not p.is_file() or p.name.startswith(D.MANIFEST):
+        return None
+    return p
+
+
 # ---------------------------------------------------------------- HTTP
 
-def web(worker: Worker | None = None):
-    """FastAPI app: health check plus the BuildingConnected OAuth round trip.
+def web(worker: Worker | None = None, session_factory: Callable[[], Session] | None = None):
+    """FastAPI app.
 
-    POST /bc/authorize   the tab sends the signed-in admin's Supabase access token; returns the
-                         Autodesk sign-in URL (the user's password goes to Autodesk only).
-    GET  /oauth/callback Autodesk redirects here; tokens are stored in lf_secret and the
-                         browser is sent back to the Lead Finder Settings tab."""
+    GET  /healthz
+    POST /documents/{lead}/upload   multipart files (admin token); saved to the inbox and an
+                                    ingest_upload job queued. Returns {job_id}.
+    POST /documents/{lead}/link     {"path": rel, "inline": bool} (admin token); returns a signed
+                                    URL valid for 5 minutes.
+    GET  /documents/{lead}/file     ?path&exp&sig[&inline=1]: the file itself (signed URL only).
+    POST /bc/authorize              admin token; returns the Autodesk sign-in URL (the user's
+                                    password goes to Autodesk only).
+    GET  /oauth/callback            Autodesk redirects here; tokens go to lf_secret and the browser
+                                    returns to the Lead Finder Settings tab.
+
+    "Admin token" = the signed-in Project Tools user's Supabase access token, checked with the
+    Supabase Auth server, and profiles.role = 'admin'."""
     from contextlib import asynccontextmanager
-    from urllib.parse import quote
+    from urllib.parse import quote, urlencode
 
-    import httpx
-    from fastapi import FastAPI, Header
+    from fastapi import Body, FastAPI
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse, RedirectResponse, Response
+    from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
     st = get_settings()
+    if session_factory is None:
+        from leadfinder.db.session import SessionLocal
+        session_factory = SessionLocal
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -587,26 +629,91 @@ def web(worker: Worker | None = None):
             worker.stop()
 
     app = FastAPI(title="Lead Finder worker", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-    origins = [o for o in {st.app_url.rstrip("/"), "http://localhost:5173"} if o]
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["POST"],
+    origins = [o for o in {st.app_url.rstrip("/"), "http://localhost:5173", "http://localhost:5174"} if o]
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"])
 
     def back(msg: str | None = None, err: str | None = None) -> RedirectResponse:
         q = f"msg={quote(msg)}" if msg else f"err={quote(err or '')}"
         return RedirectResponse(f"{st.app_url.rstrip('/')}/lead-finder?tab=settings&{q}", status_code=303)
 
+    def admin(authorization: str) -> str | None:
+        token = authorization.removeprefix("Bearer ").strip()
+        return admin_user(token) if token else None
+
+    def forbidden() -> JSONResponse:
+        return JSONResponse({"error": "Admins only. Sign in to Project Tools again if this persists."},
+                            status_code=403)
+
     @app.get("/healthz")
     def healthz() -> Response:
         return Response("ok")
+
+    @app.post("/documents/{lead_id}/upload")
+    def upload(lead_id: str, files: list[UploadFile] = File(...), authorization: str = Header("")):
+        if admin(authorization) is None:
+            return forbidden()
+        s = session_factory()
+        try:
+            if s.get(Opportunity, lead_id) is None:
+                return JSONResponse({"error": "Lead not found."}, status_code=404)
+            batch = INBOX_DIR / lead_id / uuid.uuid4().hex
+            batch.mkdir(parents=True, exist_ok=True)
+            entries = []
+            for i, up in enumerate(files):
+                if not up.filename:
+                    continue
+                target = batch / f"{i}-{D.safe_name(up.filename, fallback='upload')}"
+                with open(target, "wb") as out:
+                    shutil.copyfileobj(up.file, out, 1 << 20)
+                entries.append({"local": target.relative_to(INBOX_DIR).as_posix(), "name": up.filename})
+            if not entries:
+                shutil.rmtree(batch, ignore_errors=True)
+                return JSONResponse({"error": "No files received."}, status_code=400)
+            job_id = enqueue(s, "ingest_upload", opportunity_id=lead_id, params={"files": entries})
+            return {"job_id": job_id, "files": len(entries)}
+        finally:
+            s.close()
+
+    @app.post("/documents/{lead_id}/link")
+    def link(lead_id: str, body: dict = Body(...), authorization: str = Header("")):
+        if admin(authorization) is None:
+            return forbidden()
+        rel = str(body.get("path") or "")
+        s = session_factory()
+        try:
+            opp = s.get(Opportunity, lead_id)
+            if opp is None or document_path(opp, rel) is None:
+                return JSONResponse({"error": "That file isn't on the worker."}, status_code=404)
+        finally:
+            s.close()
+        exp = int(time.time()) + LINK_SECONDS
+        q = {"path": rel, "exp": exp, "sig": sign_link(lead_id, rel, exp)}
+        if body.get("inline"):
+            q["inline"] = 1
+        return {"url": f"{st.public_url.rstrip('/')}/documents/{lead_id}/file?{urlencode(q)}"}
+
+    @app.get("/documents/{lead_id}/file")
+    def file(lead_id: str, path: str = "", exp: int = 0, sig: str = "", inline: int = 0):
+        if not verify_link(lead_id, path, exp, sig):
+            return Response("This link has expired. Open the file again from Project Tools.", status_code=403)
+        s = session_factory()
+        try:
+            opp = s.get(Opportunity, lead_id)
+            p = document_path(opp, path) if opp else None
+        finally:
+            s.close()
+        if p is None:
+            return Response("File not found.", status_code=404)
+        return FileResponse(p, filename=p.name, content_disposition_type="inline" if inline else "attachment")
 
     @app.post("/bc/authorize")
     def bc_authorize(authorization: str = Header("")):
         from leadfinder.aps_auth import ApsAuth, new_state
         from leadfinder.http import Client
 
-        token = authorization.removeprefix("Bearer ").strip()
-        if not token or not is_admin_token(token, httpx):
-            return JSONResponse({"error": "Admins only."}, status_code=403)
+        if admin(authorization) is None:
+            return forbidden()
         with Client() as c:
             auth = ApsAuth(c)
             if not auth.configured:
@@ -656,31 +763,30 @@ def web(worker: Worker | None = None):
     return app
 
 
-def is_admin_token(token: str, httpx_mod=None) -> bool:
-    """Check a Supabase access token with the Auth server, then the user's role in profiles."""
-    import httpx as _httpx
+def admin_user(token: str) -> str | None:
+    """The user id behind a Supabase access token if that user is a Project Tools admin."""
+    import httpx
 
     from sqlalchemy import text
 
-    httpx_mod = httpx_mod or _httpx
     st = get_settings()
-    if not (st.supabase_url and st.supabase_service_role_key):
-        return False
+    if not (st.supabase_url and st.supabase_anon_key):
+        return None
     try:
-        resp = httpx_mod.get(f"{st.supabase_url.rstrip('/')}/auth/v1/user", timeout=10.0,
-                             headers={"Authorization": f"Bearer {token}", "apikey": st.supabase_service_role_key})
-    except httpx_mod.HTTPError:
-        return False
+        resp = httpx.get(f"{st.supabase_url.rstrip('/')}/auth/v1/user", timeout=10.0,
+                         headers={"Authorization": f"Bearer {token}", "apikey": st.supabase_anon_key})
+    except httpx.HTTPError:
+        return None
     if resp.status_code != 200:
-        return False
+        return None
     uid = (resp.json() or {}).get("id")
     if not uid:
-        return False
+        return None
     from leadfinder.db.session import SessionLocal
     s = SessionLocal()
     try:
         role = s.execute(text("select role from public.profiles where id = cast(:id as uuid)"), {"id": uid}).scalar()
-        return role == "admin"
+        return uid if role == "admin" else None
     finally:
         s.close()
 

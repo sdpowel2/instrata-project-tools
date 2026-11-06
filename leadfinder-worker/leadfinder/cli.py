@@ -147,6 +147,44 @@ def docs_fetch(opportunity_id: str, force: bool = typer.Option(False, help="Down
                    f"{r['failed']} failed -> {documents.lead_folder(opp)}")
 
 
+@docs_app.command("import")
+def docs_import(archive: str) -> None:
+    """Unpack a .tar of the old data/documents folder into this worker's documents folder and
+    record every lead folder in the database (the one-time move onto the Fly volume)."""
+    import tarfile
+    from pathlib import Path
+
+    from leadfinder import documents
+    from leadfinder.db.session import session_scope
+    from leadfinder.mirror import mirror_all
+
+    dest = documents.DOCS_DIR
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as tf:
+        members = tf.getmembers()
+        prefix = "documents/" if members and all(m.name.startswith("documents") for m in members) else ""
+        for m in members:
+            if prefix and m.name == "documents":
+                continue
+            if prefix:
+                m.name = m.name[len(prefix):]
+        tf.extractall(dest, members=[m for m in members if m.name], filter="data")
+    with session_scope() as s:
+        n = mirror_all(s)
+    typer.echo(f"Imported into {dest}; {n} lead folder(s) recorded.")
+    Path(archive).unlink(missing_ok=True)
+
+
+@docs_app.command("reindex")
+def docs_reindex() -> None:
+    """Re-record every lead folder in the database (lf_document, lf_lead_docs, lf_triage_run)."""
+    from leadfinder.db.session import session_scope
+    from leadfinder.mirror import mirror_all
+
+    with session_scope() as s:
+        typer.echo(f"{mirror_all(s)} lead folder(s) recorded.")
+
+
 @docs_app.command("list")
 def docs_list() -> None:
     """Pursue leads and how many document files each has."""
