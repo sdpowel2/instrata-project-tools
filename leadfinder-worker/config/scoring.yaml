@@ -1,0 +1,167 @@
+# Rule-based AV relevance scoring. Edit and run `leadfinder rescore` - no code changes needed.
+# Matching is case-insensitive with word boundaries unless noted.
+scorer_version: "2026-11-03.3"
+
+lanes:
+  direct_av_min_score: 50
+
+psc:
+  strong:
+    weight: 60
+    codes: ["5830", "5835", "5836"]
+  candidate:
+    weight: 30
+    # Disabled until each code is verified against the PSC manual (spec requirement; see DECISIONS.md D-2).
+    enabled: false
+    codes: ["5820", "5895", "N058", "J058", "T016"]
+
+naics:
+  strong:
+    weight: 25
+    codes: ["334310"]
+  weak:
+    weight: 5
+    codes: ["238210", "423690"]
+
+keywords:
+  strong:
+    # Spec start was 40; raised to 50 so one strong title keyword alone is Direct AV (DECISIONS D-9).
+    title_weight: 50
+    title_cap: 60
+    description_weight: 15
+    description_cap: 30
+    terms:
+      - audiovisual
+      - audio visual
+      - audio-visual
+      - video conferencing
+      - videoconference
+      - video wall
+      - digital signage
+      - sound reinforcement
+      - public address
+      - assistive listening
+      - lecture capture
+      - AV integration
+      - AV system
+      - AV systems
+      - Crestron
+      - Extron
+      - Q-SYS
+      - Biamp
+      - Division 27
+      - "27 41"
+  medium:
+    weight: 10
+    cap: 20
+    terms:
+      - projector
+      - projection system
+      - display
+      - displays
+      - LED wall
+      - conference room
+      - council chamber
+      - boardroom
+      - auditorium
+      - classroom technology
+      - broadcast
+      - paging
+      - intercom
+
+# Trade named on a BuildingConnected invite (tradeName). Matched against the trade only.
+# A strong hit adds strong_weight and keeps the invite in Direct AV even if the project
+# description trips a negative (an AV invite for an airport is still AV). A likely hit puts
+# an otherwise-unscored invite in the Likely AV scope lane, even if the GC's project text trips
+# a negative ("avenue" in an address, "landscaping" in the scope list). (DECISIONS D-17, D-18)
+trade:
+  strong_weight: 60
+  strong_terms:
+    - audiovisual
+    - audio visual
+    - audio-visual
+    - audio/visual
+    - audio video
+    - audio/video
+    - sound system
+    - sound reinforcement
+    - video conferencing
+    - digital signage
+    - "27 41"
+  strong_tokens: ["AV", "A/V"]
+  likely_terms:
+    - low voltage
+    - technology
+    - communications
+    - telecommunications
+    - structured cabling
+    - data cabling
+    - voice
+    - data
+    - Division 27
+    - security
+    - access control
+    - specialty systems
+
+# Uppercase-only standalone token; case-sensitive. Not counted when touching '-' or '/'
+# (so "AV-8B" doesn't count). Spec start was +20 anywhere; title raised to 50 (DECISIONS D-9).
+av_token:
+  title_weight: 50
+  description_weight: 20
+  tokens: ["AV", "A/V"]
+
+negative:
+  weight: -50
+  terms:
+    - avenue
+    - Ave.
+    - aviation
+    - avionics
+    - anti-virus
+    - antivirus
+    - autonomous vehicle
+    - AV-8B
+    - aircraft
+    - fuel
+    - janitorial
+    - landscaping
+
+likely_av_scope:
+  building_types:
+    - school
+    - elementary
+    - middle school
+    - high school
+    - university
+    - college
+    - campus
+    - library
+    - courthouse
+    - justice center
+    - city hall
+    - municipal building
+    - county administration
+    - hospital
+    - medical center
+    - clinic
+    - performing arts
+    - auditorium
+    - arena
+    - stadium
+    - convention center
+    - emergency operations center
+    - 911 center
+    - training center
+    - headquarters
+  construction_terms:
+    - new construction
+    - renovation
+    - addition
+    - construction manager at risk
+    - CMAR
+    - design-build
+    - GMP
+    - general contractor
+    - bid package
+    - prequalification
+  construction_naics: ["236220"]

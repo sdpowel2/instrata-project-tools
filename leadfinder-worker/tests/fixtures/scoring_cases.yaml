@@ -1,0 +1,69 @@
+# Labelled scoring cases. The scorer must pass 100%.
+# Fields: title (required), description, psc, naics (list), lane (expected), note.
+cases:
+  # ---------------------------------------------------------------- Direct AV
+  - {title: "Audiovisual Equipment Upgrade - Council Chambers", lane: direct_av}
+  - {title: "Video Conferencing Equipment", lane: direct_av, note: "single strong title keyword"}
+  - {title: "Video Wall Replacement for Emergency Operations Center", lane: direct_av}
+  - {title: "Digital Signage System - Main Campus", lane: direct_av}
+  - {title: "Sound Reinforcement System for Gymnasium", lane: direct_av}
+  - {title: "Public Address System Replacement, Terminal B", lane: direct_av}
+  - {title: "Assistive Listening Devices for Courtrooms", lane: direct_av}
+  - {title: "Lecture Capture Hardware and Licensing", lane: direct_av}
+  - {title: "AV Integration Services - Conference Rooms", lane: direct_av}
+  - {title: "Crestron Control Processor Replacement", lane: direct_av}
+  - {title: "Q-SYS Audio DSP Upgrade, Council Chamber", lane: direct_av}
+  - {title: "Biamp Tesira Expansion Hardware", lane: direct_av}
+  - {title: "Extron Switchers and Scalers, Brand Name or Equal", lane: direct_av}
+  - {title: "A/V Equipment for Training Room", lane: direct_av, note: "A/V token"}
+  - {title: "AV Upgrades for Board Room", lane: direct_av, note: "standalone uppercase AV"}
+  - {title: "Brand Name Video Teleconferencing Equipment", psc: "5830", lane: direct_av, note: "PSC strong only"}
+  - {title: "Loudspeakers and Amplifiers", psc: "5835", lane: direct_av}
+  - {title: "Audio-Visual Services for Annual Conference", lane: direct_av}
+  - {title: "Division 27 Communications - Audio Visual Systems Bid Package", lane: direct_av, note: "Direct beats Likely"}
+  - {title: "Furnish and Install Audio Visual Systems", lane: direct_av}
+  - {title: "Stadium Renovation - Audio Visual and Scoreboard Systems", lane: direct_av, note: "Direct beats Likely"}
+  - {title: "Videoconference Room Equipment", naics: ["334310"], lane: direct_av}
+  - title: "Conference Room Upgrades, Building 12"
+    description: "Provide and install an audiovisual system including displays and Crestron control."
+    lane: direct_av
+    note: "description-only strong hits plus medium"
+  - {title: "Section 27 41 16 Integrated Audio-Video Systems", lane: direct_av}
+  - {title: "Auditorium AV System Refresh", lane: direct_av}
+
+  # ---------------------------------------------------------------- Likely AV scope
+  - {title: "New Construction - Riverside Elementary School", lane: likely_av_scope}
+  - {title: "Renovation of County Courthouse, Phase 2", lane: likely_av_scope}
+  - {title: "Construction Manager at Risk Services - Public Library", lane: likely_av_scope}
+  - {title: "CMAR Prequalification - Central High School Addition", lane: likely_av_scope}
+  - {title: "Design-Build Services for Fire Training Center", lane: likely_av_scope}
+  - {title: "GMP Bid Package 3 - University Science Building", lane: likely_av_scope}
+  - {title: "Performing Arts Center Renovation", lane: likely_av_scope}
+  - {title: "General Contractor Services, City Hall Renovation", lane: likely_av_scope}
+  - {title: "Hospital Expansion - Bid Package 2", lane: likely_av_scope}
+  - {title: "Emergency Operations Center - New Facility", naics: ["236220"], lane: likely_av_scope, note: "construction via NAICS"}
+  - {title: "HVAC Renovation, Medical Center", lane: likely_av_scope, note: "rule-literal; may be noisy"}
+  - {title: "Lavatory Renovation at City Hall", lane: likely_av_scope, note: "'av' inside Lavatory must not count as AV"}
+  - {title: "Middle School Gymnasium Addition", lane: likely_av_scope}
+  - {title: "Justice Center Renovations and Additions", lane: likely_av_scope, note: "plural construction terms match (D-10)"}
+
+  # ---------------------------------------------------------------- None (traps)
+  - {title: "Pine Ave Paving and Drainage Improvements", lane: none}
+  - {title: "Main Ave. Resurfacing", lane: none, note: "negative Ave."}
+  - {title: "Avionics Repair Services, C-130", lane: none}
+  - {title: "AV-8B Harrier Parts", lane: none, note: "AV token must not count before a hyphen"}
+  - {title: "Aviation Fuel Delivery", lane: none}
+  - {title: "Antivirus Software Licenses", lane: none}
+  - {title: "Autonomous Vehicle Pilot Program", lane: none}
+  - {title: "Janitorial Services - City Hall", lane: none}
+  - {title: "Landscaping and Grounds Maintenance - High School Campus", lane: none}
+  - {title: "Aircraft Display Stand Fabrication", lane: none, note: "medium hit cancelled by negative"}
+  - {title: "Main Avenue Streetscape Renovation", lane: none, note: "construction term but negative"}
+  - {title: "Renovation of Aviation Training Center", lane: none, note: "negative blocks Likely lane (D-8)"}
+  - {title: "Uniform Rental Services", lane: none}
+  - {title: "Office Furniture for Headquarters Building", lane: none, note: "building type but no construction term"}
+  - {title: "Roof Replacement - Middle School", lane: none, note: "'replacement' is not a construction term"}
+  - {title: "AVAYA Phone System Maintenance", lane: none, note: "AV inside a word"}
+  - {title: "Radio Communication Equipment", psc: "5820", lane: none, note: "PSC candidate codes disabled (D-2)"}
+  - {title: "Interactive Flat Panel Displays for Classrooms", lane: none, note: "medium-only stays below Direct by design; review"}
+  - {title: "Electrical Supplies", naics: ["423690"], lane: none, note: "NAICS weak alone"}

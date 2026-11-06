@@ -1,0 +1,46 @@
+# Source configuration. Secrets (SAM_API_KEY, APS_*, IMAP_*) live in .env, never here.
+sources:
+  sam_gov:
+    name: SAM.gov Opportunities
+    kind: api
+    enabled: true
+    daily_call_budget: 8
+    page_limit: 1000
+    backfill_days: 14
+    base_url: https://api.sam.gov/opportunities/v2/search
+  bonfire:
+    name: Bonfire public portals
+    kind: portal
+    # Disabled: every bonfirehub.com host serves robots.txt "Disallow: /" (DECISIONS D-12).
+    enabled: false
+    daily_call_budget: null
+    min_seconds_between_requests: 2.0
+  buildingconnected:
+    name: BuildingConnected Bid Board
+    kind: api
+    # Needs APS_CLIENT_ID / APS_CLIENT_SECRET in .env and a one-time Connect on the Settings
+    # page by a user with Bid Board Pro. Read-only (scope data:read). DECISIONS D-17.
+    enabled: true
+    daily_call_budget: 200
+    page_limit: 100
+    # First run: everything updated in the last 120 days. The API returns newest invites first;
+    # the 2026-11-03 full pull showed older pages are almost all past due (D-18). Later runs only
+    # fetch opportunities updated since the last success.
+    backfill_days: 120
+    # Invites already more than this many days past due are not stored (null = keep all).
+    skip_due_before_days: 30
+    min_seconds_between_requests: 0.25
+  email_alerts:
+    name: Vendor alert email
+    kind: email
+    enabled: false
+    daily_call_budget: null
+    eml_folder: data/email_inbox
+
+# Bonfire agencies: one entry per {slug}.bonfirehub.com portal. The agency address is the
+# location fallback for its bids. Slugs below were confirmed to exist (portal root redirects to
+# login) on 2026-11-03. Further slug discovery is paused: robots.txt disallows probing (D-12).
+bonfire_agencies:
+  - {slug: maricopa,      agency_name: Maricopa County,  agency_type: county, street: "301 W Jefferson St",              city: Phoenix,   state: AZ, zip: "85003"}
+  - {slug: charlottenc,   agency_name: City of Charlotte, agency_type: city,  street: "600 E 4th St",                    city: Charlotte, state: NC, zip: "28202"}
+  - {slug: fairfaxcounty, agency_name: Fairfax County,   agency_type: county, street: "12000 Government Center Pkwy",    city: Fairfax,   state: VA, zip: "22035"}

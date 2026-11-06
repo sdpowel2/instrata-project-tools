@@ -1,0 +1,450 @@
+{
+ "totalRecords": 7,
+ "limit": 1000,
+ "offset": 0,
+ "opportunitiesData": [
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2027-07-31",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Sources Sought",
+   "classificationCode": "Z1AZ",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=fff15eda49e84966ac21f547b34e2afe",
+   "fullParentPathCode": "080.8000.80KSC0",
+   "fullParentPathName": "NATIONAL AERONAUTICS AND SPACE ADMINISTRATION.NATIONAL AERONAUTICS AND SPACE ADMINISTRATION.NASA KENNEDY SPACE CENTER",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=fff15eda49e84966ac21f547b34e2afe&limit=1"
+    }
+   ],
+   "naicsCode": "561210",
+   "naicsCodes": [
+    "561210"
+   ],
+   "noticeId": "fff15eda49e84966ac21f547b34e2afe",
+   "officeAddress": {
+    "zipcode": "32899",
+    "city": "KENNEDY SPACE CENTER",
+    "countryCode": "USA",
+    "state": "FL"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": {
+    "state": {
+     "code": "FL",
+     "name": "Florida"
+    },
+    "zip": "32899",
+    "country": {
+     "code": "USA",
+     "name": "UNITED STATES"
+    }
+   },
+   "pointOfContact": [
+    {
+     "fax": "",
+     "type": "primary",
+     "email": "ksc-simo-info@mail.nasa.gov",
+     "phone": "",
+     "fullName": "Daniel Hinsley"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": [
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/1df349bdf19942ab94a48469d5f86909/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/24e3916a61604b30b64aaa6dbc2c1627/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/5a4e622cc9dd4ca3a9648436180f4c00/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/7c9e7319c479495294ddf5c7bf999549/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/88767d43272b44cb8b7b9def5acf3226/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/a455c00055b54d408b9bb28f8ae0dd25/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/c2eafa6f5eb9430e9eab39d3e5897c4f/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/c7e1ba43c5bb4a82a22d8f02976cc429/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/cd2d3b639d094a22b45c33f427ba3d38/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/d5b806f1aff849a5bc51bb8d2e701372/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/d889b707bf074f87b7da49c9b63b9ca5/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/f4dd0a8f738e4c8b8c1ef8fa133ff8bf/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/fa2536cc2ead49be94dfcbc0b7b8b9ac/download"
+   ],
+   "responseDeadLine": "2026-12-07T17:00:00-05:00",
+   "solicitationNumber": "80KSC027R0001",
+   "title": "Spaceport Infrastructure Maintenance and Operations (SIMO)",
+   "type": "Sources Sought",
+   "typeOfSetAside": "NONE",
+   "typeOfSetAsideDescription": "No Set aside used",
+   "uiLink": "https://sam.gov/workspace/contract/opp/fff15eda49e84966ac21f547b34e2afe/view"
+  },
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2027-11-02",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Combined Synopsis/Solicitation",
+   "classificationCode": "7B22",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=ffe0238fb4fe4c849c3b81d11fec3427",
+   "fullParentPathCode": "017.1700.NAVSEA.NAVSEA WARFARE CTR.N00178",
+   "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE NAVY.NAVSEA.NAVSEA WARFARE CENTER.NSWC DAHLGREN",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=ffe0238fb4fe4c849c3b81d11fec3427&limit=1"
+    }
+   ],
+   "naicsCode": "334111",
+   "naicsCodes": [
+    "334111"
+   ],
+   "noticeId": "ffe0238fb4fe4c849c3b81d11fec3427",
+   "officeAddress": {
+    "zipcode": "22448-5154",
+    "city": "DAHLGREN",
+    "countryCode": "USA",
+    "state": "VA"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": {
+    "streetAddress": "",
+    "zip": ""
+   },
+   "pointOfContact": [
+    {
+     "fax": "",
+     "type": "primary",
+     "email": "susan.h.madison.civ@us.navy.mil",
+     "phone": "5406133296",
+     "fullName": "Susan Madison"
+    },
+    {
+     "fax": "",
+     "type": "secondary",
+     "email": "jessica.b.gallagher2.civ@us.navy.mil",
+     "phone": "540-742-4098",
+     "fullName": "Jessica Gallagher"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": null,
+   "responseDeadLine": "2026-11-04T12:00:00-05:00",
+   "solicitationNumber": "N0017827Q6613",
+   "title": "SuperServer",
+   "type": "Combined Synopsis/Solicitation",
+   "typeOfSetAside": null,
+   "typeOfSetAsideDescription": null,
+   "uiLink": "https://sam.gov/workspace/contract/opp/ffe0238fb4fe4c849c3b81d11fec3427/view"
+  },
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2026-12-17",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Combined Synopsis/Solicitation",
+   "classificationCode": "25",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=ffbe62d7730c49caaf47ed2213e954bd",
+   "fullParentPathCode": "097.97AS.DLA LAND.DLA LAND COLUMBUS.SPE7LX",
+   "fullParentPathName": "DEPT OF DEFENSE.DEFENSE LOGISTICS AGENCY.DLA LAND.DLA LAND COLUMBUS.DLA WEAPONS SUPPORT",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=ffbe62d7730c49caaf47ed2213e954bd&limit=1"
+    }
+   ],
+   "naicsCode": "336360",
+   "naicsCodes": [
+    "336360"
+   ],
+   "noticeId": "ffbe62d7730c49caaf47ed2213e954bd",
+   "officeAddress": {
+    "zipcode": "43218-3990",
+    "city": "COLUMBUS",
+    "countryCode": "USA",
+    "state": "OH"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": null,
+   "pointOfContact": [
+    {
+     "type": "primary",
+     "email": "DibbsBSM@dla.mil",
+     "fullName": "Questions regarding this solicitation should be emailed to the buyer listed in block 5 of the solicitation document which can be found under the Additional Information link.\nIf the Additional Information link does not work, please go to https://www.dibbs.bsm.dla.mil/Solicitations/ and type the solicitation number in the Global Search box.\n"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": null,
+   "responseDeadLine": "2026-11-17",
+   "solicitationNumber": "SPE7LX27U0492",
+   "title": "25--SEAT,VEHICULAR",
+   "type": "Combined Synopsis/Solicitation",
+   "typeOfSetAside": null,
+   "typeOfSetAsideDescription": null,
+   "uiLink": "https://sam.gov/workspace/contract/opp/ffbe62d7730c49caaf47ed2213e954bd/view"
+  },
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2027-11-02",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Combined Synopsis/Solicitation",
+   "classificationCode": "5836",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=a0000000000000000000000000000001",
+   "fullParentPathCode": "017.1700.NAVSEA.NAVSEA WARFARE CTR.N00178",
+   "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE NAVY.NAVFAC.NAVFAC MID-ATLANTIC",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=a0000000000000000000000000000001&limit=1"
+    }
+   ],
+   "naicsCode": "334310",
+   "naicsCodes": [
+    "334310"
+   ],
+   "noticeId": "a0000000000000000000000000000001",
+   "officeAddress": {
+    "zipcode": "23511-3095",
+    "city": "NORFOLK",
+    "countryCode": "USA",
+    "state": "VA"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": {
+    "streetAddress": "",
+    "city": {
+     "code": "56000",
+     "name": "Norfolk"
+    },
+    "state": {
+     "code": "VA",
+     "name": "Virginia"
+    },
+    "zip": "23511",
+    "country": {
+     "code": "USA",
+     "name": "UNITED STATES"
+    }
+   },
+   "pointOfContact": [
+    {
+     "fax": "",
+     "type": "primary",
+     "email": "susan.h.madison.civ@us.navy.mil",
+     "phone": "5406133296",
+     "fullName": "Susan Madison"
+    },
+    {
+     "fax": "",
+     "type": "secondary",
+     "email": "jessica.b.gallagher2.civ@us.navy.mil",
+     "phone": "540-742-4098",
+     "fullName": "Jessica Gallagher"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": null,
+   "responseDeadLine": "2026-12-01T14:00:00-05:00",
+   "solicitationNumber": "N4008527Q0101",
+   "title": "Audio Visual System Upgrade, Building 1470 Conference Center",
+   "type": "Combined Synopsis/Solicitation",
+   "typeOfSetAside": null,
+   "typeOfSetAsideDescription": null,
+   "uiLink": "https://sam.gov/workspace/contract/opp/a0000000000000000000000000000001/view"
+  },
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2027-07-31",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Presolicitation",
+   "classificationCode": "Y1AA",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=a0000000000000000000000000000002",
+   "fullParentPathCode": "080.8000.80KSC0",
+   "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE ARMY.USACE.NAD.BALTIMORE DISTRICT",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=a0000000000000000000000000000002&limit=1"
+    }
+   ],
+   "naicsCode": "236220",
+   "naicsCodes": [
+    "236220"
+   ],
+   "noticeId": "a0000000000000000000000000000002",
+   "officeAddress": {
+    "zipcode": "21201",
+    "city": "BALTIMORE",
+    "countryCode": "USA",
+    "state": "MD"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": {
+    "city": {
+     "name": "Petersburg"
+    },
+    "state": {
+     "code": "VA"
+    },
+    "zip": "23801",
+    "country": {
+     "code": "USA"
+    }
+   },
+   "pointOfContact": [
+    {
+     "fax": "",
+     "type": "primary",
+     "email": "ksc-simo-info@mail.nasa.gov",
+     "phone": "",
+     "fullName": "Daniel Hinsley"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": [
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/1df349bdf19942ab94a48469d5f86909/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/24e3916a61604b30b64aaa6dbc2c1627/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/5a4e622cc9dd4ca3a9648436180f4c00/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/7c9e7319c479495294ddf5c7bf999549/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/88767d43272b44cb8b7b9def5acf3226/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/a455c00055b54d408b9bb28f8ae0dd25/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/c2eafa6f5eb9430e9eab39d3e5897c4f/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/c7e1ba43c5bb4a82a22d8f02976cc429/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/cd2d3b639d094a22b45c33f427ba3d38/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/d5b806f1aff849a5bc51bb8d2e701372/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/d889b707bf074f87b7da49c9b63b9ca5/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/f4dd0a8f738e4c8b8c1ef8fa133ff8bf/download",
+    "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/fa2536cc2ead49be94dfcbc0b7b8b9ac/download"
+   ],
+   "responseDeadLine": "2026-12-15",
+   "solicitationNumber": "W912DR27R0007",
+   "title": "Design-Build New Construction Training Center, Fort Gregg-Adams",
+   "type": "Presolicitation",
+   "typeOfSetAside": "NONE",
+   "typeOfSetAsideDescription": "No Set aside used",
+   "uiLink": "https://sam.gov/workspace/contract/opp/a0000000000000000000000000000002/view"
+  },
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2027-11-02",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Combined Synopsis/Solicitation",
+   "classificationCode": "5836",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=a0000000000000000000000000000003",
+   "fullParentPathCode": "017.1700.NAVSEA.NAVSEA WARFARE CTR.N00178",
+   "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE NAVY.NAVFAC.NAVFAC MID-ATLANTIC",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=a0000000000000000000000000000003&limit=1"
+    }
+   ],
+   "naicsCode": "334310",
+   "naicsCodes": [
+    "334310"
+   ],
+   "noticeId": "a0000000000000000000000000000003",
+   "officeAddress": {
+    "zipcode": "23511-3095",
+    "city": "NORFOLK",
+    "countryCode": "USA",
+    "state": "VA"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": {
+    "streetAddress": "",
+    "city": {
+     "code": "56000",
+     "name": "Norfolk"
+    },
+    "state": {
+     "code": "VA",
+     "name": "Virginia"
+    },
+    "zip": "23511",
+    "country": {
+     "code": "USA",
+     "name": "UNITED STATES"
+    }
+   },
+   "pointOfContact": [
+    {
+     "fax": "",
+     "type": "primary",
+     "email": "susan.h.madison.civ@us.navy.mil",
+     "phone": "5406133296",
+     "fullName": "Susan Madison"
+    },
+    {
+     "fax": "",
+     "type": "secondary",
+     "email": "jessica.b.gallagher2.civ@us.navy.mil",
+     "phone": "540-742-4098",
+     "fullName": "Jessica Gallagher"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": null,
+   "responseDeadLine": "2026-12-05T14:00:00-05:00",
+   "solicitationNumber": "N4008527Q0101",
+   "title": "Audio Visual System Upgrade, Building 1470 Conference Center - Amendment 1",
+   "type": "Combined Synopsis/Solicitation",
+   "typeOfSetAside": null,
+   "typeOfSetAsideDescription": null,
+   "uiLink": "https://sam.gov/workspace/contract/opp/a0000000000000000000000000000003/view"
+  },
+  {
+   "active": "Yes",
+   "additionalInfoLink": null,
+   "archiveDate": "2026-12-17",
+   "archiveType": "autocustom",
+   "award": null,
+   "baseType": "Combined Synopsis/Solicitation",
+   "classificationCode": "5830",
+   "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=a0000000000000000000000000000004",
+   "fullParentPathCode": "097.97AS.DLA LAND.DLA LAND COLUMBUS.SPE7LX",
+   "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE AIR FORCE.ACC.LUKE AFB",
+   "links": [
+    {
+     "rel": "self",
+     "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=a0000000000000000000000000000004&limit=1"
+    }
+   ],
+   "naicsCode": "336360",
+   "naicsCodes": [
+    "334290"
+   ],
+   "noticeId": "a0000000000000000000000000000004",
+   "officeAddress": {
+    "zipcode": "85309",
+    "city": "LUKE AFB",
+    "countryCode": "USA",
+    "state": "AZ"
+   },
+   "organizationType": "OFFICE",
+   "placeOfPerformance": null,
+   "pointOfContact": [
+    {
+     "type": "primary",
+     "email": "DibbsBSM@dla.mil",
+     "fullName": "Questions regarding this solicitation should be emailed to the buyer listed in block 5 of the solicitation document which can be found under the Additional Information link.\nIf the Additional Information link does not work, please go to https://www.dibbs.bsm.dla.mil/Solicitations/ and type the solicitation number in the Global Search box.\n"
+    }
+   ],
+   "postedDate": "2026-11-02",
+   "resourceLinks": null,
+   "responseDeadLine": "2026-11-30",
+   "solicitationNumber": "FA487727Q0042",
+   "title": "Video Teleconferencing Suite Equipment",
+   "type": "Combined Synopsis/Solicitation",
+   "typeOfSetAside": null,
+   "typeOfSetAsideDescription": null,
+   "uiLink": "https://sam.gov/workspace/contract/opp/a0000000000000000000000000000004/view"
+  }
+ ],
+ "links": []
+}
