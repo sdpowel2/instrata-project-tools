@@ -15,6 +15,8 @@ export type WorkItemStatus = 'open' | 'done' | 'snoozed' | 'dismissed';
 
 export interface WorkItem {
   id: string;
+  /** worklist_items.source_key (live mode); ties a task to its reviewed row. */
+  sourceKey?: string;
   kind: WorkItemKind;
   source: WorkItemSource;
   title: string;
@@ -126,7 +128,60 @@ export interface ReviewedRow {
   /** Set once Seth surfaced it (or it was on the list). */
   itemId?: string;
   surfacedAt?: string;
+  /** Sender's address (email and Teams), lowercased. */
+  sender?: string;
+  /** Teams chat or channel name, or monday board name. */
+  channel?: string;
+  /** Tuning rules that fired on this row (2.2). */
+  ruleIds?: string[];
 }
 
 /** Outcomes that already put the conversation on the list. */
 export const ON_LIST_OUTCOMES: ReviewedOutcome[] = ['respond', 'do', 'decide', 'carried'];
+
+// ── Tuning rules (My Day 2.2, supabase/migrations/add_triage_rules.sql) ──────
+
+/** min_task = always on the list · min_read_me = at least a Read me line · suppress = Set aside */
+export type RuleEffect = 'min_task' | 'min_read_me' | 'suppress';
+
+/** hard = matched in SQL every run · lesson = a judgment call the run reads as an example */
+export type RuleKind = 'hard' | 'lesson';
+
+export type RuleOrigin = 'surface_more' | 'surface_less' | 'manual';
+
+/** Every field given must match. Needs at least one of sender, domain, subjectTerms, channel. */
+export interface RuleMatch {
+  source?: ReviewedRow['source'];
+  /** Exact address, any case. */
+  sender?: string;
+  /** Sender's domain; subdomains count. */
+  domain?: string;
+  /** Every word must appear in the title. */
+  subjectTerms?: string[];
+  /** Text the chat, channel or board name must contain. */
+  channel?: string;
+}
+
+export interface TriageRule {
+  id: string;
+  kind: RuleKind;
+  match: RuleMatch | null;
+  effect: RuleEffect;
+  note?: string;
+  active: boolean;
+  createdFrom: RuleOrigin;
+  exampleId?: string;
+  createdAt: string;
+  /** Reviewed rows it fired on in the last 30 days. */
+  hits30d: number;
+  lastHitAt?: string;
+}
+
+/** What a draft hard rule would catch in one run. */
+export interface RulePreview {
+  briefingDate: string | null;
+  matched: number;
+  wouldChange: number;
+  matched30d: number;
+  rows: { id: string; source: ReviewedRow['source']; title: string; from: string; outcome: ReviewedOutcome; reasonGroup: string; changes: boolean }[];
+}

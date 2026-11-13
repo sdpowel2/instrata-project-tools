@@ -15,12 +15,14 @@ import { addDays, daysBetween, easternDate } from '../components/worklist/format
 import type { Briefing, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency } from '../components/worklist/types';
 
 const ITEM_COLS =
-  'id, source, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, user_urgency, ' +
+  'id, source, source_key, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, user_urgency, ' +
   'effective_urgency, status, snoozed_until, closed_at, closed_by, first_seen, options, answer';
 const BRIEFING_COLS =
   'id, briefing_date, ran_at, window_since, missing, source_counts, schedule, open_blocks, read_me, set_aside';
-const REVIEWED_COLS =
+const REVIEWED_BASE_COLS =
   'id, source, source_key, title, from_label, link, outcome, reason, reason_group, item_id, surfaced_at';
+// sender / channel / rule_ids come with the 2.2 migration (add_triage_rules.sql).
+const REVIEWED_COLS = `${REVIEWED_BASE_COLS}, sender, channel, rule_ids`;
 
 interface ReviewedDbRow {
   id: string;
@@ -34,6 +36,9 @@ interface ReviewedDbRow {
   reason_group: string;
   item_id: string | null;
   surfaced_at: string | null;
+  sender?: string | null;
+  channel?: string | null;
+  rule_ids?: string[] | null;
 }
 
 function toReviewed(r: ReviewedDbRow): ReviewedRow {
@@ -49,11 +54,15 @@ function toReviewed(r: ReviewedDbRow): ReviewedRow {
     reasonGroup: r.reason_group,
     itemId: r.item_id ?? undefined,
     surfacedAt: r.surfaced_at ?? undefined,
+    sender: r.sender ?? undefined,
+    channel: r.channel ?? undefined,
+    ruleIds: r.rule_ids ?? [],
   };
 }
 
 interface ItemRow {
   id: string;
+  source_key: string;
   source: WorkItem['source'];
   kind: WorkItem['kind'];
   title: string;
@@ -118,6 +127,7 @@ export interface Worklist {
 function toItem(r: ItemRow, today: string): WorkItem {
   return {
     id: r.id,
+    sourceKey: r.source_key,
     kind: r.kind,
     source: r.source,
     title: r.title,
@@ -411,12 +421,11 @@ export function useWorklist(): Worklist {
     }
     setReviewedLoading(true);
     setReviewedError(null);
-    void supabase
-      .from('worklist_reviewed')
-      .select(REVIEWED_COLS)
-      .eq('user_id', userId)
-      .eq('briefing_id', latestBriefingId)
-      .limit(500)
+    const query = (cols: string) =>
+      supabase.from('worklist_reviewed').select(cols).eq('user_id', userId).eq('briefing_id', latestBriefingId).limit(500);
+    void query(REVIEWED_COLS)
+      // Before the 2.2 migration the rule columns don't exist yet (42703): fall back.
+      .then((res) => (res.error?.code === '42703' ? query(REVIEWED_BASE_COLS) : res))
       .then(({ data, error: e }) => {
         if (e) {
           const missing = e.code === '42P01' || e.code === 'PGRST205';

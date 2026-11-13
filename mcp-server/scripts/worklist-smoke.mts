@@ -116,14 +116,22 @@ try {
   await mcp(access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'worklist-smoke', version: '1' } });
   const list = await mcp(access, 'tools/list');
   const tools = ((list.json.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
-  assert('tools/list includes get_worklist_state + save_briefing', tools.includes('get_worklist_state') && tools.includes('save_briefing'), tools);
+  assert('tools/list includes get_worklist_state + save_briefing + match_triage_rules',
+    tools.includes('get_worklist_state') && tools.includes('save_briefing') && tools.includes('match_triage_rules'), tools);
 
   // ── read ───────────────────────────────────────────────────────────────────
   const s1 = await call(access, 'get_worklist_state', {});
-  const state1 = s1.data as { today?: string; open_items?: unknown[]; recently_closed?: unknown[]; feedback?: unknown[]; recently_surfaced?: unknown[] };
-  assert('get_worklist_state → ok with today/open_items/recently_closed/feedback/recently_surfaced',
+  const state1 = s1.data as { today?: string; open_items?: unknown[]; recently_closed?: unknown[]; feedback?: unknown[]; recently_surfaced?: unknown[]; triage_rules?: unknown[] };
+  assert('get_worklist_state → ok with today/open_items/recently_closed/feedback/recently_surfaced/triage_rules',
     !s1.isError && /^\d{4}-\d{2}-\d{2}$/.test(state1.today ?? '') && Array.isArray(state1.open_items)
-      && Array.isArray(state1.recently_closed) && Array.isArray(state1.feedback) && Array.isArray(state1.recently_surfaced), s1.text);
+      && Array.isArray(state1.recently_closed) && Array.isArray(state1.feedback) && Array.isArray(state1.recently_surfaced)
+      && Array.isArray(state1.triage_rules), s1.text);
+
+  const m1 = await call(access, 'match_triage_rules', {
+    candidates: [{ key: 'smoke:respond', source: 'email', sender: 'nobody@smoke.invalid', title: 'Smoke test reply' }],
+  });
+  const matched = m1.data as { hard_rules?: number; matched?: unknown[] };
+  assert('match_triage_rules → ok with hard_rules + matched', !m1.isError && typeof matched.hard_rules === 'number' && Array.isArray(matched.matched), m1.text);
 
   // ── write ──────────────────────────────────────────────────────────────────
   const save = await call(access, 'save_briefing', {
@@ -144,9 +152,9 @@ try {
       { source_key: 'smoke:dropped', source: 'email', title: 'Smoke newsletter', outcome: 'dropped', reason: 'newsletter', reason_group: 'Newsletters / marketing' },
     ],
   });
-  const saved = save.data as { inserted?: number; briefing_date?: string; reviewed?: { saved?: number; error?: string } };
+  const saved = save.data as { inserted?: number; briefing_date?: string; reviewed?: { saved?: number; error?: string; violations?: unknown[] } };
   assert('save_briefing → inserted 2 on the smoke date', !save.isError && saved.inserted === 2 && saved.briefing_date === SMOKE_DATE, save.text);
-  assert('  reviewed log → saved 2 rows', saved.reviewed?.saved === 2, saved.reviewed);
+  assert('  reviewed log → saved 2 rows, violations listed', saved.reviewed?.saved === 2 && Array.isArray(saved.reviewed?.violations), saved.reviewed);
 
   const again = await call(access, 'save_briefing', {
     briefing: { date: SMOKE_DATE },
