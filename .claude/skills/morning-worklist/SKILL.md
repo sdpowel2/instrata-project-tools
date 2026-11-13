@@ -3,7 +3,7 @@ name: morning-worklist
 description: Seth's morning briefing. Triages new email, Teams chats and @mentions, today's Outlook calendar, his monday.com assignments and @mentions, and his manual task list into one short daily worklist with due dates and urgency, plus a "read me" brief, and saves it to his My Day worklist in Project Tools. Use when Seth asks for his morning briefing, morning worklist, daily list, "what's on my plate today", or runs /morning-worklist. It never sends, posts, marks read, or edits anything; its only writes are the worklist save and the personal-worklist folder.
 ---
 
-# Morning worklist (v1)
+# Morning worklist (v1.1)
 
 You are building Seth Powell's worklist for today. The goal is a **short, trustworthy list**. A list that's too long or noisy is a failure, even if every item on it is real. When in doubt, put an item in "Set aside" with a reason; don't add it as a task.
 
@@ -59,7 +59,7 @@ If one monday item has both an unanswered @mention and an assignment date, make 
 
 ## Step 0 - Load state and set the time window
 
-1. Call `get_worklist_state`. Keep its `today`, `last_briefing`, `open_items`, `recently_closed` and `feedback`.
+1. Call `get_worklist_state`. Keep its `today`, `last_briefing`, `open_items`, `recently_closed`, `feedback` and `recently_surfaced`.
    - If the tool isn't available or errors, run in **file mode**: read `personal-worklist/state.json` (`{"lastRunAt": ...}`) for the window and the newest earlier file in `personal-worklist/briefings/` for carryover, skip the save in Step 9, and put `⚠ Not saved to Project Tools - <error>` at the top of the briefing.
 2. Set `since`:
    - If `last_briefing.briefing_date` is **today** (a re-run), use `last_briefing.window_since`, so the re-run covers the whole day again. The save replaces today's briefing.
@@ -189,6 +189,8 @@ Skip anything whose `source_key` is in `recently_closed`, unless that row has `c
 
 **Seth's override wins.** When an open item has `user_urgency`, that's what he sees (`effective_urgency`). Still send your own `urgency`; the database never overwrites his.
 
+**Learn from what Seth surfaced.** Each `recently_surfaced` row is a conversation an earlier run left off the list (its `outcome`, `reason` and `reason_group` say where and why) that Seth pulled out of the reviewed list by hand, with the kind he chose (`item.kind`). One is enough to act on: a similar conversation today (same sender, same domain, same kind of ask) goes on the list too, and its reason ends with `(you surfaced a similar one on <date>)`. Never put a surfaced pattern back in Set aside or Dropped without saying so in the chat summary.
+
 Don't inflate. Urgency 1 is for at most about 5 items, counting effective urgency. If more qualify, keep the 5 most important at 1 and move the rest to 2 with the reason `crowded out`.
 
 ## Step 9 - Save and write
@@ -226,16 +228,31 @@ Don't inflate. Urgency 1 is for at most about 5 items, counting effective urgenc
     "urgency": 2,
     "urgency_reason": "why this urgency"
   }],
-  "resolved_keys": ["<source_key>", "..."]
+  "resolved_keys": ["<source_key>", "..."],
+  "reviewed": [{
+    "source_key": "<same key rules as items>",
+    "source": "email",
+    "title": "Subject, chat name, or monday item name",
+    "from_label": "Name (role or company)",
+    "link": "<url>",
+    "outcome": "dropped",
+    "reason": "One line: why it landed there.",
+    "reason_group": "Newsletters / marketing"
+  }]
 }
 ```
 
 - `items` = today's new tasks plus every still-open carried item from Step 7. At most 100.
+- `reviewed` = **one row for every conversation you looked at**, wherever it landed: each email thread, each Teams chat or channel ask, each monday item you checked. This is what Seth opens from the run line on My Day to see what was missed, so leave nothing out, including what you dropped by category without listing (notifications, newsletters, receipts, social chats). At most 400; if there are more, keep every row that isn't `dropped` and as many dropped rows as fit.
+  - `outcome`: `respond`, `do`, `decide` (on the list today), `carried` (an open item from an earlier run you looked at again), `read_me`, `set_aside`, or `dropped` (counted only, no line in the briefing).
+  - `source_key`: exactly the key the item would have (Source keys), so "Surface this" creates the right task.
+  - `reason_group`: pick from this list so groups stay stable from day to day: `Direct ask`, `Waiting on you`, `Assigned on monday`, `Due soon on monday`, `Bid / no-bid`, `Your promise`, `Worth knowing`, `Already answered`, `CC only, no ask`, `Not addressed to you`, `Other trade`, `Bid invite, not AV`, `monday: not due`, `Stale monday`, `Automated / notifications`, `Newsletters / marketing`, `Social chats`, `Over cap`, `Suspicious`. Add a new label only when none fits.
+  - `reason`: one line in your own words. Never a quote from the message.
 - `setAside.categories` uses these labels: Automated / notifications, Newsletters / marketing, Other-trade GC mail, Social chats, Stale monday, Over cap. Leave out zero counts. Per-item lines only for things a human sent directly to Seth, and for over-cap items; at most 30 (the tool rejects more), so keep the most relevant and fold the rest into the counts.
 - Tool limits: title and urgency_reason 300 characters, summary 2000, from_label 200, read-me text 500, schedule 40 events, read-me 15 lines. Stay well under them.
 - `missing` lists every source that failed (see below); empty when the run was complete.
 
-The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_manual` and `resolved`. If the call fails, keep going: write the markdown with `⚠ Not saved to Project Tools - <error>` at the top. Never retry with a changed payload to get around a rejection; report it.
+The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_manual` and `resolved`, plus `reviewed` (`saved`, or an `error` if the reviewed log couldn't be written; the briefing is saved either way, so just report it). If the call fails, keep going: write the markdown with `⚠ Not saved to Project Tools - <error>` at the top. Never retry with a changed payload to get around a rejection; report it.
 
 **2. Write the markdown file** `personal-worklist/briefings/YYYY-MM-DD.md` (today's Eastern date; overwrite if it exists):
 
@@ -284,7 +301,7 @@ Window: since <since, Eastern> · Sources: mail N, Teams N, monday N, manual N �
 - the schedule
 - the urgency 1 and 2 items (effective urgency)
 - counts for everything else
-- the save result (inserted / updated / resolved / kept closed), or the ⚠ line if it wasn't saved
+- the save result (inserted / updated / resolved / kept closed, and how many conversations went into the reviewed log), or the ⚠ line if it wasn't saved
 - the path to the briefing file, and a note if any manual.md tasks were file-only
 
 Keep it to what fits on one screen.
