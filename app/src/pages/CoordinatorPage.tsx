@@ -66,10 +66,14 @@ export function CoordinatorPage() {
 
   useEffect(() => { void load(); }, [load]);
   const asideIds = useMemo(() => new Set(aside.map((a) => a.mondayItemId)), [aside]);
-  // The engine works on a one-minute cycle; refresh on the same rhythm.
+  // The engine works on a one-minute cycle; refresh on the same rhythm, but only
+  // while the tab is visible (each refresh is ~100-300 KB of Supabase egress), and
+  // once right away when the tab comes back.
   useEffect(() => {
-    const t = setInterval(() => { void load(); }, 60_000);
-    return () => clearInterval(t);
+    const t = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    const onVisible = () => { if (!document.hidden) void load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
   }, [load]);
 
   if (!isSyncViewer) return <Navigate to="/" replace />;

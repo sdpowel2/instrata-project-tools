@@ -45,7 +45,9 @@ from leadfinder.settings import DATA_DIR, get_settings, redact
 log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
-POLL_SECONDS = 2.0
+# 15 s, not 2 s: each empty claim poll is a round trip of Supabase egress (about 0.9 GB
+# a month at 2 s, 2026-11-13). A queued job still starts within 15 s.
+POLL_SECONDS = 15.0
 PROGRESS_SECONDS = 2.0
 HEARTBEAT_SECONDS = 60.0
 MAX_PARALLEL = 3

@@ -343,7 +343,8 @@ function usePendingCutsheetCount(enabled: boolean): number {
       } catch { /* swallow — sidebar badge is best-effort */ }
     };
     tick();
-    const interval = setInterval(tick, 60_000);
+    // Skip while the tab is hidden: a background tab polling all day adds up.
+    const interval = setInterval(() => { if (!document.hidden) void tick(); }, 60_000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [enabled]);
   return count;

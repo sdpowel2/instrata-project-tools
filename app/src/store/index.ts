@@ -18,6 +18,7 @@ import type {
   ProjectDocument, ProjectDocumentType,
 } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { FEATURES } from '../config/featureFlags';
 import { isExcludedFromSubmittal, mergeLocations, submittalDedupKey } from '../utils/submittalExclusions';
 import {
   parseCsv, mapRow, runRules, applyDiff, buildBomRows, buildReviewConfig,
@@ -422,6 +423,54 @@ function dbExec(fn: () => PromiseLike<{ error: any }>): void {
     if (error) console.error('[Supabase sync error]', error);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Read helpers
+// ---------------------------------------------------------------------------
+// PostgREST caps each response at the project's max-rows setting (1000 by
+// default) and silently drops the rest; projects alone is past 1,100 rows.
+// `build` must return a fresh, ordered query each call so pages line up.
+const PAGE_ROWS = 1000;
+// Untyped PostgREST rows, as the rowTo* mappers take them.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Row = Record<string, any>;
+type Result = { data: Row[] | null; error: { message: string } | null };
+async function selectAllRows(
+  build: () => { range: (from: number, to: number) => PromiseLike<Result> },
+): Promise<{ data: Row[]; error: { message: string } | null }> {
+  const out: Row[] = [];
+  for (let from = 0; ; from += PAGE_ROWS) {
+    const { data, error } = await build().range(from, from + PAGE_ROWS - 1);
+    if (error) return { data: out, error };
+    out.push(...(data ?? []));
+    if (!data || data.length < PAGE_ROWS) return { data: out, error: null };
+  }
+}
+
+const NO_ROWS = Promise.resolve({ data: [] as Row[], error: null });
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} timed out`)), ms)),
+  ]);
+}
+
+function groupBy<T>(items: T[], key: (t: T) => string): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const it of items) {
+    const k = key(it);
+    const arr = m.get(k);
+    if (arr) arr.push(it); else m.set(k, [it]);
+  }
+  return m;
+}
+
+// In-flight loads, so concurrent callers share one fetch.
+let signInLoad: Promise<void> | null = null;
+const projectLoads = new Map<string, Promise<void>>();
+// Bid-leveling mapping templates are org-wide; loaded with the first project opened.
+let templatesLoaded = false;
 
 // ---------------------------------------------------------------------------
 // Seed data — only used in demo mode (Supabase not configured)
@@ -897,8 +946,15 @@ interface AppState {
   isLoading: boolean;
   isInitialized: boolean;
 
-  // Hydrate from Supabase
+  // Projects whose detail tables (BoM, submittal items, closeout children,
+  // manuals, change orders, purchasing, milestones, bid leveling) are loaded.
+  // ProjectHome waits on this before rendering a project's pages.
+  loadedProjectIds: Set<string>;
+
+  // Hydrate from Supabase: fetchAllData loads the cross-project lists at sign-in;
+  // ensureProjectLoaded loads one project's detail tables when it is opened.
   fetchAllData: () => Promise<void>;
+  ensureProjectLoaded: (projectId: string) => Promise<void>;
 
   // Project actions
   addProject: (p: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => string;
@@ -1078,18 +1134,23 @@ export const useStore = create<AppState>((set, get) => ({
 
   isLoading: DB,      // start loading if Supabase is configured
   isInitialized: !DB, // already initialized in demo mode
+  loadedProjectIds: new Set<string>(),
 
   // =========================================================================
   // fetchAllData — loads everything from Supabase into the store
   // =========================================================================
-  fetchAllData: async () => {
+  fetchAllData: () => {
     if (!isSupabaseConfigured()) {
       set({ isLoading: false, isInitialized: true });
-      return;
+      return Promise.resolve();
     }
 
-    // Prevent double-fetching
-    if (get().isInitialized) return;
+    // Prevent double-fetching: once loaded, and while a load is in flight. React
+    // dev mode mounts twice, and a second load landing after a project opened
+    // would reset that project's submittal items and closeout details.
+    if (get().isInitialized) return Promise.resolve();
+    if (signInLoad) return signInLoad;
+    signInLoad = (async () => {
     set({ isLoading: true });
 
     // Current user is needed before we can pull their project_members rows.
@@ -1099,183 +1160,60 @@ export const useStore = create<AppState>((set, get) => ({
     const currentUserId = authUser?.id ?? null;
 
     try {
-      // Fetch all tables in parallel (with 10s timeout to prevent infinite spinner)
-      const fetchWithTimeout = Promise.all([
-        supabase.from('projects').select('*'),
-        supabase.from('project_bom_items').select('*'),
-        supabase.from('submittals').select('*'),
-        supabase.from('submittal_items').select('*'),
-        supabase.from('rfis').select('*'),
-        supabase.from('closeout_packages').select('*'),
-        supabase.from('warranties').select('*'),
-        supabase.from('punch_items').select('*'),
-        supabase.from('sign_off_sheets').select('*'),
-        supabase.from('as_built_drawings').select('*'),
-        supabase.from('quick_start_rooms').select('*'),
-        supabase.from('quick_start_steps').select('*'),
-        supabase.from('owner_manuals').select('*'),
+      // Sign-in loads only what the cross-project screens need (Projects list,
+      // Dashboard counts, review queue, warehouses). Each project's detail tables
+      // load in ensureProjectLoaded when it is opened: loading every project's
+      // BoM, submittal items, manuals and purchasing at every sign-in and reload
+      // was most of the app's Supabase egress (2026-11-13).
+      const [
+        projectsRes,
+        submittalsRes,
+        rfisRes,
+        closeoutsRes,
+        punchItemsRes,
+        reviewRunsRes,
+        warehousesRes,
+        myMembershipsRes,
+      ] = await withTimeout(Promise.all([
+        selectAllRows(() => supabase.from('projects').select('*').order('id')),
+        selectAllRows(() => supabase.from('submittals').select('*').order('id')),
+        selectAllRows(() => supabase.from('rfis').select('*').order('id')),
+        selectAllRows(() => supabase.from('closeout_packages').select('*').order('id')),
+        // Full punch rows: the Dashboard counts open punch items across my projects.
+        selectAllRows(() => supabase.from('punch_items').select('*').order('id')),
         // Review runs — summary only (no csv_snapshot, no flags)
         supabase.from('review_runs').select('id,project_id,run_number,triggered_at,status,reviewed_by,reviewed_at,created_at').order('run_number', { ascending: false }),
-        // Bid Leveling
-        supabase.from('bid_leveling_sessions').select('*'),
-        supabase.from('bid_leveling_mapping_templates').select('*'),
-        // Milestones
-        supabase.from('project_milestones').select('*'),
-        // Change orders — read-only, populated by the dtools-project-lookup
-        // Edge Function alongside the BoM. Nested select pulls each CO's
-        // signed line-item deltas in the same round trip.
-        supabase.from('change_orders').select('*, change_order_items(*)'),
         // Warehouses (org-wide)
         supabase.from('warehouses').select('*'),
-        // Purchasing
-        supabase.from('purchasing_modules').select('*'),
-        supabase.from('purchasing_module_submittals').select('*'),
-        supabase.from('purchasing_items').select('*'),
-        supabase.from('purchasing_freight').select('*'),
-        supabase.from('purchasing_manufacturer_defaults').select('*'),
         // Current user's project memberships — drives the Dashboard scope.
         // Filtered server-side so we only pay for the rows we need.
         currentUserId
           ? supabase.from('project_members').select('project_id').eq('user_id', currentUserId)
           : Promise.resolve({ data: [] as Array<{ project_id: string }>, error: null }),
-      ]);
-
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Data fetch timed out')), 10000),
-      );
-
-      const [
-        projectsRes,
-        bomRes,
-        submittalsRes,
-        submittalItemsRes,
-        rfisRes,
-        closeoutsRes,
-        warrantiesRes,
-        punchItemsRes,
-        signOffSheetsRes,
-        asBuiltDrawingsRes,
-        quickStartRoomsRes,
-        quickStartStepsRes,
-        manualsRes,
-        reviewRunsRes,
-        bidLevelingSessionsRes,
-        bidLevelingTemplatesRes,
-        milestonesRes,
-        changeOrdersRes,
-        warehousesRes,
-        purchasingModulesRes,
-        purchasingModSubsRes,
-        purchasingItemsRes,
-        purchasingFreightRes,
-        purchasingMfrDefaultsRes,
-        myMembershipsRes,
-      ] = await Promise.race([fetchWithTimeout, timeout]);
+      ]), 10000, 'Data fetch');
 
       // Log any errors but continue with whatever data we got
-      for (const res of [projectsRes, bomRes, submittalsRes, submittalItemsRes, rfisRes, closeoutsRes, warrantiesRes, punchItemsRes, signOffSheetsRes, asBuiltDrawingsRes, quickStartRoomsRes, quickStartStepsRes, manualsRes, reviewRunsRes, bidLevelingSessionsRes, bidLevelingTemplatesRes, milestonesRes, changeOrdersRes, warehousesRes, purchasingModulesRes, purchasingModSubsRes, purchasingItemsRes, purchasingFreightRes, purchasingMfrDefaultsRes, myMembershipsRes]) {
+      for (const res of [projectsRes, submittalsRes, rfisRes, closeoutsRes, punchItemsRes, reviewRunsRes, warehousesRes, myMembershipsRes]) {
         if (res.error) console.warn('[Supabase fetch]', res.error.message);
       }
 
-      // Map rows
       const projects = (projectsRes.data ?? []).map(rowToProject);
-      const projectBoM = (bomRes.data ?? []).map(rowToBoMItem);
       const rfis = (rfisRes.data ?? []).map(rowToRFI);
-      const manuals = (manualsRes.data ?? []).map(rowToManual);
       const reviewRuns = (reviewRunsRes.data ?? []).map(rowToReviewRun);
-      const bidLevelingSessions = (bidLevelingSessionsRes.data ?? []).map(rowToBidLevelingSession);
-      const bidLevelingTemplates = (bidLevelingTemplatesRes.data ?? []).map(rowToBidLevelingTemplate);
-      const milestones = (milestonesRes.data ?? []).map(rowToMilestone);
-      const changeOrders = (changeOrdersRes.data ?? []).map(rowToChangeOrder);
       const warehouses = (warehousesRes.data ?? []).map(rowToWarehouse);
 
-      // Purchasing — collapse junction rows into submittalIds[] on each module
-      const modSubByModule = new Map<string, string[]>();
-      for (const link of (purchasingModSubsRes.data ?? [])) {
-        const arr = modSubByModule.get(link.purchasing_module_id) ?? [];
-        arr.push(link.submittal_id);
-        modSubByModule.set(link.purchasing_module_id, arr);
-      }
-      const purchasingModules = (purchasingModulesRes.data ?? []).map((r: any) =>
-        rowToPurchasingModule(r, modSubByModule.get(r.id) ?? []),
-      );
-      const purchasingItems = (purchasingItemsRes.data ?? []).map(rowToPurchasingItem);
-      const purchasingFreight = (purchasingFreightRes.data ?? []).map(rowToPurchasingFreight);
-      const purchasingMfrDefaults = (purchasingMfrDefaultsRes.data ?? []).map(rowToMfrDefault);
+      // Submittal items arrive with the project (ensureProjectLoaded).
+      const submittals: Submittal[] = (submittalsRes.data ?? []).map((r) => ({ ...rowToSubmittal(r), items: [] }));
 
-      // Nest submittal items into submittals
-      const submittalItems = (submittalItemsRes.data ?? []).map(rowToSubmittalItem);
-      const submittalItemsBySubmittalId = new Map<string, SubmittalItem[]>();
-      for (const item of submittalItems) {
-        const arr = submittalItemsBySubmittalId.get(item.submittalId) ?? [];
-        arr.push(item);
-        submittalItemsBySubmittalId.set(item.submittalId, arr);
-      }
-      const submittals: Submittal[] = (submittalsRes.data ?? []).map((r) => ({
-        ...rowToSubmittal(r),
-        items: (submittalItemsBySubmittalId.get(r.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder),
-      }));
-
-      // Nest closeout children
-      const warranties = (warrantiesRes.data ?? []).map(rowToWarranty);
-      const punchItems = (punchItemsRes.data ?? []).map(rowToPunchItem);
-      const signOffSheets = (signOffSheetsRes.data ?? []).map(rowToSignOffSheet);
-      const asBuiltDrawings = (asBuiltDrawingsRes.data ?? []).map(rowToAsBuiltDrawing);
-
-      const warrantiesByCloseout = new Map<string, Warranty[]>();
-      for (const w of warranties) {
-        const arr = warrantiesByCloseout.get(w.closeoutId) ?? [];
-        arr.push(w);
-        warrantiesByCloseout.set(w.closeoutId, arr);
-      }
-      const punchByCloseout = new Map<string, PunchItem[]>();
-      for (const p of punchItems) {
-        const arr = punchByCloseout.get(p.closeoutId) ?? [];
-        arr.push(p);
-        punchByCloseout.set(p.closeoutId, arr);
-      }
-      const signOffByCloseout = new Map<string, SignOffSheet[]>();
-      for (const s of signOffSheets) {
-        const arr = signOffByCloseout.get(s.closeoutId) ?? [];
-        arr.push(s);
-        signOffByCloseout.set(s.closeoutId, arr);
-      }
-      const drawingsByCloseout = new Map<string, AsBuiltDrawing[]>();
-      for (const d of asBuiltDrawings) {
-        const arr = drawingsByCloseout.get(d.closeoutId) ?? [];
-        arr.push(d);
-        drawingsByCloseout.set(d.closeoutId, arr);
-      }
-
-      // Quick Start: rooms keyed by closeout_id, with their nested steps.
-      const quickStartSteps = (quickStartStepsRes.data ?? []).map(rowToQuickStartStep);
-      const stepsByRoom = new Map<string, QuickStartStep[]>();
-      for (const s of quickStartSteps) {
-        const arr = stepsByRoom.get(s.roomId) ?? [];
-        arr.push(s);
-        stepsByRoom.set(s.roomId, arr);
-      }
-      const quickStartRoomsRaw = (quickStartRoomsRes.data ?? []);
-      const roomsByCloseout = new Map<string, QuickStartRoom[]>();
-      for (const r of quickStartRoomsRaw) {
-        const steps = (stepsByRoom.get(r.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
-        const room = rowToQuickStartRoom(r, steps);
-        const arr = roomsByCloseout.get(room.closeoutId) ?? [];
-        arr.push(room);
-        roomsByCloseout.set(room.closeoutId, arr);
-      }
-      // Sort each closeout's rooms once
-      for (const arr of roomsByCloseout.values()) {
-        arr.sort((a, b) => a.sortOrder - b.sortOrder);
-      }
-
+      // Closeout headers + punch items now; the other children arrive with the project.
+      const punchByCloseout = groupBy((punchItemsRes.data ?? []).map(rowToPunchItem), (p) => p.closeoutId);
       const closeouts: CloseoutPackage[] = (closeoutsRes.data ?? []).map((r) => ({
         ...rowToCloseout(r),
-        warranties: warrantiesByCloseout.get(r.id) ?? [],
+        warranties: [],
         punchItems: punchByCloseout.get(r.id) ?? [],
-        signOffSheets: signOffByCloseout.get(r.id) ?? [],
-        asBuiltDrawings: drawingsByCloseout.get(r.id) ?? [],
-        quickStartRooms: roomsByCloseout.get(r.id) ?? [],
+        signOffSheets: [],
+        asBuiltDrawings: [],
+        quickStartRooms: [],
       }));
 
       const myProjectIds = new Set<string>(
@@ -1283,9 +1221,7 @@ export const useStore = create<AppState>((set, get) => ({
       );
 
       set({
-        projects, projectBoM, submittals, rfis, closeouts, manuals, reviewRuns,
-        bidLevelingSessions, bidLevelingTemplates, milestones, changeOrders,
-        warehouses, purchasingModules, purchasingItems, purchasingFreight, purchasingMfrDefaults,
+        projects, submittals, rfis, closeouts, reviewRuns, warehouses,
         myProjectIds,
         isLoading: false, isInitialized: true,
       });
@@ -1293,6 +1229,129 @@ export const useStore = create<AppState>((set, get) => ({
       console.error('[Supabase fetchAllData failed]', err);
       set({ isLoading: false, isInitialized: true });
     }
+    })().finally(() => { signInLoad = null; });
+    return signInLoad;
+  },
+
+  // =========================================================================
+  // ensureProjectLoaded — one project's detail tables, the first time it opens
+  // =========================================================================
+  ensureProjectLoaded: (projectId) => {
+    if (!isSupabaseConfigured() || get().loadedProjectIds.has(projectId)) return Promise.resolve();
+    const inflight = projectLoads.get(projectId);
+    if (inflight) return inflight;
+
+    const load = (async () => {
+      const state = get();
+      const closeoutIds = state.closeouts.filter((c) => c.projectId === projectId).map((c) => c.id);
+      const submittalIds = state.submittals.filter((s) => s.projectId === projectId).map((s) => s.id);
+      // Bid-leveling tables only exist where that feature has shipped (404 otherwise).
+      const loadTemplates = FEATURES.bidLeveling && !templatesLoaded;
+
+      const [
+        bomRes, subItemsRes, manualsRes, bidSessionsRes, templatesRes, milestonesRes, changeOrdersRes,
+        modulesRes, warrantiesRes, signOffRes, drawingsRes, roomsRes,
+      ] = await withTimeout(Promise.all([
+        selectAllRows(() => supabase.from('project_bom_items').select('*').eq('project_id', projectId).order('id')),
+        submittalIds.length
+          ? selectAllRows(() => supabase.from('submittal_items').select('*').in('submittal_id', submittalIds).order('id'))
+          : NO_ROWS,
+        supabase.from('owner_manuals').select('*').eq('project_id', projectId),
+        FEATURES.bidLeveling ? supabase.from('bid_leveling_sessions').select('*').eq('project_id', projectId) : NO_ROWS,
+        loadTemplates ? supabase.from('bid_leveling_mapping_templates').select('*') : NO_ROWS,
+        supabase.from('project_milestones').select('*').eq('project_id', projectId),
+        // Change orders — read-only, populated by the dtools-project-lookup Edge
+        // Function alongside the BoM; nested select pulls each CO's line-item deltas.
+        supabase.from('change_orders').select('*, change_order_items(*)').eq('project_id', projectId),
+        supabase.from('purchasing_modules').select('*').eq('project_id', projectId),
+        closeoutIds.length ? supabase.from('warranties').select('*').in('closeout_id', closeoutIds) : NO_ROWS,
+        closeoutIds.length ? supabase.from('sign_off_sheets').select('*').in('closeout_id', closeoutIds) : NO_ROWS,
+        closeoutIds.length ? supabase.from('as_built_drawings').select('*').in('closeout_id', closeoutIds) : NO_ROWS,
+        closeoutIds.length ? supabase.from('quick_start_rooms').select('*').in('closeout_id', closeoutIds) : NO_ROWS,
+      ]), 15000, 'Project load');
+
+      const roomIds = (roomsRes.data ?? []).map((r: Row) => r.id as string);
+      const moduleIds = (modulesRes.data ?? []).map((r: Row) => r.id as string);
+      const [stepsRes, modSubsRes, purchItemsRes, freightRes, mfrRes] = await withTimeout(Promise.all([
+        roomIds.length ? supabase.from('quick_start_steps').select('*').in('room_id', roomIds) : NO_ROWS,
+        moduleIds.length ? supabase.from('purchasing_module_submittals').select('*').in('purchasing_module_id', moduleIds) : NO_ROWS,
+        moduleIds.length ? supabase.from('purchasing_items').select('*').in('purchasing_module_id', moduleIds) : NO_ROWS,
+        moduleIds.length ? supabase.from('purchasing_freight').select('*').in('purchasing_module_id', moduleIds) : NO_ROWS,
+        moduleIds.length ? supabase.from('purchasing_manufacturer_defaults').select('*').in('purchasing_module_id', moduleIds) : NO_ROWS,
+      ]), 15000, 'Project load');
+
+      // Log any errors but continue with whatever data we got (same as sign-in).
+      for (const res of [bomRes, subItemsRes, manualsRes, bidSessionsRes, templatesRes, milestonesRes, changeOrdersRes, modulesRes, warrantiesRes, signOffRes, drawingsRes, roomsRes, stepsRes, modSubsRes, purchItemsRes, freightRes, mfrRes]) {
+        if (res.error) console.warn('[Supabase project load]', res.error.message);
+      }
+      if (loadTemplates && !templatesRes.error) templatesLoaded = true;
+
+      const bom = (bomRes.data ?? []).map(rowToBoMItem);
+      const itemsBySubmittal = groupBy((subItemsRes.data ?? []).map(rowToSubmittalItem), (i) => i.submittalId);
+      const manuals = (manualsRes.data ?? []).map(rowToManual);
+      const bidSessions = (bidSessionsRes.data ?? []).map(rowToBidLevelingSession);
+      const milestones = (milestonesRes.data ?? []).map(rowToMilestone);
+      const changeOrders = (changeOrdersRes.data ?? []).map(rowToChangeOrder);
+
+      const subsByModule = new Map<string, string[]>();
+      for (const link of (modSubsRes.data ?? [])) {
+        const arr = subsByModule.get(link.purchasing_module_id) ?? [];
+        arr.push(link.submittal_id);
+        subsByModule.set(link.purchasing_module_id, arr);
+      }
+      const modules = (modulesRes.data ?? []).map((r: Row) => rowToPurchasingModule(r, subsByModule.get(r.id) ?? []));
+      const purchasingItems = (purchItemsRes.data ?? []).map(rowToPurchasingItem);
+      const purchasingFreight = (freightRes.data ?? []).map(rowToPurchasingFreight);
+      const purchasingMfrDefaults = (mfrRes.data ?? []).map(rowToMfrDefault);
+
+      const warrantiesByCloseout = groupBy((warrantiesRes.data ?? []).map(rowToWarranty), (w) => w.closeoutId);
+      const signOffByCloseout = groupBy((signOffRes.data ?? []).map(rowToSignOffSheet), (s) => s.closeoutId);
+      const drawingsByCloseout = groupBy((drawingsRes.data ?? []).map(rowToAsBuiltDrawing), (d) => d.closeoutId);
+      const stepsByRoom = groupBy((stepsRes.data ?? []).map(rowToQuickStartStep), (s) => s.roomId);
+      const roomsByCloseout = groupBy(
+        (roomsRes.data ?? []).map((r: Row) =>
+          rowToQuickStartRoom(r, (stepsByRoom.get(r.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder))),
+        (room) => room.closeoutId,
+      );
+      for (const arr of roomsByCloseout.values()) arr.sort((a, b) => a.sortOrder - b.sortOrder);
+
+      set((s) => {
+        // Replace this project's slice; other projects' data is untouched.
+        const oldModuleIds = new Set(s.purchasingModules.filter((m) => m.projectId === projectId).map((m) => m.id));
+        const newModuleIds = new Set(moduleIds);
+        const ofThisProject = (moduleId: string) => oldModuleIds.has(moduleId) || newModuleIds.has(moduleId);
+        return {
+          projectBoM: [...s.projectBoM.filter((b) => b.projectId !== projectId), ...bom],
+          submittals: s.submittals.map((sub) => sub.projectId === projectId
+            ? { ...sub, items: (itemsBySubmittal.get(sub.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder) }
+            : sub),
+          closeouts: s.closeouts.map((c) => c.projectId === projectId
+            ? {
+                ...c,
+                warranties: warrantiesByCloseout.get(c.id) ?? [],
+                signOffSheets: signOffByCloseout.get(c.id) ?? [],
+                asBuiltDrawings: drawingsByCloseout.get(c.id) ?? [],
+                quickStartRooms: roomsByCloseout.get(c.id) ?? [],
+              }
+            : c),
+          manuals: [...s.manuals.filter((m) => m.projectId !== projectId), ...manuals],
+          bidLevelingSessions: [...s.bidLevelingSessions.filter((b) => b.projectId !== projectId), ...bidSessions],
+          bidLevelingTemplates: loadTemplates && !templatesRes.error
+            ? (templatesRes.data ?? []).map(rowToBidLevelingTemplate)
+            : s.bidLevelingTemplates,
+          milestones: [...s.milestones.filter((m) => m.projectId !== projectId), ...milestones],
+          changeOrders: [...s.changeOrders.filter((c) => c.projectId !== projectId), ...changeOrders],
+          purchasingModules: [...s.purchasingModules.filter((m) => m.projectId !== projectId), ...modules],
+          purchasingItems: [...s.purchasingItems.filter((x) => !ofThisProject(x.purchasingModuleId)), ...purchasingItems],
+          purchasingFreight: [...s.purchasingFreight.filter((x) => !ofThisProject(x.purchasingModuleId)), ...purchasingFreight],
+          purchasingMfrDefaults: [...s.purchasingMfrDefaults.filter((x) => !ofThisProject(x.purchasingModuleId)), ...purchasingMfrDefaults],
+          loadedProjectIds: new Set(s.loadedProjectIds).add(projectId),
+        };
+      });
+    })().finally(() => projectLoads.delete(projectId));
+
+    projectLoads.set(projectId, load);
+    return load;
   },
 
   // =========================================================================
