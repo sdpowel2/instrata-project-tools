@@ -66,9 +66,9 @@ begin
   -- Bad kind is rejected.
   begin
     perform public.surface_reviewed(v_drop, 'question', 2::smallint);
-    v_out := v_out || 'kind "question" rejected: false';
+    v_out := v_out || 'kind "question" rejected: false'::text;
   exception when others then
-    v_out := v_out || 'kind "question" rejected: true';
+    v_out := v_out || 'kind "question" rejected: true'::text;
   end;
 
   raise exception E'REVIEWED SMOKE TEST (all rolled back):\n%', array_to_string(v_out, E'\n');
