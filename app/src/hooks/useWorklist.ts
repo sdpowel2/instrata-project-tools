@@ -10,15 +10,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { SAMPLE_BRIEFING } from '../components/worklist/sampleData';
+import { SAMPLE_BRIEFING, SAMPLE_REVIEWED } from '../components/worklist/sampleData';
 import { addDays, daysBetween, easternDate } from '../components/worklist/format';
-import type { Briefing, WorkItem, WorkItemStatus, Urgency } from '../components/worklist/types';
+import type { Briefing, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency } from '../components/worklist/types';
 
 const ITEM_COLS =
   'id, source, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, user_urgency, ' +
   'effective_urgency, status, snoozed_until, closed_at, closed_by, first_seen, options, answer';
 const BRIEFING_COLS =
-  'briefing_date, ran_at, window_since, missing, source_counts, schedule, open_blocks, read_me, set_aside';
+  'id, briefing_date, ran_at, window_since, missing, source_counts, schedule, open_blocks, read_me, set_aside';
+const REVIEWED_COLS =
+  'id, source, source_key, title, from_label, link, outcome, reason, reason_group, item_id, surfaced_at';
+
+interface ReviewedDbRow {
+  id: string;
+  source: ReviewedRow['source'];
+  source_key: string;
+  title: string;
+  from_label: string | null;
+  link: string | null;
+  outcome: ReviewedRow['outcome'];
+  reason: string;
+  reason_group: string;
+  item_id: string | null;
+  surfaced_at: string | null;
+}
+
+function toReviewed(r: ReviewedDbRow): ReviewedRow {
+  return {
+    id: r.id,
+    source: r.source,
+    sourceKey: r.source_key,
+    title: r.title,
+    from: r.from_label ?? '',
+    link: r.link ?? undefined,
+    outcome: r.outcome,
+    reason: r.reason,
+    reasonGroup: r.reason_group,
+    itemId: r.item_id ?? undefined,
+    surfacedAt: r.surfaced_at ?? undefined,
+  };
+}
 
 interface ItemRow {
   id: string;
@@ -44,6 +76,7 @@ interface ItemRow {
 }
 
 interface BriefingRow {
+  id: string;
   briefing_date: string;
   ran_at: string;
   window_since: string | null;
@@ -73,6 +106,13 @@ export interface Worklist {
   addTask: (title: string, due: string | null) => void;
   answer: (id: string, option: string) => void;
   dismissError: () => void;
+  /** The latest run's reviewed log; null until loadReviewed() has run. */
+  reviewed: ReviewedRow[] | null;
+  reviewedLoading: boolean;
+  reviewedError: string | null;
+  loadReviewed: () => void;
+  /** "Surface this": put a reviewed conversation on the list. */
+  surface: (reviewedId: string, kind: Exclude<WorkItemKind, 'question'>, urgency: Urgency) => void;
 }
 
 function toItem(r: ItemRow, today: string): WorkItem {
@@ -100,6 +140,7 @@ function toItem(r: ItemRow, today: string): WorkItem {
 
 function toBriefing(b: BriefingRow): Omit<Briefing, 'items' | 'closedSinceLast'> {
   return {
+    id: b.id,
     date: b.briefing_date,
     ranAt: b.ran_at,
     since: b.window_since ?? b.ran_at,
@@ -349,6 +390,80 @@ export function useWorklist(): Worklist {
 
   const dismissError = useCallback(() => setError(null), []);
 
+  // ── Reviewed log (2.1): loaded only when the drawer opens ─────────────────
+  const [reviewed, setReviewed] = useState<ReviewedRow[] | null>(null);
+  const [reviewedLoading, setReviewedLoading] = useState(false);
+  const [reviewedError, setReviewedError] = useState<string | null>(null);
+  // Which briefing the cached rows belong to; a new morning run makes them stale.
+  const [reviewedFor, setReviewedFor] = useState<string | undefined>(undefined);
+  const latestBriefingId = mode === 'sample' ? 'sample' : briefingRows[0]?.id;
+
+  const loadReviewed = useCallback(() => {
+    if (mode === 'sample') {
+      setReviewed((prev) => prev ?? SAMPLE_REVIEWED);
+      setReviewedFor('sample');
+      return;
+    }
+    if (!userId || !latestBriefingId) {
+      setReviewed([]);
+      setReviewedFor(latestBriefingId);
+      return;
+    }
+    setReviewedLoading(true);
+    setReviewedError(null);
+    void supabase
+      .from('worklist_reviewed')
+      .select(REVIEWED_COLS)
+      .eq('user_id', userId)
+      .eq('briefing_id', latestBriefingId)
+      .limit(500)
+      .then(({ data, error: e }) => {
+        if (e) {
+          const missing = e.code === '42P01' || e.code === 'PGRST205';
+          setReviewedError(missing ? "The reviewed log isn't set up yet." : `Couldn't load the reviewed log: ${e.message}`);
+          setReviewed([]);
+        } else {
+          setReviewed(((data ?? []) as unknown as ReviewedDbRow[]).map(toReviewed));
+        }
+        setReviewedFor(latestBriefingId);
+        setReviewedLoading(false);
+      });
+  }, [mode, userId, latestBriefingId]);
+
+  const surface = useCallback(
+    (reviewedId: string, kind: Exclude<WorkItemKind, 'question'>, urgency: Urgency) => {
+      const row = reviewed?.find((r) => r.id === reviewedId);
+      if (!row) return;
+      const now = new Date().toISOString();
+      if (mode === 'sample') {
+        const id = `s-${Date.now()}`;
+        setSampleItems((prev) => [
+          {
+            id, kind, source: row.source, title: row.title, from: row.from, due: null, dueBasis: 'none',
+            urgency, urgencyReason: 'Surfaced by you from the reviewed list', link: row.link,
+            carriedDays: 0, status: 'open', userOverridden: true,
+          },
+          ...prev,
+        ]);
+        setReviewed((prev) => prev?.map((r) => (r.id === reviewedId ? { ...r, itemId: id, surfacedAt: now } : r)) ?? null);
+        return;
+      }
+      setReviewed((prev) => prev?.map((r) => (r.id === reviewedId ? { ...r, surfacedAt: now } : r)) ?? null);
+      void supabase
+        .rpc('surface_reviewed', { p_id: reviewedId, p_kind: kind, p_urgency: urgency })
+        .then(({ data, error: e }) => {
+          if (e) {
+            setError(`Surfacing didn't save: ${e.message}`);
+            setReviewed((prev) => prev?.map((r) => (r.id === reviewedId ? { ...r, surfacedAt: undefined } : r)) ?? null);
+            return;
+          }
+          setReviewed((prev) => prev?.map((r) => (r.id === reviewedId ? { ...r, itemId: data as string } : r)) ?? null);
+          load();
+        });
+    },
+    [mode, reviewed, load],
+  );
+
   return {
     mode,
     loading,
@@ -362,5 +477,10 @@ export function useWorklist(): Worklist {
     addTask,
     answer,
     dismissError,
+    reviewed: reviewedFor === latestBriefingId ? reviewed : null,
+    reviewedLoading,
+    reviewedError,
+    loadReviewed,
+    surface,
   };
 }

@@ -70,6 +70,8 @@ export interface SetAsideItem {
 }
 
 export interface Briefing {
+  /** worklist_briefings.id (live mode); used to load the reviewed log. */
+  id?: string;
   /** YYYY-MM-DD the briefing is for. */
   date: string;
   /** ISO timestamp the run finished. */
@@ -104,3 +106,27 @@ export const KIND_LABEL: Record<WorkItemKind, string> = {
   decide: 'Decide',
   question: 'Question',
 };
+
+/** Where the run put a conversation it looked at (My Day 2.1 reviewed log). */
+export type ReviewedOutcome = 'respond' | 'do' | 'decide' | 'carried' | 'read_me' | 'set_aside' | 'dropped';
+
+/** One conversation the morning run reviewed, wherever it landed. */
+export interface ReviewedRow {
+  id: string;
+  source: 'email' | 'teams' | 'monday';
+  sourceKey: string;
+  title: string;
+  from: string;
+  link?: string;
+  outcome: ReviewedOutcome;
+  /** One line from the run: why it landed there. */
+  reason: string;
+  /** Short stable label the drawer groups by. */
+  reasonGroup: string;
+  /** Set once Seth surfaced it (or it was on the list). */
+  itemId?: string;
+  surfacedAt?: string;
+}
+
+/** Outcomes that already put the conversation on the list. */
+export const ON_LIST_OUTCOMES: ReviewedOutcome[] = ['respond', 'do', 'decide', 'carried'];

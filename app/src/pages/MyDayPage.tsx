@@ -6,11 +6,12 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X } from 'lucide-react';
+import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, PageHeader } from '../components/ui';
 import { WorkItemRow } from '../components/worklist/WorkItemRow';
 import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard } from '../components/worklist/SidePanels';
+import { ReviewedDrawer } from '../components/worklist/ReviewedDrawer';
 import { useWorklist } from '../hooks/useWorklist';
 import { formatClock, formatDayClock, formatDue, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
 import type { Briefing, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
@@ -23,6 +24,7 @@ export function MyDayPage() {
   const wl = useWorklist();
   const { briefing, items, today, setStatus, setUrgency, addTask, answer } = wl;
   const [filter, setFilter] = useState<KindFilter>('all');
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   const questions = items.filter((i) => i.kind === 'question' && i.status === 'open');
   const tasks = items.filter((i) => i.kind !== 'question');
@@ -55,7 +57,13 @@ export function MyDayPage() {
       <PageHeader
         eyebrow="My Day"
         title={formatLongDate(today)}
-        subtitle={briefing ? <RunHealth briefing={briefing} /> : 'No briefing yet. Run /morning-worklist in Claude Code.'}
+        subtitle={
+          briefing ? (
+            <RunHealth briefing={briefing} onOpen={() => { wl.loadReviewed(); setReviewOpen(true); }} />
+          ) : (
+            'No briefing yet. Run /morning-worklist in Claude Code.'
+          )
+        }
         actions={
           <>
             {wl.mode === 'sample' && (
@@ -198,15 +206,31 @@ export function MyDayPage() {
           </div>
         )}
       </div>
+      {briefing && (
+        <ReviewedDrawer
+          open={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          rows={wl.reviewed}
+          loading={wl.reviewedLoading}
+          error={wl.reviewedError}
+          counts={briefing.sourceCounts}
+          onSurface={wl.surface}
+        />
+      )}
     </div>
   );
 }
 
-function RunHealth({ briefing }: { briefing: Briefing }) {
+function RunHealth({ briefing, onOpen }: { briefing: Briefing; onOpen: () => void }) {
     const c = briefing.sourceCounts;
     const ok = briefing.missing.length === 0;
     return (
-      <span className="flex items-center gap-1.5 flex-wrap">
+      <button
+        type="button"
+        onClick={onOpen}
+        title="See everything this run reviewed, and surface anything it missed"
+        className="group flex items-center gap-1.5 flex-wrap text-left rounded-md -mx-1 px-1 hover:bg-surface"
+      >
         {ok ? (
           <CircleCheck size={14} className="text-status-success-fg" />
         ) : (
@@ -221,7 +245,10 @@ function RunHealth({ briefing }: { briefing: Briefing }) {
             · Missing: {briefing.missing.map((m) => m.source).join(', ')}
           </span>
         )}
-      </span>
+        <span className="flex items-center gap-1 text-navy font-medium group-hover:underline">
+          <ListChecks size={13} /> See what was reviewed
+        </span>
+      </button>
     );
 }
 

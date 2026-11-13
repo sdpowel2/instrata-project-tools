@@ -34,6 +34,8 @@ const ITEM_COLS =
   'id, source, source_key, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, ' +
   'user_urgency, effective_urgency, status, snoozed_until, first_seen, last_seen, times_seen, options, answer, answered_at';
 const CLOSED_COLS = 'source_key, source, kind, title, status, closed_by, closed_at';
+const SURFACED_COLS =
+  'source, source_key, title, from_label, outcome, reason, reason_group, surfaced_at, item:worklist_items(kind, effective_urgency)';
 const FEEDBACK_COLS =
   'action, from_value, to_value, item_source, item_kind, item_title, item_from, claude_urgency, created_at';
 
@@ -115,6 +117,25 @@ const briefingSchema = z.object({
     .default({ categories: [], items: [] }),
 });
 
+const REVIEW_OUTCOMES = ['respond', 'do', 'decide', 'read_me', 'set_aside', 'dropped', 'carried'] as const;
+
+/** One conversation the run looked at, wherever it landed (My Day 2.1 reviewed log). */
+const reviewedSchema = z.object({
+  source_key: z.string().min(1).max(300).describe('Same key rules as items'),
+  source: z.enum(['email', 'teams', 'monday']),
+  title: z.string().min(1).max(300).describe('Subject, chat name, or monday item name'),
+  from_label: z.string().max(200).optional(),
+  link: z.string().max(2000).optional(),
+  outcome: z.enum(REVIEW_OUTCOMES).describe('Where it landed. "carried" = already open from an earlier run'),
+  reason: z.string().min(1).max(300).describe('One line: why it landed there'),
+  reason_group: z.string().min(1).max(80).describe('Short stable label to group by, e.g. "CC only, no ask"'),
+});
+
+/** Postgres "relation/function does not exist": the 2.1 migration hasn't been applied yet. */
+function notMigrated(error: { code?: string } | null): boolean {
+  return !!error && (error.code === '42P01' || error.code === '42883' || error.code === 'PGRST202' || error.code === 'PGRST205');
+}
+
 const itemSchema = z.object({
   source_key: z
     .string()
@@ -148,8 +169,10 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'Personal My Day worklist. Call this FIRST in a morning-worklist run. Returns: today (Eastern), ' +
         'last_briefing (date, ran_at, window_since — use ran_at as the start of the new window), open_items ' +
         '(open and snoozed, including manual tasks the user added on the page; effective_urgency honours the ' +
-        "user's override), recently_closed (closed in the last 14 days; don't re-propose these), and feedback " +
-        '(recent urgency overrides, dismissals, snoozes, answers) to calibrate urgency.',
+        "user's override), recently_closed (closed in the last 14 days; don't re-propose these), feedback " +
+        '(recent urgency overrides, dismissals, snoozes, answers, surfaces) to calibrate urgency, and ' +
+        'recently_surfaced (conversations the user pulled out of the reviewed list in the last 30 days: each is ' +
+        'a miss, with where the run had put it and why). Treat every recently_surfaced row as a lesson.',
       inputSchema: {
         feedback_days: z.number().int().min(1).max(60).optional().describe('Feedback lookback in days (default 14)'),
       },
@@ -160,7 +183,9 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
       const since = new Date(Date.now() - days * 86_400_000).toISOString();
       const closedSince = new Date(Date.now() - 14 * 86_400_000).toISOString();
 
-      const [last, open, closed, feedback] = await Promise.all([
+      const surfacedSince = new Date(Date.now() - 30 * 86_400_000).toISOString();
+
+      const [last, open, closed, feedback, surfaced] = await Promise.all([
         supa
           .from('worklist_briefings')
           .select('briefing_date, ran_at, window_since, missing')
@@ -191,10 +216,19 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
           .gte('created_at', since)
           .order('created_at', { ascending: false })
           .limit(200),
+        supa
+          .from('worklist_reviewed')
+          .select(SURFACED_COLS)
+          .eq('user_id', userId)
+          .gte('surfaced_at', surfacedSince)
+          .order('surfaced_at', { ascending: false })
+          .limit(100),
       ]);
 
       const firstError = last.error ?? open.error ?? closed.error ?? feedback.error;
       if (firstError) return fail(firstError.message);
+      // Tolerate the reviewed log not existing yet, so deploy order doesn't matter.
+      if (surfaced.error && !notMigrated(surfaced.error)) return fail(surfaced.error.message);
 
       return ok({
         today: easternToday(),
@@ -202,6 +236,7 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         open_items: open.data ?? [],
         recently_closed: closed.data ?? [],
         feedback: feedback.data ?? [],
+        recently_surfaced: surfaced.error ? [] : (surfaced.data ?? []),
       });
     },
   );
@@ -216,8 +251,9 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'read-me, set-aside, run health) plus items upserted by source_key, and resolved_keys closed as done. ' +
         'Re-running the same day replaces that day\'s briefing. The database keeps anything the user closed ' +
         'closed, never changes their urgency override, keeps manual task wording, and only reopens snoozed items ' +
-        'on their date. Items not sent are left as they are (they carry over). Max 100 items. Summaries and ' +
-        'links only — never paste email or chat bodies.',
+        'on their date. Items not sent are left as they are (they carry over). Max 100 items. Also send ' +
+        '`reviewed`: one row per conversation the run looked at, wherever it landed (max 400), so the user can ' +
+        'see and surface anything that was missed. Summaries and links only — never paste email or chat bodies.',
       inputSchema: {
         briefing: briefingSchema,
         items: z.array(itemSchema).max(100).default([]),
@@ -226,10 +262,15 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
           .max(200)
           .default([])
           .describe('source_keys of open items now resolved (e.g. you already replied). Closed as done.'),
+        reviewed: z
+          .array(reviewedSchema)
+          .max(400)
+          .optional()
+          .describe('Every conversation the run looked at (email thread, Teams chat ask, monday item), one row each.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ briefing, items, resolved_keys }) => {
+    async ({ briefing, items, resolved_keys, reviewed }) => {
       const badOptions = items.find((i) => i.options && i.kind !== 'question');
       if (badOptions) return fail(`"options" is only for kind "question" (item ${badOptions.source_key}).`);
       const keys = items.map((i) => i.source_key);
@@ -242,7 +283,17 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         p_resolved_keys: resolved_keys,
       });
       if (error) return fail(error.message);
-      return ok(data);
+      if (!reviewed) return ok(data);
+
+      // The briefing is saved; the reviewed log is a second, separate write. If it
+      // fails, report it alongside the briefing result instead of failing the run.
+      const rv = await supa.rpc('save_reviewed', { p_date: briefing.date, p_rows: reviewed });
+      return ok({
+        ...(data as Record<string, unknown>),
+        reviewed: rv.error
+          ? { error: notMigrated(rv.error) ? 'reviewed log not set up yet (migration pending)' : rv.error.message }
+          : rv.data,
+      });
     },
   );
 }

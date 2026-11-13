@@ -120,10 +120,10 @@ try {
 
   // ── read ───────────────────────────────────────────────────────────────────
   const s1 = await call(access, 'get_worklist_state', {});
-  const state1 = s1.data as { today?: string; open_items?: unknown[]; recently_closed?: unknown[]; feedback?: unknown[] };
-  assert('get_worklist_state → ok with today/open_items/recently_closed/feedback',
+  const state1 = s1.data as { today?: string; open_items?: unknown[]; recently_closed?: unknown[]; feedback?: unknown[]; recently_surfaced?: unknown[] };
+  assert('get_worklist_state → ok with today/open_items/recently_closed/feedback/recently_surfaced',
     !s1.isError && /^\d{4}-\d{2}-\d{2}$/.test(state1.today ?? '') && Array.isArray(state1.open_items)
-      && Array.isArray(state1.recently_closed) && Array.isArray(state1.feedback), s1.text);
+      && Array.isArray(state1.recently_closed) && Array.isArray(state1.feedback) && Array.isArray(state1.recently_surfaced), s1.text);
 
   // ── write ──────────────────────────────────────────────────────────────────
   const save = await call(access, 'save_briefing', {
@@ -139,9 +139,14 @@ try {
       { source_key: 'smoke:respond', source: 'email', kind: 'respond', title: 'Smoke test reply', urgency: 2, urgency_reason: 'test', due: SMOKE_DATE, due_basis: 'stated' },
       { source_key: 'smoke:question', source: 'claude', kind: 'question', title: 'Smoke test question?', urgency: 3, options: ['Yes', 'No'] },
     ],
+    reviewed: [
+      { source_key: 'smoke:respond', source: 'email', title: 'Smoke test reply', outcome: 'respond', reason: 'asks you directly', reason_group: 'direct ask' },
+      { source_key: 'smoke:dropped', source: 'email', title: 'Smoke newsletter', outcome: 'dropped', reason: 'newsletter', reason_group: 'Newsletters / marketing' },
+    ],
   });
-  const saved = save.data as { inserted?: number; briefing_date?: string };
+  const saved = save.data as { inserted?: number; briefing_date?: string; reviewed?: { saved?: number; error?: string } };
   assert('save_briefing → inserted 2 on the smoke date', !save.isError && saved.inserted === 2 && saved.briefing_date === SMOKE_DATE, save.text);
+  assert('  reviewed log → saved 2 rows', saved.reviewed?.saved === 2, saved.reviewed);
 
   const again = await call(access, 'save_briefing', {
     briefing: { date: SMOKE_DATE },
