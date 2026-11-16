@@ -67,6 +67,7 @@ export const TOOL_SCOPES: Record<string, ToolScope> = {
   // worklistTools.ts — personal My Day worklist (registered for admins only)
   get_worklist_state: 'mcp:read',
   save_briefing: 'mcp:write',
+  match_triage_rules: 'mcp:read',
 };
 
 export function isSupportedScope(s: string): s is Scope {

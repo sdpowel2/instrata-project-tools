@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Check, Clock, X, ExternalLink, Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, RotateCcw } from 'lucide-react';
+import { Check, Clock, X, ExternalLink, Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, RotateCcw, ThumbsDown } from 'lucide-react';
 import type { WorkItem, WorkItemSource, Urgency } from './types';
 import { KIND_LABEL, URGENCY_LABEL } from './types';
 import { formatDue, URGENCY_STYLE } from './format';
@@ -34,9 +34,11 @@ interface Props {
   onUrgency: (id: string, urgency: Urgency) => void;
   /** Questions: record the picked option (falls back to marking done). */
   onAnswer?: (id: string, option: string) => void;
+  /** "Surface less like this": open the tuning-rule form for this task (2.2). */
+  onLessLike?: (item: WorkItem) => void;
 }
 
-export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer }: Props) {
+export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLessLike }: Props) {
   const SourceIcon = SOURCE_ICON[item.source];
   const due = item.due ? formatDue(item.due, today) : null;
   const isDone = item.status === 'done';
@@ -138,6 +140,9 @@ export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer }: Prop
             <>
               <IconButton title="Snooze until tomorrow" onClick={() => onStatus(item.id, 'snoozed')}><Clock size={14} /></IconButton>
               <IconButton title="Dismiss" onClick={() => onStatus(item.id, 'dismissed')}><X size={14} /></IconButton>
+              {onLessLike && (item.source === 'email' || item.source === 'teams' || item.source === 'monday') && (
+                <IconButton title="Surface less like this" onClick={() => onLessLike(item)}><ThumbsDown size={14} /></IconButton>
+              )}
             </>
           )}
           {item.link && (
