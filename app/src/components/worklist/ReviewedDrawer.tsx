@@ -1,12 +1,14 @@
 // The reviewed log (My Day 2.1): every conversation the morning run looked at,
 // wherever it landed, grouped by the run's reason. Anything that didn't make
 // the list gets "Surface this", which puts it on the list right away and
-// teaches the next run (see Product Spec/my-day-roadmap.md, 2.1).
+// teaches the next run (see Product Spec/my-day-roadmap.md, 2.1). "More like
+// this" / "Less like this" open the tuning-rule form (2.2).
 
 import { useEffect, useMemo, useState } from 'react';
-import { X, Search, Mail, MessageSquare, LayoutGrid, ExternalLink, Plus, Check } from 'lucide-react';
+import { X, Search, Mail, MessageSquare, LayoutGrid, ExternalLink, Plus, Check, ThumbsUp, ThumbsDown, SlidersHorizontal } from 'lucide-react';
 import type { ReviewedOutcome, ReviewedRow, Urgency, WorkItemKind } from './types';
 import { KIND_LABEL, ON_LIST_OUTCOMES, URGENCY_LABEL } from './types';
+import { OUTCOME_LABEL } from './rules';
 
 type Filter = 'all' | 'list' | 'read_me' | 'set_aside' | 'dropped';
 type SurfaceKind = Exclude<WorkItemKind, 'question'>;
@@ -21,16 +23,6 @@ const FILTERS: { key: Filter; label: string; match: (o: ReviewedOutcome) => bool
 
 const SOURCE_ICON = { email: Mail, teams: MessageSquare, monday: LayoutGrid } as const;
 
-const OUTCOME_LABEL: Record<ReviewedOutcome, string> = {
-  respond: 'Respond',
-  do: 'Do',
-  decide: 'Decide',
-  carried: 'Carried',
-  read_me: 'Read me',
-  set_aside: 'Set aside',
-  dropped: 'Dropped',
-};
-
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -40,9 +32,12 @@ interface Props {
   /** The run line's message counts, for the header. */
   counts: { mail: number; teams: number; monday: number };
   onSurface: (id: string, kind: SurfaceKind, urgency: Urgency) => void;
+  /** Open the rule form pre-filled from this conversation. */
+  onTune: (row: ReviewedRow, direction: 'more' | 'less') => void;
+  onOpenRules: () => void;
 }
 
-export function ReviewedDrawer({ open, onClose, rows, loading, error, counts, onSurface }: Props) {
+export function ReviewedDrawer({ open, onClose, rows, loading, error, counts, onSurface, onTune, onOpenRules }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
 
@@ -86,9 +81,17 @@ export function ReviewedDrawer({ open, onClose, rows, loading, error, counts, on
                 From {counts.mail} emails · {counts.teams} Teams messages · {counts.monday} monday items
               </div>
             </div>
-            <button onClick={onClose} className="p-1.5 rounded-md text-fg-3 hover:text-navy hover:bg-surface" aria-label="Close">
-              <X size={18} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={onOpenRules}
+                className="flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-border text-navy hover:bg-surface"
+              >
+                <SlidersHorizontal size={13} /> Rules
+              </button>
+              <button onClick={onClose} className="p-1.5 rounded-md text-fg-3 hover:text-navy hover:bg-surface" aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
           </div>
 
           <div className="flex gap-1 mt-3 flex-wrap">
@@ -139,7 +142,7 @@ export function ReviewedDrawer({ open, onClose, rows, loading, error, counts, on
                 {group} <span className="text-fg-3 font-medium">· {list.length}</span>
               </div>
               {list.map((r) => (
-                <ReviewedLine key={r.id} row={r} onSurface={onSurface} />
+                <ReviewedLine key={r.id} row={r} onSurface={onSurface} onTune={onTune} />
               ))}
             </section>
           ))}
@@ -149,11 +152,15 @@ export function ReviewedDrawer({ open, onClose, rows, loading, error, counts, on
   );
 }
 
-function ReviewedLine({ row, onSurface }: { row: ReviewedRow; onSurface: Props['onSurface'] }) {
+function ReviewedLine({ row, onSurface, onTune }: { row: ReviewedRow; onSurface: Props['onSurface']; onTune: Props['onTune'] }) {
   const [picking, setPicking] = useState(false);
   const [urgency, setUrgency] = useState<Urgency>(2);
   const Icon = SOURCE_ICON[row.source];
   const onList = ON_LIST_OUTCOMES.includes(row.outcome);
+  // More: anything below the list. Less: anything that took up space (list or Read me).
+  const canMore = !onList;
+  const canLess = onList || row.outcome === 'read_me';
+  const fired = row.ruleIds?.length ?? 0;
 
   return (
     <div className="px-5 py-2.5 border-b border-border-soft last:border-b-0">
@@ -164,6 +171,14 @@ function ReviewedLine({ row, onSurface }: { row: ReviewedRow; onSurface: Props['
           <div className="text-xs text-fg-2 mt-0.5">
             {row.from && <span>{row.from} · </span>}
             <span className="italic text-fg-3">{row.reason}</span>
+            {fired > 0 && (
+              <span
+                className="ml-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-orange bg-orange/10 rounded px-1 py-px not-italic"
+                title={`${fired} of your rules applied to this`}
+              >
+                Your rule
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -184,6 +199,16 @@ function ReviewedLine({ row, onSurface }: { row: ReviewedRow; onSurface: Props['
                 <Plus size={12} /> Surface
               </button>
             </>
+          )}
+          {canMore && (
+            <button onClick={() => onTune(row, 'more')} className="p-1 text-fg-3 hover:text-navy" title="Surface more like this" aria-label="Surface more like this">
+              <ThumbsUp size={13} />
+            </button>
+          )}
+          {canLess && (
+            <button onClick={() => onTune(row, 'less')} className="p-1 text-fg-3 hover:text-navy" title="Surface less like this" aria-label="Surface less like this">
+              <ThumbsDown size={13} />
+            </button>
           )}
           {row.link && (
             <a href={row.link} target="_blank" rel="noreferrer" className="p-1 text-fg-3 hover:text-navy" aria-label="Open original">

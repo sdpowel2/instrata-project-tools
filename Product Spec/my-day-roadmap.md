@@ -98,44 +98,34 @@ create table if not exists public.worklist_reviewed (
 
 From the phase 3 spec's "Triage tuning", adjusted to work without an in-app model call.
 
-### 2.2.1 Database
+### 2.2.1 Database (`add_triage_rules.sql`, built 2026-11-13)
 
-```sql
-create table if not exists public.triage_rules (
-  id             uuid primary key default gen_random_uuid(),
-  user_id        uuid not null default auth.uid() references public.profiles(id) on delete cascade,
-  kind           text not null check (kind in ('hard', 'lesson')),
-  match          jsonb,                    -- hard rules: {sender, domain, subject_terms[], teams_chat, monday_board}
-  effect         text not null check (effect in ('min_read_me', 'min_task', 'suppress')),
-  example_id     uuid references public.worklist_reviewed(id) on delete set null,
-  note           text,                     -- Seth's words
-  active         boolean not null default true,
-  created_from   text not null check (created_from in ('surface_more', 'surface_less', 'manual')),
-  hits_30d       integer not null default 0,
-  created_at     timestamptz not null default now()
-);
-```
-
-Plus `rule_ids uuid[]` on `worklist_reviewed`, so every row shows which rules fired on it.
+- `triage_rules`: `kind` (`hard` | `lesson`), `match` jsonb, `effect` (`min_task` | `min_read_me` | `suppress`), `example_id` → `worklist_reviewed`, `note` (required for lessons), `active`, `created_from` (`surface_more` | `surface_less` | `manual`). Owner-only RLS; the page writes it directly.
+- **Match fields:** `source`, `sender` (exact address), `domain` (subdomains count), `subject_terms` (1–6 words, all must appear), `channel` (text the Teams chat/channel or monday board name contains). At least one besides `source`. The spec's separate `teams_chat` / `monday_board` became `source` + `channel`.
+- `worklist_reviewed` gains `sender`, `channel` and `rule_ids` (which rules fired). The run sends sender/channel; the database computes the hard-rule ids itself, and the run adds the lessons it applied.
+- **Hit counts** come from a view, `triage_rules_with_hits` (reviewed rows in the 30-day window that list the rule), instead of a stored `hits_30d`.
+- One matcher, `triage_rule_matches()`, used by everything below, so the preview, the run and the drawer agree. A TypeScript twin (`app/src/components/worklist/rules.ts`) only powers sample mode.
+- Rows a rule uses as its example are kept past the 30-day purge and same-day re-runs.
 
 ### 2.2.2 How rules run
 
-- **Hard rules:** a new MCP tool, `match_triage_rules(candidates[])`, takes the run's candidate conversations (source, sender, domain, subject, chat, board) and returns, per candidate, the rules that match and the resulting floor or ceiling. The skill must apply them: `min_task` can't land below a task, `min_read_me` can't land below Read me, `suppress` goes to Set aside. Matching is plain code, so it's the same every run.
-- **Lessons:** `get_worklist_state` returns active lessons with their example rows; the skill reads them as examples before classifying.
+- **Hard rules:** MCP tool `match_triage_rules(candidates[])` (read-only, RPC `match_triage_rules`) takes the run's conversations (key, source, sender, title, channel) and returns, per match, the winning effect and rule ids. When rules disagree, the floor wins (`min_task` > `min_read_me` > `suppress`); `suppress` never moves an item already open from an earlier run. The skill (v1.2, Step 8b) must apply them.
+- **Backstop:** `save_reviewed()` re-checks every row and returns `violations` (rows whose outcome breaks a hard rule). The skill fixes those and saves once more, so a hard rule holds even if the model ignored the match result.
+- **Lessons:** `get_worklist_state` returns `triage_rules` (active, with hit counts and example rows); the skill reads lessons as examples before classifying and records the ones it applied in `lesson_ids`.
 
 ### 2.2.3 The modal
 
 1. **Surface more of this** (on any reviewed row not on the list) or **Surface less of this** (on a task, a read-me line, or a Dismiss).
 2. The form is pre-filled from the item: sender, domain, a couple of subject words, the chat or board. Seth trims it and adds an optional note.
 3. **Hard rule or lesson?** Hard if the match fields describe it; lesson if it's a judgment call ("schedule changes from GCs, even FYI").
-4. **Preview** (hard rules only): the match runs as a SQL query against today's reviewed rows. "This would also surface 9 other items", with the list, before saving.
+4. **Preview** (hard rules only): `preview_triage_rule()` runs the match against the latest run's reviewed rows: how many match, how many would move (with the list), and how many matched in the last 30 days.
 5. Save, edit or cancel. It applies from the next run.
 
 Claude proposing the rule itself (spec step 3) needs a model call from the app. Deferred to 2.9; until then the nightly run can suggest rules in its chat summary.
 
 ### 2.2.4 Rules page
 
-A settings view under My Day: every rule with kind, match, effect, note, 30-day hit count, and toggles to edit, disable or delete.
+A settings view under My Day: every rule with kind, match, effect, note, 30-day hit count, and toggles to edit, disable or delete. Built as a right-hand drawer ("Triage rules" on My Day, or "Rules" in the reviewed drawer). Entry points for the form: thumbs up/down on reviewed rows, thumbs down on a task, "New rule" in the drawer. Read-me lines get theirs in 2.5.
 
 ### 2.2.5 Done when
 

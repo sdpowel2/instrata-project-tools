@@ -7,7 +7,10 @@
  *                       feedback (urgency overrides, dismissals) as calibration.
  *   save_briefing       the run's single write, via the save_briefing() RPC
  *                       (supabase/migrations/add_worklist.sql), all in one
- *                       transaction.
+ *                       transaction, then the reviewed log (save_reviewed()).
+ *   match_triage_rules  which of the user's hard tuning rules apply to the
+ *                       run's candidate conversations (My Day 2.2,
+ *                       supabase/migrations/add_triage_rules.sql). Read-only.
  *
  * The rules live in the database, not here: rows are owner-only (RLS), and
  * save_briefing() never reopens what the user closed, never touches the user's
@@ -36,6 +39,8 @@ const ITEM_COLS =
 const CLOSED_COLS = 'source_key, source, kind, title, status, closed_by, closed_at';
 const SURFACED_COLS =
   'source, source_key, title, from_label, outcome, reason, reason_group, surfaced_at, item:worklist_items(kind, effective_urgency)';
+const RULE_COLS = 'id, kind, effect, match, note, example_id, hits_30d, last_hit_at, created_at';
+const EXAMPLE_COLS = 'id, source, title, from_label, outcome, reason, reason_group';
 const FEEDBACK_COLS =
   'action, from_value, to_value, item_source, item_kind, item_title, item_from, claude_urgency, created_at';
 
@@ -129,6 +134,26 @@ const reviewedSchema = z.object({
   outcome: z.enum(REVIEW_OUTCOMES).describe('Where it landed. "carried" = already open from an earlier run'),
   reason: z.string().min(1).max(300).describe('One line: why it landed there'),
   reason_group: z.string().min(1).max(80).describe('Short stable label to group by, e.g. "CC only, no ask"'),
+  sender: z
+    .string()
+    .max(200)
+    .optional()
+    .describe("Email: the counterpart's address. Teams: the asker's address. monday: leave out."),
+  channel: z.string().max(200).optional().describe('Teams chat or channel name, or monday board name'),
+  lesson_ids: z
+    .array(z.string().uuid())
+    .max(10)
+    .optional()
+    .describe('ids of the triage_rules lessons that changed where this landed'),
+});
+
+/** One conversation to check against the user's hard rules (same fields as a reviewed row). */
+const candidateSchema = z.object({
+  key: z.string().min(1).max(300).describe('The source_key the conversation will have'),
+  source: z.enum(['email', 'teams', 'monday']),
+  sender: z.string().max(200).optional(),
+  title: z.string().min(1).max(300),
+  channel: z.string().max(200).optional(),
 });
 
 /** Postgres "relation/function does not exist": the 2.1 migration hasn't been applied yet. */
@@ -172,7 +197,10 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         "user's override), recently_closed (closed in the last 14 days; don't re-propose these), feedback " +
         '(recent urgency overrides, dismissals, snoozes, answers, surfaces) to calibrate urgency, and ' +
         'recently_surfaced (conversations the user pulled out of the reviewed list in the last 30 days: each is ' +
-        'a miss, with where the run had put it and why). Treat every recently_surfaced row as a lesson.',
+        'a miss, with where the run had put it and why). Treat every recently_surfaced row as a lesson. Also ' +
+        "triage_rules: the user's active tuning rules with 30-day hit counts. kind \"lesson\" = a judgment call in " +
+        'their words (note) with an example row: read these before classifying. kind "hard" = applied by ' +
+        'match_triage_rules, listed here for reference.',
       inputSchema: {
         feedback_days: z.number().int().min(1).max(60).optional().describe('Feedback lookback in days (default 14)'),
       },
@@ -185,7 +213,7 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
 
       const surfacedSince = new Date(Date.now() - 30 * 86_400_000).toISOString();
 
-      const [last, open, closed, feedback, surfaced] = await Promise.all([
+      const [last, open, closed, feedback, surfaced, rules] = await Promise.all([
         supa
           .from('worklist_briefings')
           .select('briefing_date, ran_at, window_since, missing')
@@ -223,12 +251,34 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
           .gte('surfaced_at', surfacedSince)
           .order('surfaced_at', { ascending: false })
           .limit(100),
+        supa
+          .from('triage_rules_with_hits')
+          .select(RULE_COLS)
+          .eq('user_id', userId)
+          .eq('active', true)
+          .order('created_at', { ascending: true })
+          .limit(200),
       ]);
 
       const firstError = last.error ?? open.error ?? closed.error ?? feedback.error;
       if (firstError) return fail(firstError.message);
       // Tolerate the reviewed log not existing yet, so deploy order doesn't matter.
       if (surfaced.error && !notMigrated(surfaced.error)) return fail(surfaced.error.message);
+      if (rules.error && !notMigrated(rules.error)) return fail(rules.error.message);
+
+      // Attach each rule's example conversation (lessons lean on it).
+      const ruleRows = (rules.error ? [] : (rules.data ?? [])) as unknown as Array<Record<string, unknown>>;
+      const exampleIds = ruleRows.map((r) => r.example_id).filter((id): id is string => typeof id === 'string');
+      let examples = new Map<string, unknown>();
+      if (exampleIds.length > 0) {
+        const ex = await supa.from('worklist_reviewed').select(EXAMPLE_COLS).in('id', exampleIds);
+        if (ex.error) return fail(ex.error.message);
+        examples = new Map((ex.data ?? []).map((e) => [(e as { id: string }).id, e]));
+      }
+      const triageRules = ruleRows.map(({ example_id, ...r }) => ({
+        ...r,
+        example: typeof example_id === 'string' ? (examples.get(example_id) ?? null) : null,
+      }));
 
       return ok({
         today: easternToday(),
@@ -237,6 +287,7 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         recently_closed: closed.data ?? [],
         feedback: feedback.data ?? [],
         recently_surfaced: surfaced.error ? [] : (surfaced.data ?? []),
+        triage_rules: triageRules,
       });
     },
   );
@@ -253,7 +304,9 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'closed, never changes their urgency override, keeps manual task wording, and only reopens snoozed items ' +
         'on their date. Items not sent are left as they are (they carry over). Max 100 items. Also send ' +
         '`reviewed`: one row per conversation the run looked at, wherever it landed (max 400), so the user can ' +
-        'see and surface anything that was missed. Summaries and links only — never paste email or chat bodies.',
+        "see and surface anything that was missed. The result's reviewed.violations lists rows whose outcome breaks " +
+        "one of the user's hard rules; fix those and call save_briefing once more with the corrected payload. " +
+        'Summaries and links only — never paste email or chat bodies.',
       inputSchema: {
         briefing: briefingSchema,
         items: z.array(itemSchema).max(100).default([]),
@@ -294,6 +347,34 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
           ? { error: notMigrated(rv.error) ? 'reviewed log not set up yet (migration pending)' : rv.error.message }
           : rv.data,
       });
+    },
+  );
+
+  // ── Read: which hard tuning rules apply to this run's conversations ─────────
+  server.registerTool(
+    'match_triage_rules',
+    {
+      title: 'Match my triage rules',
+      description:
+        'Personal My Day worklist (2.2 tuning rules). Call once in a morning-worklist run, after gathering every ' +
+        'conversation and before deciding where each lands. Send one candidate per conversation (the same ' +
+        'conversations as the reviewed rows): key (its source_key), source, sender address, title, and chat / ' +
+        'board name. Returns hard_rules (how many are active) and matched: for each candidate a hard rule ' +
+        'matches, the winning effect and the rule ids. Effects are binding: min_task = must be a task (respond, ' +
+        'do or decide), min_read_me = at least a Read me line, suppress = Set aside (never moves an item that is ' +
+        'already open). Matching is done by the database, so it is the same every run.',
+      inputSchema: {
+        candidates: z.array(candidateSchema).max(500),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ candidates }) => {
+      const { data, error } = await supa.rpc('match_triage_rules', { p_candidates: candidates });
+      if (error) {
+        if (notMigrated(error)) return ok({ hard_rules: 0, candidates: candidates.length, matched: [], note: 'tuning rules not set up yet' });
+        return fail(error.message);
+      }
+      return ok(data);
     },
   );
 }

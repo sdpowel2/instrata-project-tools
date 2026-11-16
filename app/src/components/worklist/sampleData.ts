@@ -1,7 +1,7 @@
 // Fictional sample briefing used until the worklist tables exist. Names,
 // projects and links are made up; nothing here comes from real mail or chat.
 
-import type { Briefing, ReviewedRow } from './types';
+import type { Briefing, ReviewedRow, TriageRule } from './types';
 
 export const SAMPLE_BRIEFING: Briefing = {
   date: '2026-11-05',
@@ -116,17 +116,36 @@ export const SAMPLE_BRIEFING: Briefing = {
 
 /** Fictional reviewed log for the sample briefing (one row per conversation). */
 export const SAMPLE_REVIEWED: ReviewedRow[] = [
-  { id: 'v1', source: 'email', sourceKey: 'email:display mounting heights|dana@gcexample.com', title: 'Display mounting heights - need before backing order', from: 'Dana Ortiz (GC PM)', link: '#', outcome: 'respond', reason: 'GC blocked on your answer', reasonGroup: 'Direct ask', itemId: 'w1' },
-  { id: 'v2', source: 'teams', sourceKey: 'teams:chat-sam:msg-1', title: 'Sam Patel', from: 'Sam Patel', link: '#', outcome: 'respond', reason: 'asks where the change order goes', reasonGroup: 'Direct ask', itemId: 'w3' },
-  { id: 'v3', source: 'monday', sourceKey: 'monday:1001', title: 'Westlake Library renovation', from: 'Post-Sales board', link: '#', outcome: 'carried', reason: 'cutsheets due tomorrow', reasonGroup: 'Due soon on monday', itemId: 'w4' },
-  { id: 'v4', source: 'email', sourceKey: 'email:manufacturer visit dates|riley@vendor.com', title: 'Manufacturer visit - Nov 17-19?', from: 'Riley Chen', link: '#', outcome: 'respond', reason: 'needs dates to book travel', reasonGroup: 'Waiting on you', itemId: 'w6' },
-  { id: 'v5', source: 'email', sourceKey: 'email:riverside medical schedule update|pm@gcexample.com', title: 'Riverside Medical - revised completion date', from: 'Riverside GC', link: '#', outcome: 'read_me', reason: 'schedule moved up two weeks', reasonGroup: 'Worth knowing' },
-  { id: 'v6', source: 'email', sourceKey: 'email:courthouse courtroom av|bids@platform.com', title: 'Bid invite: County Courthouse courtroom AV', from: 'Bid platform', link: '#', outcome: 'read_me', reason: 'looks like AV scope', reasonGroup: 'Worth knowing' },
-  { id: 'v7', source: 'email', sourceKey: 'email:projector pricing update|sales@distributor.com', title: 'Projector pricing update', from: 'Distributor sales', link: '#', outcome: 'set_aside', reason: 'pricing blast, no ask', reasonGroup: 'Newsletters / marketing' },
-  { id: 'v8', source: 'email', sourceKey: 'email:rfi 315 plumbing riser|procore@gcexample.com', title: 'RFI 315 - plumbing riser conflict', from: 'Procore', link: '#', outcome: 'set_aside', reason: 'other trade, not AV', reasonGroup: 'Other trade' },
-  { id: 'v9', source: 'email', sourceKey: 'email:lobby displays - quick question|jordan@client.com', title: 'Lobby displays - quick question', from: 'Jordan (client)', link: '#', outcome: 'set_aside', reason: 'you were CC only', reasonGroup: 'CC only, no ask' },
-  { id: 'v10', source: 'email', sourceKey: 'email:weekly av digest|news@trade.com', title: 'Weekly AV industry digest', from: 'Trade newsletter', link: '#', outcome: 'dropped', reason: 'newsletter', reasonGroup: 'Newsletters / marketing' },
-  { id: 'v11', source: 'email', sourceKey: 'email:automatic reply: out of office|ooo@vendor.com', title: 'Automatic reply: Out of office', from: 'Vendor rep', link: '#', outcome: 'dropped', reason: 'auto-reply', reasonGroup: 'Automated / notifications' },
-  { id: 'v12', source: 'teams', sourceKey: 'teams:chat-friday:msg-9', title: 'Friday lunch?', from: 'Team chat', link: '#', outcome: 'dropped', reason: 'small talk, no ask', reasonGroup: 'Social chats' },
-  { id: 'v13', source: 'monday', sourceKey: 'monday:1077', title: 'Heartwood Wealth Advisors (Close Out)', from: 'Post-Sales board', link: '#', outcome: 'set_aside', reason: 'shop drawings date long past', reasonGroup: 'Stale monday' },
+  { id: 'v1', source: 'email', sourceKey: 'email:display mounting heights|dana@gcexample.com', title: 'Display mounting heights - need before backing order', from: 'Dana Ortiz (GC PM)', link: '#', outcome: 'respond', reason: 'GC blocked on your answer', reasonGroup: 'Direct ask', itemId: 'w1', sender: 'dana@gcexample.com' },
+  { id: 'v2', source: 'teams', sourceKey: 'teams:chat-sam:msg-1', title: 'Sam Patel', from: 'Sam Patel', link: '#', outcome: 'respond', reason: 'asks where the change order goes', reasonGroup: 'Direct ask', itemId: 'w3', sender: 'sam.patel@instrata.com', channel: 'Sam Patel' },
+  { id: 'v3', source: 'monday', sourceKey: 'monday:1001', title: 'Westlake Library renovation', from: 'Post-Sales board', link: '#', outcome: 'carried', reason: 'cutsheets due tomorrow', reasonGroup: 'Due soon on monday', itemId: 'w4', channel: 'AV Post-Sales Project Summary' },
+  { id: 'v4', source: 'email', sourceKey: 'email:manufacturer visit dates|riley@vendor.com', title: 'Manufacturer visit - Nov 17-19?', from: 'Riley Chen', link: '#', outcome: 'respond', reason: 'needs dates to book travel', reasonGroup: 'Waiting on you', itemId: 'w6', sender: 'riley@vendor.com' },
+  { id: 'v5', source: 'email', sourceKey: 'email:riverside medical schedule update|pm@gcexample.com', title: 'Riverside Medical - revised completion date', from: 'Riverside GC', link: '#', outcome: 'read_me', reason: 'schedule moved up two weeks', reasonGroup: 'Worth knowing', sender: 'pm@gcexample.com', ruleIds: ['rule-1'] },
+  { id: 'v6', source: 'email', sourceKey: 'email:courthouse courtroom av|bids@platform.com', title: 'Bid invite: County Courthouse courtroom AV', from: 'Bid platform', link: '#', outcome: 'read_me', reason: 'looks like AV scope', reasonGroup: 'Worth knowing', sender: 'bids@platform.com' },
+  { id: 'v7', source: 'email', sourceKey: 'email:projector pricing update|sales@distributor.com', title: 'Projector pricing update', from: 'Distributor sales', link: '#', outcome: 'set_aside', reason: 'pricing blast, no ask', reasonGroup: 'Newsletters / marketing', sender: 'sales@distributor.com', ruleIds: ['rule-2'] },
+  { id: 'v8', source: 'email', sourceKey: 'email:rfi 315 plumbing riser|procore@gcexample.com', title: 'RFI 315 - plumbing riser conflict', from: 'Procore', link: '#', outcome: 'set_aside', reason: 'other trade, not AV', reasonGroup: 'Other trade', sender: 'no-reply@procore.com' },
+  { id: 'v9', source: 'email', sourceKey: 'email:lobby displays - quick question|jordan@client.com', title: 'Lobby displays - quick question', from: 'Jordan (client)', link: '#', outcome: 'set_aside', reason: 'you were CC only', reasonGroup: 'CC only, no ask', sender: 'jordan@client.com' },
+  { id: 'v10', source: 'email', sourceKey: 'email:weekly av digest|news@trade.com', title: 'Weekly AV industry digest', from: 'Trade newsletter', link: '#', outcome: 'dropped', reason: 'newsletter', reasonGroup: 'Newsletters / marketing', sender: 'news@trade.com' },
+  { id: 'v11', source: 'email', sourceKey: 'email:automatic reply: out of office|ooo@vendor.com', title: 'Automatic reply: Out of office', from: 'Vendor rep', link: '#', outcome: 'dropped', reason: 'auto-reply', reasonGroup: 'Automated / notifications', sender: 'ooo@vendor.com' },
+  { id: 'v12', source: 'teams', sourceKey: 'teams:chat-friday:msg-9', title: 'Friday lunch?', from: 'Team chat', link: '#', outcome: 'dropped', reason: 'small talk, no ask', reasonGroup: 'Social chats', sender: 'alex@instrata.com', channel: 'AV Team' },
+  { id: 'v13', source: 'monday', sourceKey: 'monday:1077', title: 'Heartwood Wealth Advisors (Close Out)', from: 'Post-Sales board', link: '#', outcome: 'set_aside', reason: 'shop drawings date long past', reasonGroup: 'Stale monday', channel: 'AV Post-Sales Project Summary' },
+];
+
+/** Sample tuning rules (2.2): one lesson, one hard suppress, one switched off. */
+export const SAMPLE_RULES: TriageRule[] = [
+  {
+    id: 'rule-1', kind: 'lesson', match: { domain: 'gcexample.com' }, effect: 'min_read_me',
+    note: "Schedule changes from a GC matter even when they're sent FYI", active: true,
+    createdFrom: 'surface_more', exampleId: 'v5', createdAt: '2026-11-02T14:10:00Z', hits30d: 4, lastHitAt: '2026-11-05T11:02:00Z',
+  },
+  {
+    id: 'rule-2', kind: 'hard', match: { source: 'email', domain: 'distributor.com' }, effect: 'suppress',
+    note: 'Distributor pricing blasts', active: true,
+    createdFrom: 'surface_less', exampleId: 'v7', createdAt: '2026-10-28T13:00:00Z', hits30d: 9, lastHitAt: '2026-11-05T11:02:00Z',
+  },
+  {
+    id: 'rule-3', kind: 'hard', match: { source: 'email', subjectTerms: ['rfi'] }, effect: 'min_task',
+    note: 'Every RFI', active: false,
+    createdFrom: 'manual', createdAt: '2026-10-20T15:30:00Z', hits30d: 0,
+  },
 ];

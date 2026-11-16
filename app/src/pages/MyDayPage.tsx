@@ -6,13 +6,16 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X, ListChecks } from 'lucide-react';
+import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X, ListChecks, SlidersHorizontal } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, PageHeader } from '../components/ui';
 import { WorkItemRow } from '../components/worklist/WorkItemRow';
 import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard } from '../components/worklist/SidePanels';
 import { ReviewedDrawer } from '../components/worklist/ReviewedDrawer';
+import { RulesDrawer } from '../components/worklist/RulesDrawer';
+import { RuleModal, type RuleTarget } from '../components/worklist/RuleModal';
 import { useWorklist } from '../hooks/useWorklist';
+import { useTriageRules } from '../hooks/useTriageRules';
 import { formatClock, formatDayClock, formatDue, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
 import type { Briefing, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
 import { KIND_LABEL, URGENCY_LABEL } from '../components/worklist/types';
@@ -20,11 +23,16 @@ import { KIND_LABEL, URGENCY_LABEL } from '../components/worklist/types';
 type KindFilter = 'all' | Exclude<WorkItemKind, 'question'>;
 
 export function MyDayPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const wl = useWorklist();
+  const tr = useTriageRules(wl.mode, user?.id, wl.reviewed);
   const { briefing, items, today, setStatus, setUrgency, addTask, answer } = wl;
   const [filter, setFilter] = useState<KindFilter>('all');
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [ruleTarget, setRuleTarget] = useState<RuleTarget | null>(null);
+  // "Less like this" on a task waits for the reviewed log, to pre-fill from its row.
+  const [lessItem, setLessItem] = useState<WorkItem | null>(null);
 
   const questions = items.filter((i) => i.kind === 'question' && i.status === 'open');
   const tasks = items.filter((i) => i.kind !== 'question');
@@ -48,7 +56,19 @@ export function MyDayPage() {
     );
   }
 
-  const rowProps = { today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer };
+  const openRules = () => { tr.load(); setRulesOpen(true); };
+  const lessLike = (item: WorkItem) => { if (!wl.reviewed) wl.loadReviewed(); setLessItem(item); };
+  const lessExample = lessItem
+    ? (wl.reviewed?.find((r) => r.itemId === lessItem.id || (!!lessItem.sourceKey && r.sourceKey === lessItem.sourceKey)) ?? null)
+    : null;
+  const modalTarget: RuleTarget | null =
+    ruleTarget ??
+    (lessItem && wl.reviewed && !wl.reviewedLoading
+      ? { mode: 'create', direction: 'less', example: lessExample, fallbackTitle: lessItem.title }
+      : null);
+  const closeModal = () => { setRuleTarget(null); setLessItem(null); };
+
+  const rowProps = { today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer, onLessLike: lessLike };
 
   const counts = (k: KindFilter) => (k === 'all' ? open.length : open.filter((i) => i.kind === k).length);
 
@@ -71,6 +91,13 @@ export function MyDayPage() {
                 Sample data
               </span>
             )}
+            <button
+              onClick={openRules}
+              title="Your rules for the morning run"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-navy bg-white border border-border rounded-lg hover:bg-surface"
+            >
+              <SlidersHorizontal size={13} /> Triage rules
+            </button>
             <button
               disabled
               title="Coming later: run the briefing from here"
@@ -215,6 +242,29 @@ export function MyDayPage() {
           error={wl.reviewedError}
           counts={briefing.sourceCounts}
           onSurface={wl.surface}
+          onTune={(row, direction) => setRuleTarget({ mode: 'create', direction, example: row })}
+          onOpenRules={() => { setReviewOpen(false); openRules(); }}
+        />
+      )}
+      <RulesDrawer
+        open={rulesOpen}
+        onClose={() => setRulesOpen(false)}
+        rules={tr.rules}
+        loading={tr.loading}
+        error={tr.error}
+        today={today}
+        onNew={() => setRuleTarget({ mode: 'create', direction: null, example: null })}
+        onEdit={(rule) => setRuleTarget({ mode: 'edit', rule, example: wl.reviewed?.find((r) => r.id === rule.exampleId) ?? null })}
+        onActive={tr.setActive}
+        onDelete={tr.remove}
+      />
+      {modalTarget && (
+        <RuleModal
+          key={modalTarget.mode === 'edit' ? modalTarget.rule.id : `${modalTarget.direction}-${modalTarget.example?.id ?? lessItem?.id ?? 'new'}`}
+          target={modalTarget}
+          onClose={closeModal}
+          onSave={tr.save}
+          onPreview={tr.preview}
         />
       )}
     </div>
