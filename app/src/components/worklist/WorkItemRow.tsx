@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
-import { Check, Clock, X, ExternalLink, Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, RotateCcw, ThumbsDown } from 'lucide-react';
+import { Check, Clock, X, ExternalLink, Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, RotateCcw, ThumbsDown, FolderPlus } from 'lucide-react';
+import type { Project } from '../../types';
 import type { WorkItem, WorkItemSource, Urgency } from './types';
 import { KIND_LABEL, URGENCY_LABEL } from './types';
 import { formatDue, URGENCY_STYLE } from './format';
 import { WorkTypeChip } from './WorkTypeChip';
 import type { WorkType } from './types';
+import { ProjectChip, SuggestionLine } from './ProjectLink';
 
 const SOURCE_ICON: Record<WorkItemSource, typeof Mail> = {
   email: Mail,
@@ -40,12 +42,24 @@ interface Props {
   onLessLike?: (item: WorkItem) => void;
   /** Confirm or correct the work type (2.3). */
   onWorkType?: (id: string, workType: WorkType) => void;
+  /** Connect project (2.4): the store's projects by id, and the link actions. */
+  projectsById?: Map<string, Project>;
+  onLink?: (item: WorkItem) => void;
+  onUnlink?: (id: string) => void;
+  onSuggestion?: (id: string, accept: boolean) => void;
 }
 
-export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLessLike, onWorkType }: Props) {
+export function WorkItemRow({
+  item, today, onStatus, onUrgency, onAnswer, onLessLike, onWorkType, projectsById, onLink, onUnlink, onSuggestion,
+}: Props) {
   const SourceIcon = SOURCE_ICON[item.source];
   const due = item.due ? formatDue(item.due, today) : null;
   const isDone = item.status === 'done';
+  const linked = item.projectId ? projectsById?.get(item.projectId) : undefined;
+  const suggested =
+    !item.projectId && item.suggestedProjectId && item.status === 'open'
+      ? projectsById?.get(item.suggestedProjectId)
+      : undefined;
 
   return (
     <div className="group flex items-start gap-3 px-5 py-3 border-b border-border-soft last:border-b-0 hover:bg-surface/60 transition-colors">
@@ -82,6 +96,9 @@ export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLess
             {item.from}
           </span>
           {onWorkType && item.kind !== 'question' && <WorkTypeChip item={item} onPick={onWorkType} />}
+          {item.projectId && (
+            <ProjectChip project={linked} onUnlink={onUnlink ? () => onUnlink(item.id) : undefined} />
+          )}
           {due && (
             <span
               className={due.overdue ? 'text-status-danger-fg font-medium' : ''}
@@ -106,6 +123,14 @@ export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLess
             </span>
           )}
         </div>
+
+        {suggested && onSuggestion && (
+          <SuggestionLine
+            project={suggested}
+            onConfirm={() => onSuggestion(item.id, true)}
+            onDismiss={() => onSuggestion(item.id, false)}
+          />
+        )}
 
         {/* Phase 2: Claude's question options */}
         {item.options && !isDone && (
@@ -145,6 +170,9 @@ export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLess
             <>
               <IconButton title="Snooze until tomorrow" onClick={() => onStatus(item.id, 'snoozed')}><Clock size={14} /></IconButton>
               <IconButton title="Dismiss" onClick={() => onStatus(item.id, 'dismissed')}><X size={14} /></IconButton>
+              {onLink && item.kind !== 'question' && !item.projectId && (
+                <IconButton title="Connect project" onClick={() => onLink(item)}><FolderPlus size={14} /></IconButton>
+              )}
               {onLessLike && (item.source === 'email' || item.source === 'teams' || item.source === 'monday') && (
                 <IconButton title="Surface less like this" onClick={() => onLessLike(item)}><ThumbsDown size={14} /></IconButton>
               )}

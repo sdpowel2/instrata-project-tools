@@ -18,6 +18,7 @@ import { EffortSurveyPrompt, EffortSurveyFooter } from './EffortSurvey';
 import { ProjectLog } from '../components/ProjectLog';
 import { ProjectDocumentationSection } from '../components/ProjectDocumentation';
 import { WikiSummaryCard } from '../components/wiki/WikiSummaryCard';
+import { ProjectActivityPanel } from '../components/worklist/ProjectActivityPanel';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { uploadFile } from '../lib/storage';
 import { fileGeneratedFile } from '../lib/projectFiles';
@@ -346,6 +347,9 @@ export function ProjectOverview() {
       <div className="mt-5">
         <WikiSummaryCard projectId={project.id} />
       </div>
+
+      {/* My Day tasks linked to this project (admins only; owner-only rows) */}
+      {isAdmin && <ProjectActivityPanel projectId={project.id} />}
 
       {/* Project Log — comments, files, client/GC log (scaffolded) */}
       <div className="mt-5">
