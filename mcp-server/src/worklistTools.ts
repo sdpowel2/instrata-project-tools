@@ -11,6 +11,10 @@
  *   match_triage_rules  which of the user's hard tuning rules apply to the
  *                       run's candidate conversations (My Day 2.2,
  *                       supabase/migrations/add_triage_rules.sql). Read-only.
+ *   find_projects       batch lookup of projects by code, number or monday item
+ *                       id, so the run can suggest a project for a task (My Day
+ *                       2.4). Read-only. The run only ever suggests; linking is
+ *                       the user's call (add_worklist_projects.sql enforces it).
  *
  * The rules live in the database, not here: rows are owner-only (RLS), and
  * save_briefing() never reopens what the user closed, never touches the user's
@@ -38,7 +42,8 @@ const HHMM = /^\d{2}:\d{2}$/;
 const ITEM_COLS =
   'id, source, source_key, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, ' +
   'user_urgency, effective_urgency, status, snoozed_until, first_seen, last_seen, times_seen, options, answer, answered_at, ' +
-  'work_type, work_confidence, user_work_type, effective_work_type';
+  'work_type, work_confidence, user_work_type, effective_work_type, ' +
+  'project_id, suggested_project_id, dismissed_project_id';
 const CLOSED_COLS = 'source_key, source, kind, title, status, closed_by, closed_at';
 const SURFACED_COLS =
   'source, source_key, title, from_label, outcome, reason, reason_group, surfaced_at, item:worklist_items(kind, effective_urgency)';
@@ -198,6 +203,15 @@ const itemSchema = z.object({
     .record(z.string().max(60), z.string().max(300))
     .optional()
     .describe('Ids a worker will need later, e.g. {conversation_id, message_id} or {chat_id, message_id}. Ids only.'),
+  suggested_project_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      'A project id from find_projects, only for a confident match (monday item id, or the project code or ' +
+        'exact number in the subject or summary). Shown to the user as a suggestion; you can never link a task. ' +
+        'Skipped if the task is already linked or the user dismissed that project for it.',
+    ),
 });
 
 export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClient, userId: string): void {
@@ -217,7 +231,9 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'a miss, with where the run had put it and why). Treat every recently_surfaced row as a lesson. Also ' +
         "triage_rules: the user's active tuning rules with 30-day hit counts. kind \"lesson\" = a judgment call in " +
         'their words (note) with an example row: read these before classifying. kind "hard" = applied by ' +
-        'match_triage_rules, listed here for reference.',
+        'match_triage_rules, listed here for reference. Each open item carries project_id (linked by the user), ' +
+        'suggested_project_id (your earlier suggestion, still pending) and dismissed_project_id (a project the ' +
+        'user said no to for that task: never suggest it again).',
       inputSchema: {
         feedback_days: z.number().int().min(1).max(60).optional().describe('Feedback lookback in days (default 14)'),
       },
@@ -359,12 +375,13 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
       // Work-type tags (2.3) and the reviewed log are separate writes after the
       // briefing. If one fails, report it alongside the result instead of failing the run.
       const tags = items
-        .filter((i) => i.work_type || i.source_ref)
+        .filter((i) => i.work_type || i.source_ref || i.suggested_project_id)
         .map((i) => ({
           source_key: i.source_key,
           ...(i.work_type ? { work_type: i.work_type } : {}),
           ...(i.work_confidence !== undefined ? { work_confidence: Math.round(i.work_confidence * 100) / 100 } : {}),
           ...(i.source_ref ? { source_ref: i.source_ref } : {}),
+          ...(i.suggested_project_id ? { suggested_project_id: i.suggested_project_id.toLowerCase() } : {}),
         }));
       if (tags.length > 0) {
         const wt = await supa.rpc('save_work_tags', { p_tags: tags });
@@ -412,6 +429,58 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         return fail(error.message);
       }
       return ok(data);
+    },
+  );
+
+  // ── Read: projects for the run's suggestions (2.4) ─────────────────────────
+  server.registerTool(
+    'find_projects',
+    {
+      title: 'Find projects by code, number or monday item',
+      description:
+        'Personal My Day worklist (2.4 connect project). Batch lookup for suggesting a project on a task: send ' +
+        'the project codes (INST-YYYY-NNNN) and exact project numbers seen in subjects or summaries, and the ' +
+        'monday item ids of monday tasks. Returns each matching project (id, project_code, number, name, client, ' +
+        'status) with matched_by saying which input found it (code, number, monday_presales or ' +
+        'monday_postsales). Exact matches only. Use the id as suggested_project_id on that task in save_briefing.',
+      inputSchema: {
+        codes: z.array(z.string().min(1).max(40)).max(100).optional(),
+        numbers: z.array(z.string().min(1).max(60)).max(100).optional(),
+        monday_item_ids: z.array(z.number().int().positive()).max(200).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ codes, numbers, monday_item_ids }) => {
+      const cols = 'id, project_code, number, name, client, status, monday_presales_item_id, monday_postsales_item_id';
+      const codeList = [...new Set((codes ?? []).map((c) => c.trim().toUpperCase()).filter(Boolean))];
+      const numberList = [...new Set((numbers ?? []).map((n) => n.trim()).filter(Boolean))];
+      const ids = [...new Set(monday_item_ids ?? [])];
+      if (codeList.length + numberList.length + ids.length === 0) return ok({ projects: [] });
+
+      const empty = Promise.resolve({ data: [] as Record<string, unknown>[], error: null });
+      const [byCode, byNumber, byPre, byPost] = await Promise.all([
+        codeList.length ? supa.from('projects').select(cols).in('project_code', codeList) : empty,
+        numberList.length ? supa.from('projects').select(cols).in('number', numberList) : empty,
+        ids.length ? supa.from('projects').select(cols).in('monday_presales_item_id', ids) : empty,
+        ids.length ? supa.from('projects').select(cols).in('monday_postsales_item_id', ids) : empty,
+      ]);
+      const err = byCode.error ?? byNumber.error ?? byPre.error ?? byPost.error;
+      if (err) return fail(err.message);
+
+      const found = new Map<string, Record<string, unknown> & { matched_by: string[] }>();
+      const add = (rows: unknown[] | null, how: string) => {
+        for (const row of (rows ?? []) as Array<Record<string, unknown>>) {
+          const id = row.id as string;
+          const hit = found.get(id) ?? { ...row, matched_by: [] };
+          if (!hit.matched_by.includes(how)) hit.matched_by.push(how);
+          found.set(id, hit);
+        }
+      };
+      add(byCode.data, 'code');
+      add(byNumber.data, 'number');
+      add(byPre.data, 'monday_presales');
+      add(byPost.data, 'monday_postsales');
+      return ok({ projects: [...found.values()] });
     },
   );
 }

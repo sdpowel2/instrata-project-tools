@@ -183,11 +183,20 @@ create index if not exists idx_project_activity_project on public.project_activi
 ### 2.4.3 Skill and MCP
 
 - `get_worklist_state` returns `project_id` and `suggested_project_id` on open items.
-- **Suggestion rules in the skill** (new Step 7b), confident matches only:
+- **Suggestion rules in the skill** (new Step 8c), confident matches only:
   - monday items: match `monday:<itemId>` against `projects.monday_presales_item_id` / `monday_postsales_item_id` (both `bigint`, unique). This is exact, so always suggest it. Programming-board and Triage items have no column on `projects`, so they get no suggestion.
   - email/Teams: suggest only when the subject or summary contains a project's `project_code` or its exact number. No fuzzy name matching yet.
   - It needs one read tool: `find_projects(codes[], numbers[], monday_item_ids[])`, which returns `id, project_code, number, name`. The existing `list_projects` search could do it one query at a time; a batch lookup keeps the run small.
 - Once you've linked a few dozen by hand, revisit fuzzy matching. Your manual links are the test set.
+
+**Built 2026-11-18** (`add_worklist_projects.sql` + `supabase/tests/worklist_projects_smoke.sql`, skill v1.5 Step 8c). Changes from the plan above:
+- **The run can't link, enforced by the database.** A `worklist_guard_project_link()` trigger puts back any `project_id` change made under the briefing writer flag (`save_briefing`, `save_work_tags`, `save_reviewed`), so it isn't just the tools leaving the field out.
+- **Suggestions ride on `save_work_tags()`**, not `save_briefing()`: the run sends `suggested_project_id` per item (MCP validates it's a uuid; the database skips it if the task is linked, if the id isn't a project, or if Seth dismissed that project).
+- **"No" sticks.** `dismissed_project_id` remembers a suggestion Seth turned down, so the next run won't repeat it. A different project can still be suggested.
+- **Activity kinds** add `unlinked` (logged on the old project). A linked task the run closes as resolved logs `done` with "Closed by the morning run".
+- **Project page:** a "Your My Day" card on `ProjectOverview` (admins only; owner-only rows) with the open linked tasks and the activity log. It renders nothing when there's nothing to show.
+- **`find_projects(codes, numbers, monday_item_ids)`** queries `projects` directly (exact matches, with `matched_by`); no new RPC.
+- **Open decision 1:** built owner-only, as recommended. Widening it later is a policy change on `project_activity`.
 
 ### 2.4.4 Done when
 
@@ -380,7 +389,7 @@ The spec in `work-engine-phase-3-spec.md` stands: stage-don't-ship, triage → d
 
 ## Open decisions
 
-1. **(2.4) Who sees project activity?** Owner-only to start, or everyone who can see the project? Recommendation: owner-only now.
+1. **(2.4) Who sees project activity?** Built owner-only (2026-11-18). Revisit if the team wants it on shared project pages.
 2. **(2.6) Where is the current second-brain vault, and how is it laid out?** Needed for the import script.
 3. **(2.6) Auto-file or confirm?** Recommendation: auto-file, with version rows for undo.
 4. **(2.8) IT/Lee sign-off** on scheduled cloud jobs reading company M365, Teams and monday. Ask now.

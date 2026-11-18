@@ -51,6 +51,20 @@ export interface WorkItem {
   workConfidence?: number;
   /** Seth confirmed or corrected the work type. */
   workTypeChecked?: boolean;
+  /** The project Seth linked this task to (2.4). Only Seth links; the run can't. */
+  projectId?: string;
+  /** The morning run's suggested project, shown as "Link to ...?" until confirmed or dismissed. */
+  suggestedProjectId?: string;
+}
+
+/** One row of a project's activity log (2.4), written by the database when a linked task changes. */
+export interface ProjectActivity {
+  id: string;
+  itemId?: string;
+  kind: 'linked' | 'unlinked' | 'done' | 'reopened' | 'note';
+  title: string;
+  detail?: string;
+  occurredAt: string;
 }
 
 export interface CalendarEvent {

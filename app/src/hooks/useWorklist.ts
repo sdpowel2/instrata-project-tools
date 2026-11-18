@@ -19,8 +19,12 @@ import type {
 const ITEM_BASE_COLS =
   'id, source, source_key, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, user_urgency, ' +
   'effective_urgency, status, snoozed_until, closed_at, closed_by, first_seen, options, answer';
-// The work-type columns come with the 2.3 migration (add_worklist_work_type.sql).
-const ITEM_COLS = `${ITEM_BASE_COLS}, work_type, work_confidence, user_work_type, effective_work_type`;
+// The work-type columns come with the 2.3 migration (add_worklist_work_type.sql),
+// the project columns with 2.4 (add_worklist_projects.sql). Newest first; a load
+// that hits a missing column (42703) steps down to the next set.
+const ITEM_WT_COLS = `${ITEM_BASE_COLS}, work_type, work_confidence, user_work_type, effective_work_type`;
+const ITEM_COLS = `${ITEM_WT_COLS}, project_id, suggested_project_id`;
+const ITEM_COL_SETS = [ITEM_COLS, ITEM_WT_COLS, ITEM_BASE_COLS];
 const BRIEFING_COLS =
   'id, briefing_date, ran_at, window_since, missing, source_counts, schedule, open_blocks, read_me, set_aside';
 const REVIEWED_BASE_COLS =
@@ -90,6 +94,8 @@ interface ItemRow {
   work_confidence?: number | null;
   user_work_type?: WorkType | null;
   effective_work_type?: WorkType | null;
+  project_id?: string | null;
+  suggested_project_id?: string | null;
 }
 
 interface BriefingRow {
@@ -134,6 +140,10 @@ export interface Worklist {
   setWorkType: (id: string, workType: WorkType) => void;
   /** Of the run's tags Seth checked in the last 30 days, how many he agreed with. Null until loaded. */
   workTypeAccuracy: WorkTypeAccuracy | null;
+  /** Connect a task to a project, or unlink it (null) (2.4). */
+  linkProject: (id: string, projectId: string | null) => void;
+  /** Yes or no to the run's suggested project. No is remembered, so it isn't suggested again. */
+  answerSuggestion: (id: string, accept: boolean) => void;
 }
 
 function toItem(r: ItemRow, today: string): WorkItem {
@@ -161,6 +171,8 @@ function toItem(r: ItemRow, today: string): WorkItem {
     claudeWorkType: r.work_type ?? undefined,
     workConfidence: r.work_confidence == null ? undefined : Number(r.work_confidence),
     workTypeChecked: r.user_work_type != null,
+    projectId: r.project_id ?? undefined,
+    suggestedProjectId: r.suggested_project_id ?? undefined,
   };
 }
 
@@ -201,10 +213,13 @@ async function fetchWorklist(userId: string): Promise<Fetched> {
   const [b, first] = await Promise.all([
     supabase.from('worklist_briefings').select(BRIEFING_COLS).eq('user_id', userId)
       .order('briefing_date', { ascending: false }).limit(2),
-    items(ITEM_COLS),
+    items(ITEM_COL_SETS[0]),
   ]);
-  // Before the 2.3 migration the work-type columns don't exist yet (42703): fall back.
-  const [open, closed] = first[0].error?.code === '42703' ? await items(ITEM_BASE_COLS) : first;
+  // A migration not applied yet means missing columns (42703): fall back a step.
+  let [open, closed] = first;
+  for (let i = 1; i < ITEM_COL_SETS.length && open.error?.code === '42703'; i++) {
+    [open, closed] = await items(ITEM_COL_SETS[i]);
+  }
   const err = b.error ?? open.error ?? closed.error;
   return {
     briefings: (b.data ?? []) as unknown as BriefingRow[],
@@ -473,6 +488,46 @@ export function useWorklist(): Worklist {
     [mode, patchRow, load, loadAccuracy],
   );
 
+  // ── Connect project (2.4) ──────────────────────────────────────────────────
+  const linkProject = useCallback(
+    (id: string, projectId: string | null) => {
+      if (mode === 'sample') {
+        setSampleItems((prev) => prev.map((i) => (i.id === id
+          ? { ...i, projectId: projectId ?? undefined, suggestedProjectId: projectId ? undefined : i.suggestedProjectId }
+          : i)));
+        return;
+      }
+      // Linking clears the suggestion (the database does the same).
+      patchRow(id, projectId ? { project_id: projectId, suggested_project_id: null } : { project_id: null });
+      void write(projectId ? 'The project link' : 'Unlinking', () =>
+        supabase.from('worklist_items').update({ project_id: projectId }).eq('id', id),
+      );
+    },
+    [mode, patchRow, write],
+  );
+
+  const answerSuggestion = useCallback(
+    (id: string, accept: boolean) => {
+      if (mode === 'sample') {
+        setSampleItems((prev) => prev.map((i) => (i.id === id
+          ? { ...i, projectId: accept ? i.suggestedProjectId : i.projectId, suggestedProjectId: undefined }
+          : i)));
+        return;
+      }
+      const suggested = rows.find((r) => r.id === id)?.suggested_project_id;
+      if (!suggested) return;
+      if (accept) {
+        linkProject(id, suggested);
+        return;
+      }
+      patchRow(id, { suggested_project_id: null });
+      void write('Dismissing the suggestion', () =>
+        supabase.from('worklist_items').update({ suggested_project_id: null, dismissed_project_id: suggested }).eq('id', id),
+      );
+    },
+    [mode, rows, linkProject, patchRow, write],
+  );
+
   // ── Reviewed log (2.1): loaded only when the drawer opens ─────────────────
   const [reviewed, setReviewed] = useState<ReviewedRow[] | null>(null);
   const [reviewedLoading, setReviewedLoading] = useState(false);
@@ -566,5 +621,7 @@ export function useWorklist(): Worklist {
     surface,
     setWorkType,
     workTypeAccuracy: mode === 'sample' ? sampleAccuracy : accuracy,
+    linkProject,
+    answerSuggestion,
   };
 }
