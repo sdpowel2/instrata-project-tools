@@ -306,6 +306,7 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         '`reviewed`: one row per conversation the run looked at, wherever it landed (max 400), so the user can ' +
         "see and surface anything that was missed. The result's reviewed.violations lists rows whose outcome breaks " +
         "one of the user's hard rules; fix those and call save_briefing once more with the corrected payload. " +
+        'reviewed.dismissed / dismissed_keys are open items a "Read me at most" rule took off the list. ' +
         'Summaries and links only — never paste email or chat bodies.',
       inputSchema: {
         briefing: briefingSchema,
@@ -360,9 +361,13 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'conversation and before deciding where each lands. Send one candidate per conversation (the same ' +
         'conversations as the reviewed rows): key (its source_key), source, sender address, title, and chat / ' +
         'board name. Returns hard_rules (how many are active) and matched: for each candidate a hard rule ' +
-        'matches, the winning effect and the rule ids. Effects are binding: min_task = must be a task (respond, ' +
-        'do or decide), min_read_me = at least a Read me line, suppress = Set aside (never moves an item that is ' +
-        'already open). Matching is done by the database, so it is the same every run.',
+        'matches, `effects` (every effect to honour, floors first), `effect` (the first of them) and the rule ' +
+        'ids. Effects are binding: min_task = must be a task (respond, do or decide), min_read_me = at least a ' +
+        'Read me line, max_read_me = never a task (Read me, Set aside or dropped; this one also applies to items ' +
+        'already open, which the database dismisses once the run lands them below the list), suppress = Set ' +
+        'aside (never moves an item that is already open). A floor beats a ceiling it conflicts with, so ' +
+        'min_read_me + max_read_me means exactly a Read me line. Matching is done by the database, so it is ' +
+        'the same every run.',
       inputSchema: {
         candidates: z.array(candidateSchema).max(500),
       },

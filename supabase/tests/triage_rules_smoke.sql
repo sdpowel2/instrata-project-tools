@@ -1,5 +1,5 @@
--- Smoke test for add_triage_rules.sql (My Day 2.2). Run in the SQL Editor
--- AFTER the migration. Runs as Seth on a fake day (2000-01-01), then raises an
+-- Smoke test for add_triage_rules.sql and add_triage_rule_ceiling.sql (My Day
+-- 2.2). Run in the SQL Editor AFTER both migrations. Runs as Seth on a fake day (2000-01-01), then raises an
 -- error carrying the results, which rolls EVERYTHING back. Nothing is left behind.
 -- Every line should end in "true".
 do $$
@@ -121,6 +121,59 @@ begin
   update public.triage_rules set active = false where id = v_more;
   r := public.match_triage_rules('[{"key":"k1","source":"email","sender":"jo@client-smoke.com","title":"Lobby"}]');
   v_out := v_out || ('inactive rule ignored: ' || (jsonb_array_length(r->'matched') = 0))::text;
+
+  -- ── Ceiling: max_read_me (add_triage_rule_ceiling.sql) ──
+  insert into public.triage_rules (kind, match, effect, created_from)
+    values ('hard', '{"domain":"ceiling-smoke.com"}', 'max_read_me', 'manual');
+  insert into public.triage_rules (kind, match, effect, created_from)
+    values ('hard', '{"domain":"ceiling-smoke.com","subject_terms":["urgent"]}', 'min_task', 'manual');
+  insert into public.triage_rules (kind, match, effect, created_from)
+    values ('hard', '{"domain":"exact-smoke.com"}', 'min_read_me', 'manual');
+  insert into public.triage_rules (kind, match, effect, created_from)
+    values ('hard', '{"domain":"exact-smoke.com"}', 'max_read_me', 'manual');
+
+  r := public.match_triage_rules('[
+    {"key":"k4","source":"email","sender":"a@ceiling-smoke.com","title":"Bid"},
+    {"key":"k5","source":"email","sender":"a@ceiling-smoke.com","title":"Urgent bid"},
+    {"key":"k6","source":"email","sender":"a@exact-smoke.com","title":"Hello"}
+  ]');
+  v_out := v_out || ('ceiling match: ' || r::text);
+  v_out := v_out || ('ceiling alone; min_task beats it; min_read_me + ceiling both kept: ' || (
+    (select m->'effects' from jsonb_array_elements(r->'matched') m where m->>'key' = 'k4') = '["max_read_me"]'::jsonb
+    and (select m->'effects' from jsonb_array_elements(r->'matched') m where m->>'key' = 'k5') = '["min_task"]'::jsonb
+    and (select m->'effects' from jsonb_array_elements(r->'matched') m where m->>'key' = 'k6') = '["min_read_me","max_read_me"]'::jsonb
+    and (select m->>'effect' from jsonb_array_elements(r->'matched') m where m->>'key' = 'k6') = 'min_read_me'))::text;
+
+  perform public.save_briefing('{"date":"2000-01-02"}',
+    '[{"source_key":"c:open","source":"email","kind":"decide","title":"Bid decision","urgency":2},
+      {"source_key":"c:keep","source":"email","kind":"respond","title":"Urgent bid","urgency":2}]');
+  r := public.save_reviewed('2000-01-02', '[
+    {"source_key":"c:open","source":"email","title":"Bid decision","sender":"a@ceiling-smoke.com","outcome":"carried","reason":"x","reason_group":"x"},
+    {"source_key":"c:keep","source":"email","title":"Urgent bid","sender":"a@ceiling-smoke.com","outcome":"carried","reason":"x","reason_group":"x"},
+    {"source_key":"c:exact","source":"email","title":"Hello","sender":"a@exact-smoke.com","outcome":"set_aside","reason":"x","reason_group":"x"}
+  ]');
+  v_out := v_out || ('ceiling save 1: ' || r::text);
+  v_out := v_out || ('carried under ceiling breaks it, exact needs read me, floor wins, nothing dismissed: ' || (
+    jsonb_array_length(r->'violations') = 2
+    and (select v->>'required' from jsonb_array_elements(r->'violations') v where v->>'source_key' = 'c:open') = 'max_read_me'
+    and (select v->>'required' from jsonb_array_elements(r->'violations') v where v->>'source_key' = 'c:exact') = 'min_read_me'
+    and (r->>'dismissed')::int = 0))::text;
+
+  r := public.save_reviewed('2000-01-02', '[
+    {"source_key":"c:open","source":"email","title":"Bid decision","sender":"a@ceiling-smoke.com","outcome":"read_me","reason":"x","reason_group":"Your rule"},
+    {"source_key":"c:keep","source":"email","title":"Urgent bid","sender":"a@ceiling-smoke.com","outcome":"carried","reason":"x","reason_group":"x"},
+    {"source_key":"c:exact","source":"email","title":"Hello","sender":"a@exact-smoke.com","outcome":"read_me","reason":"x","reason_group":"Your rule"}
+  ]');
+  v_out := v_out || ('ceiling save 2: ' || r::text);
+  select count(*) into n from public.worklist_items
+   where source_key = 'c:open' and status = 'dismissed' and closed_by = 'briefing';
+  select count(*) = 1 into ok from public.worklist_items where source_key = 'c:keep' and status = 'open';
+  v_out := v_out || ('demoted open item dismissed by the briefing, floor-held item untouched: ' || (
+    jsonb_array_length(r->'violations') = 0 and (r->>'dismissed')::int = 1
+    and r->'dismissed_keys' = '["c:open"]'::jsonb and n = 1 and ok))::text;
+
+  r := public.preview_triage_rule('{"domain":"ceiling-smoke.com"}', 'max_read_me', '2000-01-02');
+  v_out := v_out || ('preview accepts the ceiling, 1 would change: ' || ((r->>'would_change')::int = 1))::text;
 
   raise exception E'TRIAGE RULES SMOKE TEST (all rolled back):\n%', array_to_string(v_out, E'\n');
 end $$;

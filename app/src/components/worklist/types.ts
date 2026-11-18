@@ -141,8 +141,12 @@ export const ON_LIST_OUTCOMES: ReviewedOutcome[] = ['respond', 'do', 'decide', '
 
 // ── Tuning rules (My Day 2.2, supabase/migrations/add_triage_rules.sql) ──────
 
-/** min_task = always on the list · min_read_me = at least a Read me line · suppress = Set aside */
-export type RuleEffect = 'min_task' | 'min_read_me' | 'suppress';
+/**
+ * Floors: min_task = always on the list · min_read_me = at least a Read me line.
+ * Ceilings: max_read_me = never a task (Read me at most) · suppress = Set aside.
+ * Every matching rule applies, except a ceiling a higher floor overrides.
+ */
+export type RuleEffect = 'min_task' | 'min_read_me' | 'max_read_me' | 'suppress';
 
 /** hard = matched in SQL every run · lesson = a judgment call the run reads as an example */
 export type RuleKind = 'hard' | 'lesson';
