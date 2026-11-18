@@ -144,7 +144,7 @@ try {
       readMe: [{ id: 'smoke-r1', source: 'email', text: 'Smoke test read-me line.' }],
     },
     items: [
-      { source_key: 'smoke:respond', source: 'email', kind: 'respond', title: 'Smoke test reply', urgency: 2, urgency_reason: 'test', due: SMOKE_DATE, due_basis: 'stated' },
+      { source_key: 'smoke:respond', source: 'email', kind: 'respond', title: 'Smoke test reply', urgency: 2, urgency_reason: 'test', due: SMOKE_DATE, due_basis: 'stated', work_type: 'reply', work_confidence: 0.9, source_ref: { message_id: 'smoke-m1' } },
       { source_key: 'smoke:question', source: 'claude', kind: 'question', title: 'Smoke test question?', urgency: 3, options: ['Yes', 'No'] },
     ],
     reviewed: [
@@ -152,8 +152,9 @@ try {
       { source_key: 'smoke:dropped', source: 'email', title: 'Smoke newsletter', outcome: 'dropped', reason: 'newsletter', reason_group: 'Newsletters / marketing' },
     ],
   });
-  const saved = save.data as { inserted?: number; briefing_date?: string; reviewed?: { saved?: number; error?: string; violations?: unknown[] } };
+  const saved = save.data as { inserted?: number; briefing_date?: string; work_tags?: { tagged?: number; error?: string }; reviewed?: { saved?: number; error?: string; violations?: unknown[] } };
   assert('save_briefing → inserted 2 on the smoke date', !save.isError && saved.inserted === 2 && saved.briefing_date === SMOKE_DATE, save.text);
+  assert('  work-type tags → tagged 1', saved.work_tags?.tagged === 1, saved.work_tags);
   assert('  reviewed log → saved 2 rows, violations listed', saved.reviewed?.saved === 2 && Array.isArray(saved.reviewed?.violations), saved.reviewed);
 
   const again = await call(access, 'save_briefing', {

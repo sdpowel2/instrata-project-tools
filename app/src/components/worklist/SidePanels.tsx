@@ -1,6 +1,7 @@
 import { Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { Card } from '../ui';
-import type { Briefing, WorkItemSource } from './types';
+import type { Briefing, WorkItemSource, WorkTypeAccuracy } from './types';
+import { WORK_TYPE_LABEL } from './types';
 import { formatHHMM, formatTimeRange } from './format';
 
 const SOURCE_ICON: Record<WorkItemSource, typeof Mail> = {
@@ -120,6 +121,56 @@ export function ClosedCard({ briefing }: { briefing: Briefing }) {
             </li>
           ))}
         </ul>
+      </div>
+    </Card>
+  );
+}
+
+/** The phase 3 gate (2.3): how often the run's work-type tag matched Seth's check. */
+const GATE = 0.9;
+/** Checks it takes before the percentage means much. */
+const SAMPLE = 30;
+
+export function WorkTypeCard({ accuracy, unchecked }: { accuracy: WorkTypeAccuracy | null; unchecked: number }) {
+  if (!accuracy && unchecked === 0) return null;
+  const checked = accuracy?.checked ?? 0;
+  const agreed = accuracy?.agreed ?? 0;
+  const pct = checked > 0 ? agreed / checked : null;
+  const passing = pct !== null && pct >= GATE && checked >= SAMPLE;
+
+  return (
+    <Card title="Work types" eyebrow="Phase 3 gate" flush>
+      <div className="px-5 py-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-2xl font-bold text-navy tabular-nums">{pct === null ? '–' : `${Math.round(pct * 100)}%`}</span>
+          <span className="text-xs text-fg-3">
+            {checked === 0 ? 'no checks yet' : `${agreed} of ${checked} tags right · last ${accuracy?.days ?? 30} days`}
+          </span>
+        </div>
+        <div className="relative h-1.5 bg-surface rounded-full mt-2 overflow-hidden" aria-hidden>
+          <div
+            className={`h-full rounded-full ${passing ? 'bg-status-success-fg' : 'bg-orange'}`}
+            style={{ width: `${Math.round((pct ?? 0) * 100)}%` }}
+          />
+          <div className="absolute top-0 bottom-0 w-px bg-navy/50" style={{ left: `${GATE * 100}%` }} />
+        </div>
+        <p className="text-xs text-fg-2 mt-2 leading-snug">
+          {passing
+            ? 'Passing: 90%+ on a sample of 30 or more. Workers can start.'
+            : checked < SAMPLE
+              ? `Gate is 90% on a hand-checked sample. ${checked} of ${SAMPLE} checks so far.`
+              : 'Below the 90% gate. Corrections teach the next run.'}
+          {unchecked > 0 && <> Click the chip on a task to confirm or correct it ({unchecked} waiting).</>}
+        </p>
+        {accuracy && accuracy.misses.length > 0 && (
+          <ul className="m-0 p-0 list-none mt-2 space-y-0.5">
+            {accuracy.misses.slice(0, 3).map((m) => (
+              <li key={`${m.tagged}-${m.was}`} className="text-[11px] text-fg-3">
+                Tagged {WORK_TYPE_LABEL[m.tagged]}, was {WORK_TYPE_LABEL[m.was]} · {m.n}×
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </Card>
   );

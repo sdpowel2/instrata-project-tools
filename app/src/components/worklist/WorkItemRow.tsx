@@ -3,6 +3,8 @@ import { Check, Clock, X, ExternalLink, Mail, MessageSquare, LayoutGrid, PenLine
 import type { WorkItem, WorkItemSource, Urgency } from './types';
 import { KIND_LABEL, URGENCY_LABEL } from './types';
 import { formatDue, URGENCY_STYLE } from './format';
+import { WorkTypeChip } from './WorkTypeChip';
+import type { WorkType } from './types';
 
 const SOURCE_ICON: Record<WorkItemSource, typeof Mail> = {
   email: Mail,
@@ -36,9 +38,11 @@ interface Props {
   onAnswer?: (id: string, option: string) => void;
   /** "Surface less like this": open the tuning-rule form for this task (2.2). */
   onLessLike?: (item: WorkItem) => void;
+  /** Confirm or correct the work type (2.3). */
+  onWorkType?: (id: string, workType: WorkType) => void;
 }
 
-export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLessLike }: Props) {
+export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLessLike, onWorkType }: Props) {
   const SourceIcon = SOURCE_ICON[item.source];
   const due = item.due ? formatDue(item.due, today) : null;
   const isDone = item.status === 'done';
@@ -77,6 +81,7 @@ export function WorkItemRow({ item, today, onStatus, onUrgency, onAnswer, onLess
             <SourceIcon size={12} className="text-fg-3" aria-label={SOURCE_LABEL[item.source]} />
             {item.from}
           </span>
+          {onWorkType && item.kind !== 'question' && <WorkTypeChip item={item} onPick={onWorkType} />}
           {due && (
             <span
               className={due.overdue ? 'text-status-danger-fg font-medium' : ''}

@@ -29,13 +29,16 @@ import { ok, fail, type ToolRegistrar } from './toolHelpers.js';
 const SOURCES = ['email', 'teams', 'monday', 'manual', 'claude'] as const;
 const KINDS = ['respond', 'do', 'decide', 'question'] as const;
 const DUE_BASES = ['stated', 'inferred', 'none'] as const;
+/** Which phase 3 worker could pick a task up (My Day 2.3). */
+const WORK_TYPES = ['reply', 'dtools_report', 'ipt_change', 'none'] as const;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HHMM = /^\d{2}:\d{2}$/;
 
 const ITEM_COLS =
   'id, source, source_key, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, ' +
-  'user_urgency, effective_urgency, status, snoozed_until, first_seen, last_seen, times_seen, options, answer, answered_at';
+  'user_urgency, effective_urgency, status, snoozed_until, first_seen, last_seen, times_seen, options, answer, answered_at, ' +
+  'work_type, work_confidence, user_work_type, effective_work_type';
 const CLOSED_COLS = 'source_key, source, kind, title, status, closed_by, closed_at';
 const SURFACED_COLS =
   'source, source_key, title, from_label, outcome, reason, reason_group, surfaced_at, item:worklist_items(kind, effective_urgency)';
@@ -182,6 +185,19 @@ const itemSchema = z.object({
   urgency: z.number().int().min(1).max(4).describe('1 Now · 2 Today · 3 This week · 4 Whenever'),
   urgency_reason: z.string().max(300).optional().describe('One line: why this urgency'),
   options: z.array(z.string().max(200)).max(6).optional().describe('Choices, for kind "question" only'),
+  work_type: z
+    .enum(WORK_TYPES)
+    .optional()
+    .describe(
+      'Which future worker could do the first pass: reply (a written answer someone is waiting on), ' +
+        'dtools_report (a BoM, equipment list or other D-Tools report), ipt_change (a bug or feature request ' +
+        'for Instrata Project Tools), none (anything else). Send it on every task.',
+    ),
+  work_confidence: z.number().min(0).max(1).optional().describe('0-1: how sure you are of work_type'),
+  source_ref: z
+    .record(z.string().max(60), z.string().max(300))
+    .optional()
+    .describe('Ids a worker will need later, e.g. {conversation_id, message_id} or {chat_id, message_id}. Ids only.'),
 });
 
 export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClient, userId: string): void {
@@ -195,7 +211,8 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'last_briefing (date, ran_at, window_since — use ran_at as the start of the new window), open_items ' +
         '(open and snoozed, including manual tasks the user added on the page; effective_urgency honours the ' +
         "user's override), recently_closed (closed in the last 14 days; don't re-propose these), feedback " +
-        '(recent urgency overrides, dismissals, snoozes, answers, surfaces) to calibrate urgency, and ' +
+        '(recent urgency overrides, dismissals, snoozes, answers, surfaces, and work_type checks: from_value = your ' +
+        'tag, to_value = the user’s pick, equal means confirmed) to calibrate, and ' +
         'recently_surfaced (conversations the user pulled out of the reviewed list in the last 30 days: each is ' +
         'a miss, with where the run had put it and why). Treat every recently_surfaced row as a lesson. Also ' +
         "triage_rules: the user's active tuning rules with 30-day hit counts. kind \"lesson\" = a judgment call in " +
@@ -337,17 +354,32 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         p_resolved_keys: resolved_keys,
       });
       if (error) return fail(error.message);
-      if (!reviewed) return ok(data);
+      const result: Record<string, unknown> = { ...(data as Record<string, unknown>) };
 
-      // The briefing is saved; the reviewed log is a second, separate write. If it
-      // fails, report it alongside the briefing result instead of failing the run.
-      const rv = await supa.rpc('save_reviewed', { p_date: briefing.date, p_rows: reviewed });
-      return ok({
-        ...(data as Record<string, unknown>),
-        reviewed: rv.error
+      // Work-type tags (2.3) and the reviewed log are separate writes after the
+      // briefing. If one fails, report it alongside the result instead of failing the run.
+      const tags = items
+        .filter((i) => i.work_type || i.source_ref)
+        .map((i) => ({
+          source_key: i.source_key,
+          ...(i.work_type ? { work_type: i.work_type } : {}),
+          ...(i.work_confidence !== undefined ? { work_confidence: Math.round(i.work_confidence * 100) / 100 } : {}),
+          ...(i.source_ref ? { source_ref: i.source_ref } : {}),
+        }));
+      if (tags.length > 0) {
+        const wt = await supa.rpc('save_work_tags', { p_tags: tags });
+        result.work_tags = wt.error
+          ? { error: notMigrated(wt.error) ? 'work-type tagging not set up yet (migration pending)' : wt.error.message }
+          : wt.data;
+      }
+
+      if (reviewed) {
+        const rv = await supa.rpc('save_reviewed', { p_date: briefing.date, p_rows: reviewed });
+        result.reviewed = rv.error
           ? { error: notMigrated(rv.error) ? 'reviewed log not set up yet (migration pending)' : rv.error.message }
-          : rv.data,
-      });
+          : rv.data;
+      }
+      return ok(result);
     },
   );
 

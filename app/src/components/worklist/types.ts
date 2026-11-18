@@ -44,6 +44,13 @@ export interface WorkItem {
   snoozedUntil?: string;
   /** Seth's pick, for an answered question. */
   answer?: string;
+  /** Which phase 3 worker could do it (2.3): Seth's pick if he checked it, else the run's tag. */
+  workType?: WorkType;
+  /** The run's own tag and confidence, before Seth's check. */
+  claudeWorkType?: WorkType;
+  workConfidence?: number;
+  /** Seth confirmed or corrected the work type. */
+  workTypeChecked?: boolean;
 }
 
 export interface CalendarEvent {
@@ -188,4 +195,28 @@ export interface RulePreview {
   wouldChange: number;
   matched30d: number;
   rows: { id: string; source: ReviewedRow['source']; title: string; from: string; outcome: ReviewedOutcome; reasonGroup: string; changes: boolean }[];
+}
+
+// ── Work type (My Day 2.3, supabase/migrations/add_worklist_work_type.sql) ───
+
+/** Which phase 3 worker could do the first pass on a task. */
+export type WorkType = 'reply' | 'dtools_report' | 'ipt_change' | 'none';
+
+export const WORK_TYPES: WorkType[] = ['reply', 'dtools_report', 'ipt_change', 'none'];
+
+export const WORK_TYPE_LABEL: Record<WorkType, string> = {
+  reply: 'Reply',
+  dtools_report: 'D-Tools report',
+  ipt_change: 'IPT change',
+  none: 'No worker',
+};
+
+/** The phase 3 gate: how often the run's tag matched Seth's check. */
+export interface WorkTypeAccuracy {
+  days: number;
+  checked: number;
+  agreed: number;
+  /** Tasks the run hadn't tagged that Seth tagged himself (not graded). */
+  untagged: number;
+  misses: { tagged: WorkType; was: WorkType; n: number }[];
 }
