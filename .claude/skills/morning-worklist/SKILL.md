@@ -3,7 +3,7 @@ name: morning-worklist
 description: Seth's morning briefing. Triages new email, Teams chats and @mentions, today's Outlook calendar, his monday.com assignments and @mentions, and his manual task list into one short daily worklist with due dates and urgency, plus a "read me" brief, and saves it to his My Day worklist in Project Tools. Use when Seth asks for his morning briefing, morning worklist, daily list, "what's on my plate today", or runs /morning-worklist. It never sends, posts, marks read, or edits anything; its only writes are the worklist save and the personal-worklist folder.
 ---
 
-# Morning worklist (v1.2)
+# Morning worklist (v1.3)
 
 You are building Seth Powell's worklist for today. The goal is a **short, trustworthy list**. A list that's too long or noisy is a failure, even if every item on it is real. When in doubt, put an item in "Set aside" with a reason; don't add it as a task.
 
@@ -191,7 +191,7 @@ Skip anything whose `source_key` is in `recently_closed`, unless that row has `c
 
 **Learn from what Seth surfaced.** Each `recently_surfaced` row is a conversation an earlier run left off the list (its `outcome`, `reason` and `reason_group` say where and why) that Seth pulled out of the reviewed list by hand, with the kind he chose (`item.kind`). One is enough to act on: a similar conversation today (same sender, same domain, same kind of ask) goes on the list too, and its reason ends with `(you surfaced a similar one on <date>)`. Never put a surfaced pattern back in Set aside or Dropped without saying so in the chat summary.
 
-**Seth's lessons.** `triage_rules` rows with `kind: "lesson"` are judgment calls in his words (`note`), usually with an `example` (the conversation he made it from and where it had landed) and sometimes a `match` hint. Read them before you classify, and apply each one to conversations that fit its spirit, not just its letter: `effect` says the direction (`min_task` = should be a task, `min_read_me` = at least a Read me line, `suppress` = Set aside). When a lesson changes where something lands, put its `id` in that conversation's reviewed row as `lesson_ids` and end the reason with `(your lesson: <a few words of the note>)`. `kind: "hard"` rows are listed for reference only; Step 8b applies them.
+**Seth's lessons.** `triage_rules` rows with `kind: "lesson"` are judgment calls in his words (`note`), usually with an `example` (the conversation he made it from and where it had landed) and sometimes a `match` hint. Read them before you classify, and apply each one to conversations that fit its spirit, not just its letter: `effect` says the direction (`min_task` = should be a task, `min_read_me` = at least a Read me line, `max_read_me` = never a task, `suppress` = Set aside). When a lesson changes where something lands, put its `id` in that conversation's reviewed row as `lesson_ids` and end the reason with `(your lesson: <a few words of the note>)`. `kind: "hard"` rows are listed for reference only; Step 8b applies them.
 
 Don't inflate. Urgency 1 is for at most about 5 items, counting effective urgency. If more qualify, keep the 5 most important at 1 and move the rest to 2 with the reason `crowded out`.
 
@@ -200,11 +200,12 @@ Don't inflate. Urgency 1 is for at most about 5 items, counting effective urgenc
 Hard rules are Seth's, made from the reviewed drawer on My Day, and they're binding. The database does the matching so it comes out the same every run.
 
 1. Once you know every conversation you looked at (the same list as the `reviewed` rows in Step 9), call `match_triage_rules` with one candidate each: `key` (its source_key), `source`, `sender` (email: the counterpart's address; Teams: the asker's address; monday: leave out), `title`, and `channel` (Teams chat or channel name, monday board name). At most 500; send every non-dropped conversation first.
-2. For each entry in `matched`, apply its `effect`:
+2. For each entry in `matched`, apply **every** effect in its `effects` list (floors come first; `effect` is just the first one):
    - `min_task`: it must be a task. If you had it lower, make it one: pick `respond`, `do` or `decide` from what it asks, set urgency with the rubric, and end the reason with `(your rule)`. Its reviewed row's `outcome` is that kind and `reason_group` is `Your rule`.
    - `min_read_me`: at least a Read me line. If you had it in Set aside or dropped it, give it a Read me line and set its reviewed row to `read_me` / `Your rule`.
+   - `max_read_me`: never a task, **including items already open from an earlier run**. If you had it as a task (new or carried), give it a Read me line instead, leave it out of `items` and `resolved_keys`, and set its reviewed row to `read_me` / `Your rule`. If you'd already set it aside or dropped it, leave it there (unless `min_read_me` is also in `effects`). The database dismisses the open item once the reviewed row lands below the list; `reviewed.dismissed_keys` in the save result lists them. Report those under "Closed since last briefing" as "taken off by your rule".
    - `suppress`: Set aside, unless it's already an open item from an earlier run (`carried`). Reviewed row: `set_aside` / `Your rule`. Don't list it as a per-item Set aside line; count it under a "Your rules" category.
-   - The returned `effect` is already the winner when rules disagree (a floor beats suppress).
+   - Conflicts are already resolved: a floor beats a ceiling it conflicts with (`min_task` beats `max_read_me` and `suppress`; `min_read_me` beats `suppress`), and the beaten effect isn't in `effects`. `min_read_me` + `max_read_me` together means exactly a Read me line.
 3. Rule-forced items never get bumped by the caps in Step 9. If a cap overflows, bump something else.
 4. If the tool errors or isn't there, carry on without it and say so in the chat summary.
 

@@ -8,12 +8,14 @@ import type { ReviewedOutcome, ReviewedRow, RuleEffect, RuleMatch, TriageRule } 
 export const EFFECT_LABEL: Record<RuleEffect, string> = {
   min_task: 'Always put it on the list',
   min_read_me: 'At least a Read me line',
+  max_read_me: 'Read me at most (never a task)',
   suppress: 'Set it aside',
 };
 
 export const EFFECT_SHORT: Record<RuleEffect, string> = {
   min_task: 'On the list',
   min_read_me: 'Read me+',
+  max_read_me: 'Read me max',
   suppress: 'Set aside',
 };
 
@@ -90,6 +92,7 @@ const OUTCOME_RANK: Record<ReviewedOutcome, number> = {
 export function effectChanges(effect: RuleEffect, outcome: ReviewedOutcome): boolean {
   if (effect === 'min_task') return OUTCOME_RANK[outcome] < 3;
   if (effect === 'min_read_me') return OUTCOME_RANK[outcome] < 2;
+  if (effect === 'max_read_me') return OUTCOME_RANK[outcome] >= 3;
   return ['respond', 'do', 'decide', 'read_me'].includes(outcome);
 }
 
