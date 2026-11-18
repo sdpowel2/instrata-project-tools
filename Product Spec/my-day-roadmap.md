@@ -140,6 +140,12 @@ A settings view under My Day: every rule with kind, match, effect, note, 30-day 
 - The skill tags every task it creates. Nothing acts on the tag yet.
 - My Day shows the tag as a small, editable chip. A correction is logged as feedback, which builds the hand-checked sample for phase 3's 90% gate.
 
+**Built 2026-11-18** (`add_worklist_work_type.sql`, skill v1.4 Step 8a):
+- `worklist_items` gains `work_type` + `work_confidence` (the run's), `user_work_type` (Seth's check), generated `effective_work_type`, and `source_ref` (thread / message / chat ids only).
+- The run's tags go through `save_work_tags()` right after `save_briefing()`, and never touch Seth's pick.
+- **Confirming counts too.** Picking the run's own tag sets `user_work_type`, so every check, right or wrong, is a `work_type` feedback row (`from_value` = the run's tag, `to_value` = Seth's). Those rows are the hand-checked sample.
+- `work_type_accuracy(p_days)` gives the gate number: checked, agreed, untagged, by type, and the common misses. My Day shows it in a "Work types" card with the 90% line, aiming for a 30-check sample.
+
 ## 2.4 Connect project
 
 ### 2.4.1 Database (new migration `add_worklist_projects.sql`)
