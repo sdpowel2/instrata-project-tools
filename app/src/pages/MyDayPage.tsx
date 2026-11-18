@@ -3,7 +3,7 @@
 // tool. useWorklist reads it live; ?sample=1 (or offline demo mode) shows the
 // fictional sample briefing instead.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X, ListChecks, SlidersHorizontal } from 'lucide-react';
@@ -14,6 +14,9 @@ import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard, WorkTypeCard } from
 import { ReviewedDrawer } from '../components/worklist/ReviewedDrawer';
 import { RulesDrawer } from '../components/worklist/RulesDrawer';
 import { RuleModal, type RuleTarget } from '../components/worklist/RuleModal';
+import { ConnectProjectModal } from '../components/worklist/ProjectLink';
+import { useStore } from '../store';
+import type { Project } from '../types';
 import { useWorklist } from '../hooks/useWorklist';
 import { useTriageRules } from '../hooks/useTriageRules';
 import { formatClock, formatDayClock, formatDue, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
@@ -33,6 +36,20 @@ export function MyDayPage() {
   const [ruleTarget, setRuleTarget] = useState<RuleTarget | null>(null);
   // "Less like this" on a task waits for the reviewed log, to pre-fill from its row.
   const [lessItem, setLessItem] = useState<WorkItem | null>(null);
+  const [linkItem, setLinkItem] = useState<WorkItem | null>(null);
+
+  // Connect project (2.4) searches the projects the app already loaded: no extra query.
+  const projects = useStore((s) => s.projects);
+  const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+  const recentProjects = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Project[] = [];
+    for (const i of items) {
+      const p = i.projectId ? projectsById.get(i.projectId) : undefined;
+      if (p && !seen.has(p.id)) { seen.add(p.id); out.push(p); }
+    }
+    return out;
+  }, [items, projectsById]);
 
   const questions = items.filter((i) => i.kind === 'question' && i.status === 'open');
   const tasks = items.filter((i) => i.kind !== 'question');
@@ -68,7 +85,10 @@ export function MyDayPage() {
       : null);
   const closeModal = () => { setRuleTarget(null); setLessItem(null); };
 
-  const rowProps = { today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer, onLessLike: lessLike, onWorkType: wl.setWorkType };
+  const rowProps = {
+    today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer, onLessLike: lessLike, onWorkType: wl.setWorkType,
+    projectsById, onLink: setLinkItem, onUnlink: (id: string) => wl.linkProject(id, null), onSuggestion: wl.answerSuggestion,
+  };
 
   const counts = (k: KindFilter) => (k === 'all' ? open.length : open.filter((i) => i.kind === k).length);
 
@@ -259,6 +279,15 @@ export function MyDayPage() {
         onActive={tr.setActive}
         onDelete={tr.remove}
       />
+      {linkItem && (
+        <ConnectProjectModal
+          item={linkItem}
+          projects={projects}
+          recent={recentProjects}
+          onPick={(projectId) => { wl.linkProject(linkItem.id, projectId); setLinkItem(null); }}
+          onClose={() => setLinkItem(null)}
+        />
+      )}
       {modalTarget && (
         <RuleModal
           key={modalTarget.mode === 'edit' ? modalTarget.rule.id : `${modalTarget.direction}-${modalTarget.example?.id ?? lessItem?.id ?? 'new'}`}

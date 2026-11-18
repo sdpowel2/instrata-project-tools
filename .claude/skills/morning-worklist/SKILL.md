@@ -3,7 +3,7 @@ name: morning-worklist
 description: Seth's morning briefing. Triages new email, Teams chats and @mentions, today's Outlook calendar, his monday.com assignments and @mentions, and his manual task list into one short daily worklist with due dates and urgency, plus a "read me" brief, and saves it to his My Day worklist in Project Tools. Use when Seth asks for his morning briefing, morning worklist, daily list, "what's on my plate today", or runs /morning-worklist. It never sends, posts, marks read, or edits anything; its only writes are the worklist save and the personal-worklist folder.
 ---
 
-# Morning worklist (v1.4)
+# Morning worklist (v1.5)
 
 You are building Seth Powell's worklist for today. The goal is a **short, trustworthy list**. A list that's too long or noisy is a failure, even if every item on it is real. When in doubt, put an item in "Set aside" with a reason; don't add it as a task.
 
@@ -16,6 +16,7 @@ v1 keeps its state in Project Tools: it starts with `get_worklist_state` and end
 - **Never fabricate.** Every item must link to its source (Outlook webLink, Teams webUrl, monday item URL). If a date isn't stated, say "no date given". Don't invent one.
 - **Summaries only.** Titles, summaries and read-me lines are in your own words, one or two lines. Never paste an email or chat body into anything you save or write. Quote at most a few words.
 - **Keep reads small.** Ask GraphQL for only the fields listed here. Call `read_resource` on an email only when its summary isn't enough to classify it. Bodies can be 50k+ characters.
+- **Never link a task to a project.** Linking is Seth's call on My Day. You may only suggest one (Step 8c); the database ignores any link you send.
 - **Never reopen Seth's decisions.** Anything in `recently_closed` that Seth closed stays closed: don't re-add it, don't resend its key. The database enforces this too, but don't rely on it.
 
 ## Config
@@ -26,7 +27,7 @@ v1 keeps its state in Project Tools: it starts with `get_worklist_state` and end
 | Time zone | America/New_York (Eastern). The calendar returns UTC, so convert every time you show. |
 | monday user id | 33940282 |
 | monday account | premiere5.monday.com |
-| Worklist tools | Project Tools MCP connector: `get_worklist_state` (read), `match_triage_rules` (read), `save_briefing` (write) |
+| Worklist tools | Project Tools MCP connector: `get_worklist_state` (read), `match_triage_rules` (read), `find_projects` (read), `save_briefing` (write) |
 | Output folder | `personal-worklist/` in the repo root (gitignored) |
 
 monday boards to check (column ids in brackets). Only the person columns listed here count as "assigned to Seth". The Pre-Sales Engineer columns on the Post-Sales and Programming boards are deliberately left out: they mark projects he sold, not work he owns.
@@ -225,6 +226,18 @@ Hard rules are Seth's, made from the reviewed drawer on My Day, and they're bind
 3. Rule-forced items never get bumped by the caps in Step 9. If a cap overflows, bump something else.
 4. If the tool errors or isn't there, carry on without it and say so in the chat summary.
 
+## Step 8c - Suggest a project
+
+Seth links tasks to projects on My Day, which feeds each project's activity log. You can only **suggest** a project, and only on an exact match. Each `open_items` row carries `project_id` (Seth linked it), `suggested_project_id` (your earlier suggestion, still waiting for his answer) and `dismissed_project_id` (a project he said no to for that task).
+
+1. From the tasks you're sending that have no `project_id`, collect:
+   - **monday:** the item id of every Pre-Sales and Post-Sales board task (`monday:<item id>`, or the item behind a `monday-update:` key). Programming and Triage items aren't tied to a project record, so skip them.
+   - **email and Teams:** a project code (`INST-YYYY-NNNN`) or a project number that appears, exactly, in the subject or your summary. Never a project name, client or site, even when it seems obvious: name matching comes later, tested against Seth's own links. Skip numbers that could be something else (a PO, quote, RFI or quantity).
+2. Call `find_projects` once with `codes`, `numbers` and `monday_item_ids`.
+3. Send a project's `id` as that task's `suggested_project_id` only when exactly one project matched it, the task has no `project_id`, and it isn't the task's `dismissed_project_id`. A pending suggestion stays as it is if you don't send one.
+4. A suggestion never changes kind, urgency or caps.
+5. If the tool errors or isn't there, skip suggestions and say so in the chat summary.
+
 ## Step 9 - Save and write
 
 **Caps.** Respond at most 10, Do at most 10, Decide at most 5, Read me at most 7 bullets, counting carried items. When over a cap, carried items stay, and the lowest-urgency **new** items go to Set aside as `over cap` with links, so nothing is silently lost. Don't create kind `question` items; those are for a later phase.
@@ -261,7 +274,8 @@ Hard rules are Seth's, made from the reviewed drawer on My Day, and they're bind
     "urgency_reason": "why this urgency",
     "work_type": "reply",
     "work_confidence": 0.85,
-    "source_ref": { "conversation_id": "<id>", "message_id": "<id>" }
+    "source_ref": { "conversation_id": "<id>", "message_id": "<id>" },
+    "suggested_project_id": "<project id from find_projects, only on an exact match (Step 8c)>"
   }],
   "resolved_keys": ["<source_key>", "..."],
   "reviewed": [{
@@ -292,7 +306,7 @@ Hard rules are Seth's, made from the reviewed drawer on My Day, and they're bind
 - Tool limits: title and urgency_reason 300 characters, summary 2000, from_label 200, read-me text 500, schedule 40 events, read-me 15 lines. Stay well under them.
 - `missing` lists every source that failed (see below); empty when the run was complete.
 
-The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_manual` and `resolved`, plus `work_tags` (`tagged` and `missing`, or an `error`) and `reviewed` (`saved` and `violations`, or an `error` if the reviewed log couldn't be written; the briefing is saved either way, so just report them).
+The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_manual` and `resolved`, plus `work_tags` (`tagged`, `missing` and `suggested`, the number of project suggestions that landed, or an `error`) and `reviewed` (`saved` and `violations`, or an `error` if the reviewed log couldn't be written; the briefing is saved either way, so just report them).
 
 `reviewed.violations` lists conversations whose outcome breaks one of Seth's hard rules (`required` is the effect it needed). If it isn't empty, fix exactly those conversations as Step 8b says and call `save_briefing` **once more** with the whole corrected payload. That second call is the only allowed retry, and only for violations. If violations remain after it, report them in the chat summary and stop. If the call fails, keep going: write the markdown with `⚠ Not saved to Project Tools - <error>` at the top. Never retry with a changed payload to get around a rejection; report it.
 
@@ -347,6 +361,7 @@ Window: since <since, Eastern> · Sources: mail N, Teams N, monday N, manual N �
 - the path to the briefing file, and a note if any manual.md tasks were file-only
 - rules: how many hard rules matched and what they moved, and anything a lesson changed
 - work types: how many tasks per type (e.g. `reply 6 · dtools_report 1 · ipt_change 0 · none 4`), and the save result's `work_tags` (`tagged`, plus any `missing` keys or an `error`)
+- projects: how many project suggestions you sent and how many landed (`work_tags.suggested`), each as `task → project code`
 - **Mondays only, rule check-up:** from `triage_rules`, propose (don't apply; you can't edit rules) any duplicates to merge, hard rules with `hits_30d` of 0 that are more than two weeks old to retire, and lessons applied 5+ times that could become hard rules or part of this skill. Seth makes the changes on My Day.
 
 Keep it to what fits on one screen.

@@ -68,6 +68,7 @@ export const TOOL_SCOPES: Record<string, ToolScope> = {
   get_worklist_state: 'mcp:read',
   save_briefing: 'mcp:write',
   match_triage_rules: 'mcp:read',
+  find_projects: 'mcp:read',
 };
 
 export function isSupportedScope(s: string): s is Scope {

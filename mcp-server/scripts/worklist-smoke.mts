@@ -116,8 +116,9 @@ try {
   await mcp(access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'worklist-smoke', version: '1' } });
   const list = await mcp(access, 'tools/list');
   const tools = ((list.json.result as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
-  assert('tools/list includes get_worklist_state + save_briefing + match_triage_rules',
-    tools.includes('get_worklist_state') && tools.includes('save_briefing') && tools.includes('match_triage_rules'), tools);
+  assert('tools/list includes get_worklist_state + save_briefing + match_triage_rules + find_projects',
+    tools.includes('get_worklist_state') && tools.includes('save_briefing') && tools.includes('match_triage_rules')
+      && tools.includes('find_projects'), tools);
 
   // ── read ───────────────────────────────────────────────────────────────────
   const s1 = await call(access, 'get_worklist_state', {});
@@ -132,6 +133,10 @@ try {
   });
   const matched = m1.data as { hard_rules?: number; matched?: unknown[] };
   assert('match_triage_rules → ok with hard_rules + matched', !m1.isError && typeof matched.hard_rules === 'number' && Array.isArray(matched.matched), m1.text);
+
+  const f1 = await call(access, 'find_projects', { codes: ['INST-1999-9999'], numbers: ['smoke-no-such-number'], monday_item_ids: [1] });
+  const fp = f1.data as { projects?: unknown[] };
+  assert('find_projects → ok, no match for made-up keys', !f1.isError && Array.isArray(fp.projects) && fp.projects.length === 0, f1.text);
 
   // ── write ──────────────────────────────────────────────────────────────────
   const save = await call(access, 'save_briefing', {

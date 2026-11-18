@@ -1,7 +1,7 @@
 // Fictional sample briefing used until the worklist tables exist. Names,
 // projects and links are made up; nothing here comes from real mail or chat.
 
-import type { Briefing, ReviewedRow, TriageRule } from './types';
+import type { Briefing, ProjectActivity, ReviewedRow, TriageRule } from './types';
 
 export const SAMPLE_BRIEFING: Briefing = {
   date: '2026-11-05',
@@ -22,7 +22,7 @@ export const SAMPLE_BRIEFING: Briefing = {
       title: 'Confirm display mounting heights before the GC orders backing',
       from: 'Dana Ortiz (GC PM)', due: '2026-11-05', dueBasis: 'stated', urgency: 1,
       urgencyReason: 'GC is blocked; framing inspection Friday',
-      link: '#', carriedDays: 0, status: 'open',
+      link: '#', carriedDays: 0, status: 'open', projectId: 'p1',
     },
     {
       id: 'w2', workType: 'none', claudeWorkType: 'none', workConfidence: 0.85, kind: 'decide', source: 'monday',
@@ -36,7 +36,8 @@ export const SAMPLE_BRIEFING: Briefing = {
       title: 'Does the change order go on the job cost, or do you need the GM form?',
       from: 'Sam Patel', due: null, dueBasis: 'none', urgency: 2,
       urgencyReason: 'Teammate blocked on your answer',
-      link: '#', carriedDays: 0, status: 'open',
+      summary: 'Sam asks about the INS-2026-002 lobby change order.',
+      link: '#', carriedDays: 0, status: 'open', suggestedProjectId: 'p2',
     },
     {
       id: 'w4', workType: 'dtools_report', claudeWorkType: 'none', workConfidence: 0.55, workTypeChecked: true, kind: 'do', source: 'monday',
@@ -149,3 +150,12 @@ export const SAMPLE_RULES: TriageRule[] = [
     createdFrom: 'manual', createdAt: '2026-10-20T15:30:00Z', hits30d: 0,
   },
 ];
+
+/** Sample activity for the project page panel (2.4), keyed by the demo store's project ids. */
+export const SAMPLE_PROJECT_ACTIVITY: Record<string, ProjectActivity[]> = {
+  p1: [
+    { id: 'pa3', itemId: 'w1', kind: 'linked', title: 'Confirm display mounting heights before the GC orders backing', occurredAt: '2026-11-05T07:12:00-05:00' },
+    { id: 'pa2', kind: 'done', title: 'Send the revised rack elevation to the GC', occurredAt: '2026-11-03T15:40:00-05:00' },
+    { id: 'pa1', kind: 'linked', title: 'Send the revised rack elevation to the GC', occurredAt: '2026-11-02T08:05:00-05:00' },
+  ],
+};
