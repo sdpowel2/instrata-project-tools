@@ -12,11 +12,15 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { SAMPLE_BRIEFING, SAMPLE_REVIEWED } from '../components/worklist/sampleData';
 import { addDays, daysBetween, easternDate } from '../components/worklist/format';
-import type { Briefing, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency } from '../components/worklist/types';
+import type {
+  Briefing, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency, WorkType, WorkTypeAccuracy,
+} from '../components/worklist/types';
 
-const ITEM_COLS =
+const ITEM_BASE_COLS =
   'id, source, source_key, kind, title, from_label, summary, link, due, due_basis, urgency, urgency_reason, user_urgency, ' +
   'effective_urgency, status, snoozed_until, closed_at, closed_by, first_seen, options, answer';
+// The work-type columns come with the 2.3 migration (add_worklist_work_type.sql).
+const ITEM_COLS = `${ITEM_BASE_COLS}, work_type, work_confidence, user_work_type, effective_work_type`;
 const BRIEFING_COLS =
   'id, briefing_date, ran_at, window_since, missing, source_counts, schedule, open_blocks, read_me, set_aside';
 const REVIEWED_BASE_COLS =
@@ -82,6 +86,10 @@ interface ItemRow {
   first_seen: string;
   options: string[] | null;
   answer: string | null;
+  work_type?: WorkType | null;
+  work_confidence?: number | null;
+  user_work_type?: WorkType | null;
+  effective_work_type?: WorkType | null;
 }
 
 interface BriefingRow {
@@ -122,6 +130,10 @@ export interface Worklist {
   loadReviewed: () => void;
   /** "Surface this": put a reviewed conversation on the list. */
   surface: (reviewedId: string, kind: Exclude<WorkItemKind, 'question'>, urgency: Urgency) => void;
+  /** Confirm or correct a task's work type (2.3); both count toward the phase 3 gate. */
+  setWorkType: (id: string, workType: WorkType) => void;
+  /** Of the run's tags Seth checked in the last 30 days, how many he agreed with. Null until loaded. */
+  workTypeAccuracy: WorkTypeAccuracy | null;
 }
 
 function toItem(r: ItemRow, today: string): WorkItem {
@@ -145,6 +157,10 @@ function toItem(r: ItemRow, today: string): WorkItem {
     summary: r.summary ?? undefined,
     snoozedUntil: r.snoozed_until ?? undefined,
     answer: r.answer ?? undefined,
+    workType: r.effective_work_type ?? undefined,
+    claudeWorkType: r.work_type ?? undefined,
+    workConfidence: r.work_confidence == null ? undefined : Number(r.work_confidence),
+    workTypeChecked: r.user_work_type != null,
   };
 }
 
@@ -174,15 +190,21 @@ async function fetchWorklist(userId: string): Promise<Fetched> {
   const today = easternDate();
   // Closed items from the last few days feed "done today" and "closed since last briefing".
   const closedSince = new Date(Date.now() - 4 * 86_400_000).toISOString();
-  const [b, open, closed] = await Promise.all([
+  const items = (cols: string) =>
+    Promise.all([
+      supabase.from('worklist_items').select(cols).eq('user_id', userId)
+        .in('status', ['open', 'snoozed']).limit(500),
+      supabase.from('worklist_items').select(cols).eq('user_id', userId)
+        .in('status', ['done', 'dismissed']).gte('closed_at', closedSince)
+        .order('closed_at', { ascending: false }).limit(200),
+    ]);
+  const [b, first] = await Promise.all([
     supabase.from('worklist_briefings').select(BRIEFING_COLS).eq('user_id', userId)
       .order('briefing_date', { ascending: false }).limit(2),
-    supabase.from('worklist_items').select(ITEM_COLS).eq('user_id', userId)
-      .in('status', ['open', 'snoozed']).limit(500),
-    supabase.from('worklist_items').select(ITEM_COLS).eq('user_id', userId)
-      .in('status', ['done', 'dismissed']).gte('closed_at', closedSince)
-      .order('closed_at', { ascending: false }).limit(200),
+    items(ITEM_COLS),
   ]);
+  // Before the 2.3 migration the work-type columns don't exist yet (42703): fall back.
+  const [open, closed] = first[0].error?.code === '42703' ? await items(ITEM_BASE_COLS) : first;
   const err = b.error ?? open.error ?? closed.error;
   return {
     briefings: (b.data ?? []) as unknown as BriefingRow[],
@@ -371,7 +393,7 @@ export function useWorklist(): Worklist {
             source: 'manual', kind: 'do', title, from_label: 'manual',
             due, due_basis: due ? 'stated' : 'none', urgency: 3, urgency_reason: 'Added by you',
           })
-          .select(ITEM_COLS)
+          .select(ITEM_BASE_COLS) // a new manual task has no work type yet
           .single();
         if (e) {
           setError(`The task didn't save: ${e.message}`);
@@ -399,6 +421,57 @@ export function useWorklist(): Worklist {
   );
 
   const dismissError = useCallback(() => setError(null), []);
+
+  // ── Work type (2.3) ────────────────────────────────────────────────────────
+  const [accuracy, setAccuracy] = useState<WorkTypeAccuracy | null>(null);
+
+  const loadAccuracy = useCallback(() => {
+    if (mode !== 'live' || !userId) return;
+    void supabase.rpc('work_type_accuracy', { p_days: 30 }).then(({ data, error: e }) => {
+      if (!e && data) setAccuracy(data as WorkTypeAccuracy);
+    });
+  }, [mode, userId]);
+
+  useEffect(() => { loadAccuracy(); }, [loadAccuracy]);
+
+  const sampleAccuracy = useMemo((): WorkTypeAccuracy | null => {
+    if (mode !== 'sample') return null;
+    const graded = sampleItems.filter((i) => i.workTypeChecked && i.claudeWorkType);
+    const misses = new Map<string, { tagged: WorkType; was: WorkType; n: number }>();
+    for (const i of graded) {
+      if (i.claudeWorkType === i.workType || !i.workType || !i.claudeWorkType) continue;
+      const k = `${i.claudeWorkType}>${i.workType}`;
+      const m = misses.get(k) ?? { tagged: i.claudeWorkType, was: i.workType, n: 0 };
+      misses.set(k, { ...m, n: m.n + 1 });
+    }
+    return {
+      days: 30,
+      checked: graded.length,
+      agreed: graded.filter((i) => i.claudeWorkType === i.workType).length,
+      untagged: sampleItems.filter((i) => i.workTypeChecked && !i.claudeWorkType).length,
+      misses: [...misses.values()].sort((a, b) => b.n - a.n),
+    };
+  }, [mode, sampleItems]);
+
+  const setWorkType = useCallback(
+    (id: string, workType: WorkType) => {
+      if (mode === 'sample') {
+        setSampleItems((prev) => prev.map((i) => (i.id === id ? { ...i, workType, workTypeChecked: true } : i)));
+        return;
+      }
+      patchRow(id, { user_work_type: workType, effective_work_type: workType });
+      void (async () => {
+        const { error: e } = await supabase.from('worklist_items').update({ user_work_type: workType }).eq('id', id);
+        if (e) {
+          setError(`The work type didn't save: ${e.message}`);
+          load();
+          return;
+        }
+        loadAccuracy();
+      })();
+    },
+    [mode, patchRow, load, loadAccuracy],
+  );
 
   // ── Reviewed log (2.1): loaded only when the drawer opens ─────────────────
   const [reviewed, setReviewed] = useState<ReviewedRow[] | null>(null);
@@ -491,5 +564,7 @@ export function useWorklist(): Worklist {
     reviewedError,
     loadReviewed,
     surface,
+    setWorkType,
+    workTypeAccuracy: mode === 'sample' ? sampleAccuracy : accuracy,
   };
 }

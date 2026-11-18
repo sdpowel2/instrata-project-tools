@@ -3,7 +3,7 @@ name: morning-worklist
 description: Seth's morning briefing. Triages new email, Teams chats and @mentions, today's Outlook calendar, his monday.com assignments and @mentions, and his manual task list into one short daily worklist with due dates and urgency, plus a "read me" brief, and saves it to his My Day worklist in Project Tools. Use when Seth asks for his morning briefing, morning worklist, daily list, "what's on my plate today", or runs /morning-worklist. It never sends, posts, marks read, or edits anything; its only writes are the worklist save and the personal-worklist folder.
 ---
 
-# Morning worklist (v1.3)
+# Morning worklist (v1.4)
 
 You are building Seth Powell's worklist for today. The goal is a **short, trustworthy list**. A list that's too long or noisy is a failure, even if every item on it is real. When in doubt, put an item in "Set aside" with a reason; don't add it as a task.
 
@@ -195,6 +195,22 @@ Skip anything whose `source_key` is in `recently_closed`, unless that row has `c
 
 Don't inflate. Urgency 1 is for at most about 5 items, counting effective urgency. If more qualify, keep the 5 most important at 1 and move the rest to 2 with the reason `crowded out`.
 
+## Step 8a - Work type
+
+Tag every task you send (new and carried) with the phase 3 worker that could one day do its first pass. Nothing acts on the tag yet; Seth confirms or corrects it on My Day, and those checks decide when workers can start (the gate is 90% agreement), so be honest rather than hopeful.
+
+| `work_type` | Use when | Not when |
+|---|---|---|
+| `reply` | The work is a written answer: someone asked Seth something by email or Teams, and replying is most of the job. | The reply needs a decision only Seth can make first (that's `none`, kind `decide`), or the real work is a report or a code change. |
+| `dtools_report` | Someone wants a D-Tools output: a BoM, equipment list, parts list, proposal or price breakdown, a project export. | A quote or design he has to build from scratch. |
+| `ipt_change` | A bug report or feature request about Instrata Project Tools (IPT), from anyone. | General IT or other software. |
+| `none` | Everything else: decisions, meetings, site work, monday status updates, his own promises to do physical or design work. | |
+
+- `work_confidence`: 0.9+ when it's plainly that type, 0.6-0.8 when likely, below 0.6 when you're guessing. Don't round everything up.
+- **Calibrate from Seth's checks.** `feedback` rows with `action: "work_type"` are his checks: `from_value` is your tag (or `untagged`), `to_value` his pick; equal means you were right. Learn from any correction, even one: a similar task today gets his type, and its `urgency_reason` doesn't need to say so.
+- Manual tasks get a tag too (send `work_type` with the item), but never change their text.
+- `source_ref`: the ids a worker would need later, when the connector gives them to you. Email: `{"conversation_id": "...", "message_id": "<the ask>"}`. Teams: `{"chat_id": "...", "message_id": "..."}`. monday: `{"board_id": "...", "item_id": "...", "update_id": "..."}`. Ids only, never text. Leave it out if you don't have them.
+
 ## Step 8b - Apply Seth's hard rules
 
 Hard rules are Seth's, made from the reviewed drawer on My Day, and they're binding. The database does the matching so it comes out the same every run.
@@ -242,7 +258,10 @@ Hard rules are Seth's, made from the reviewed drawer on My Day, and they're bind
     "due": "2026-11-06",
     "due_basis": "stated",
     "urgency": 2,
-    "urgency_reason": "why this urgency"
+    "urgency_reason": "why this urgency",
+    "work_type": "reply",
+    "work_confidence": 0.85,
+    "source_ref": { "conversation_id": "<id>", "message_id": "<id>" }
   }],
   "resolved_keys": ["<source_key>", "..."],
   "reviewed": [{
@@ -261,7 +280,7 @@ Hard rules are Seth's, made from the reviewed drawer on My Day, and they're bind
 }
 ```
 
-- `items` = today's new tasks plus every still-open carried item from Step 7. At most 100.
+- `items` = today's new tasks plus every still-open carried item from Step 7. At most 100. Every one has `work_type` and `work_confidence` (Step 8a).
 - `reviewed` = **one row for every conversation you looked at**, wherever it landed: each email thread, each Teams chat or channel ask, each monday item you checked. This is what Seth opens from the run line on My Day to see what was missed, so leave nothing out, including what you dropped by category without listing (notifications, newsletters, receipts, social chats). At most 400; if there are more, keep every row that isn't `dropped` and as many dropped rows as fit.
   - `outcome`: `respond`, `do`, `decide` (on the list today), `carried` (an open item from an earlier run you looked at again), `read_me`, `set_aside`, or `dropped` (counted only, no line in the briefing).
   - `source_key`: exactly the key the item would have (Source keys), so "Surface this" creates the right task.
@@ -273,7 +292,7 @@ Hard rules are Seth's, made from the reviewed drawer on My Day, and they're bind
 - Tool limits: title and urgency_reason 300 characters, summary 2000, from_label 200, read-me text 500, schedule 40 events, read-me 15 lines. Stay well under them.
 - `missing` lists every source that failed (see below); empty when the run was complete.
 
-The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_manual` and `resolved`, plus `reviewed` (`saved` and `violations`, or an `error` if the reviewed log couldn't be written; the briefing is saved either way, so just report it).
+The result reports `inserted`, `updated`, `reopened`, `kept_closed`, `skipped_manual` and `resolved`, plus `work_tags` (`tagged` and `missing`, or an `error`) and `reviewed` (`saved` and `violations`, or an `error` if the reviewed log couldn't be written; the briefing is saved either way, so just report them).
 
 `reviewed.violations` lists conversations whose outcome breaks one of Seth's hard rules (`required` is the effect it needed). If it isn't empty, fix exactly those conversations as Step 8b says and call `save_briefing` **once more** with the whole corrected payload. That second call is the only allowed retry, and only for violations. If violations remain after it, report them in the chat summary and stop. If the call fails, keep going: write the markdown with `⚠ Not saved to Project Tools - <error>` at the top. Never retry with a changed payload to get around a rejection; report it.
 
@@ -327,6 +346,7 @@ Window: since <since, Eastern> · Sources: mail N, Teams N, monday N, manual N �
 - the save result (inserted / updated / resolved / kept closed, and how many conversations went into the reviewed log), or the ⚠ line if it wasn't saved
 - the path to the briefing file, and a note if any manual.md tasks were file-only
 - rules: how many hard rules matched and what they moved, and anything a lesson changed
+- work types: how many tasks per type (e.g. `reply 6 · dtools_report 1 · ipt_change 0 · none 4`), and the save result's `work_tags` (`tagged`, plus any `missing` keys or an `error`)
 - **Mondays only, rule check-up:** from `triage_rules`, propose (don't apply; you can't edit rules) any duplicates to merge, hard rules with `hits_30d` of 0 that are more than two weeks old to retire, and lessons applied 5+ times that could become hard rules or part of this skill. Seth makes the changes on My Day.
 
 Keep it to what fits on one screen.

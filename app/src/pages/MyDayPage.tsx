@@ -10,7 +10,7 @@ import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X, ListChecks, Sli
 import { useAuth } from '../contexts/AuthContext';
 import { Card, PageHeader } from '../components/ui';
 import { WorkItemRow } from '../components/worklist/WorkItemRow';
-import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard } from '../components/worklist/SidePanels';
+import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard, WorkTypeCard } from '../components/worklist/SidePanels';
 import { ReviewedDrawer } from '../components/worklist/ReviewedDrawer';
 import { RulesDrawer } from '../components/worklist/RulesDrawer';
 import { RuleModal, type RuleTarget } from '../components/worklist/RuleModal';
@@ -68,7 +68,7 @@ export function MyDayPage() {
       : null);
   const closeModal = () => { setRuleTarget(null); setLessItem(null); };
 
-  const rowProps = { today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer, onLessLike: lessLike };
+  const rowProps = { today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer, onLessLike: lessLike, onWorkType: wl.setWorkType };
 
   const counts = (k: KindFilter) => (k === 'all' ? open.length : open.filter((i) => i.kind === k).length);
 
@@ -227,6 +227,7 @@ export function MyDayPage() {
         {briefing && (
           <div className="space-y-6">
             {!wl.stale && <ScheduleCard briefing={briefing} />}
+            <WorkTypeCard accuracy={wl.workTypeAccuracy} unchecked={open.filter((i) => i.workType && !i.workTypeChecked).length} />
             <ReadMeCard briefing={briefing} />
             <ClosedCard briefing={briefing} />
             <SetAsideCard briefing={briefing} />
