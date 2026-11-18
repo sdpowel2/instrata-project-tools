@@ -100,7 +100,7 @@ From the phase 3 spec's "Triage tuning", adjusted to work without an in-app mode
 
 ### 2.2.1 Database (`add_triage_rules.sql`, built 2026-11-13)
 
-- `triage_rules`: `kind` (`hard` | `lesson`), `match` jsonb, `effect` (`min_task` | `min_read_me` | `suppress`), `example_id` → `worklist_reviewed`, `note` (required for lessons), `active`, `created_from` (`surface_more` | `surface_less` | `manual`). Owner-only RLS; the page writes it directly.
+- `triage_rules`: `kind` (`hard` | `lesson`), `match` jsonb, `effect` (`min_task` | `min_read_me` | `max_read_me` | `suppress`; `max_read_me` added 2026-11-18 in `add_triage_rule_ceiling.sql`), `example_id` → `worklist_reviewed`, `note` (required for lessons), `active`, `created_from` (`surface_more` | `surface_less` | `manual`). Owner-only RLS; the page writes it directly.
 - **Match fields:** `source`, `sender` (exact address), `domain` (subdomains count), `subject_terms` (1–6 words, all must appear), `channel` (text the Teams chat/channel or monday board name contains). At least one besides `source`. The spec's separate `teams_chat` / `monday_board` became `source` + `channel`.
 - `worklist_reviewed` gains `sender`, `channel` and `rule_ids` (which rules fired). The run sends sender/channel; the database computes the hard-rule ids itself, and the run adds the lessons it applied.
 - **Hit counts** come from a view, `triage_rules_with_hits` (reviewed rows in the 30-day window that list the rule), instead of a stored `hits_30d`.
@@ -109,7 +109,8 @@ From the phase 3 spec's "Triage tuning", adjusted to work without an in-app mode
 
 ### 2.2.2 How rules run
 
-- **Hard rules:** MCP tool `match_triage_rules(candidates[])` (read-only, RPC `match_triage_rules`) takes the run's conversations (key, source, sender, title, channel) and returns, per match, the winning effect and rule ids. When rules disagree, the floor wins (`min_task` > `min_read_me` > `suppress`); `suppress` never moves an item already open from an earlier run. The skill (v1.2, Step 8b) must apply them.
+- **Hard rules:** MCP tool `match_triage_rules(candidates[])` (read-only, RPC `match_triage_rules`) takes the run's conversations (key, source, sender, title, channel) and returns, per match, `effects` (every effect to honour), `effect` (the first) and rule ids. Floors (`min_task`, `min_read_me`) and ceilings (`max_read_me`, `suppress`) all apply, except a ceiling that conflicts with a higher floor: `min_task` beats both ceilings, `min_read_me` beats `suppress`, and `min_read_me` + `max_read_me` means exactly a Read me line. `suppress` never moves an item already open from an earlier run; `max_read_me` does: once the run lands it below the list, `save_reviewed()` dismisses the open item (`closed_by = 'briefing'`) and returns it in `dismissed_keys`. The skill (v1.3, Step 8b) must apply them.
+- **Why the ceiling (2026-11-18):** Seth's first rule, Triage board → `min_read_me` ("bid/no-bid is Isaac's and Kelina's call"), couldn't take the open Decide items off his list, because a floor never moves anything down.
 - **Backstop:** `save_reviewed()` re-checks every row and returns `violations` (rows whose outcome breaks a hard rule). The skill fixes those and saves once more, so a hard rule holds even if the model ignored the match result.
 - **Lessons:** `get_worklist_state` returns `triage_rules` (active, with hit counts and example rows); the skill reads lessons as examples before classifying and records the ones it applied in `lesson_ids`.
 

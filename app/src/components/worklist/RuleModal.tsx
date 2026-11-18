@@ -168,7 +168,7 @@ export function RuleModal({ target, onClose, onSave, onPreview }: Props) {
           <fieldset>
             <legend className="text-xs font-semibold text-fg-2 mb-1.5">Then</legend>
             <div className="flex flex-wrap gap-1.5">
-              {(['min_task', 'min_read_me', 'suppress'] as RuleEffect[]).map((e) => (
+              {(['min_task', 'min_read_me', 'max_read_me', 'suppress'] as RuleEffect[]).map((e) => (
                 <button
                   key={e}
                   type="button"

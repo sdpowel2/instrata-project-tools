@@ -24,6 +24,7 @@ interface Props {
 const EFFECT_STYLE = {
   min_task: 'bg-orange/10 text-orange',
   min_read_me: 'bg-sky-50 text-sky-700',
+  max_read_me: 'bg-sky-50 text-sky-700',
   suppress: 'bg-surface text-fg-2',
 } as const;
 
