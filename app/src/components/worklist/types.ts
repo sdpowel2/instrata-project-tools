@@ -85,6 +85,9 @@ export interface ReadMeItem {
   link?: string;
 }
 
+/** Seth's call on a read-me line (2.5): logged into the second brain, or hidden (less like this). */
+export type ReadMeState = 'logged' | 'hidden';
+
 export interface SetAsideItem {
   id: string;
   title: string;

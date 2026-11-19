@@ -3,7 +3,7 @@ name: morning-worklist
 description: Seth's morning briefing. Triages new email, Teams chats and @mentions, today's Outlook calendar, his monday.com assignments and @mentions, and his manual task list into one short daily worklist with due dates and urgency, plus a "read me" brief, and saves it to his My Day worklist in Project Tools. Use when Seth asks for his morning briefing, morning worklist, daily list, "what's on my plate today", or runs /morning-worklist. It never sends, posts, marks read, or edits anything; its only writes are the worklist save and the personal-worklist folder.
 ---
 
-# Morning worklist (v1.5)
+# Morning worklist (v1.6)
 
 You are building Seth Powell's worklist for today. The goal is a **short, trustworthy list**. A list that's too long or noisy is a failure, even if every item on it is real. When in doubt, put an item in "Set aside" with a reason; don't add it as a task.
 
@@ -60,7 +60,7 @@ If one monday item has both an unanswered @mention and an assignment date, make 
 
 ## Step 0 - Load state and set the time window
 
-1. Call `get_worklist_state`. Keep its `today`, `last_briefing`, `open_items`, `recently_closed`, `feedback`, `recently_surfaced` and `triage_rules`.
+1. Call `get_worklist_state`. Keep its `today`, `last_briefing`, `open_items`, `recently_closed`, `feedback`, `recently_surfaced`, `triage_rules` and `readme_feedback`.
    - If the tool isn't available or errors, run in **file mode**: read `personal-worklist/state.json` (`{"lastRunAt": ...}`) for the window and the newest earlier file in `personal-worklist/briefings/` for carryover, skip the save in Step 9, and put `⚠ Not saved to Project Tools - <error>` at the top of the briefing.
 2. Set `since`:
    - If `last_briefing.briefing_date` is **today** (a re-run), use `last_briefing.window_since`, so the re-run covers the whole day again. The save replaces today's briefing.
@@ -193,6 +193,8 @@ Skip anything whose `source_key` is in `recently_closed`, unless that row has `c
 **Learn from what Seth surfaced.** Each `recently_surfaced` row is a conversation an earlier run left off the list (its `outcome`, `reason` and `reason_group` say where and why) that Seth pulled out of the reviewed list by hand, with the kind he chose (`item.kind`). One is enough to act on: a similar conversation today (same sender, same domain, same kind of ask) goes on the list too, and its reason ends with `(you surfaced a similar one on <date>)`. Never put a surfaced pattern back in Set aside or Dropped without saying so in the chat summary.
 
 **Seth's lessons.** `triage_rules` rows with `kind: "lesson"` are judgment calls in his words (`note`), usually with an `example` (the conversation he made it from and where it had landed) and sometimes a `match` hint. Read them before you classify, and apply each one to conversations that fit its spirit, not just its letter: `effect` says the direction (`min_task` = should be a task, `min_read_me` = at least a Read me line, `max_read_me` = never a task, `suppress` = Set aside). When a lesson changes where something lands, put its `id` in that conversation's reviewed row as `lesson_ids` and end the reason with `(your lesson: <a few words of the note>)`. `kind: "hard"` rows are listed for reference only; Step 8b applies them.
+
+**What Seth logs and hides in the Read me.** `readme_feedback` has his calls on recent Read me lines (`readme_text` is the line you wrote, `readme_source` where it came from): `logged` means it was worth knowing and went into his second brain, `hidden` means he didn't want it. Look for patterns across the rows (a kind of news, a sender, a project, a monday board). A hidden pattern seen **twice** means similar conversations go to Set aside instead of the Read me; a logged pattern means similar ones earn a Read me line over a borderline one when the 7-line cap bites. One hide alone is weak evidence: note it, don't act on it. Hidden is softer than a rule; if he made a rule from it, Step 8b applies the rule. Give each Read me line its own id (`r1`, `r2`, ...) in the order shown, so his calls attach to the right line.
 
 Don't inflate. Urgency 1 is for at most about 5 items, counting effective urgency. If more qualify, keep the 5 most important at 1 and move the rest to 2 with the reason `crowded out`.
 
@@ -361,6 +363,7 @@ Window: since <since, Eastern> · Sources: mail N, Teams N, monday N, manual N �
 - the path to the briefing file, and a note if any manual.md tasks were file-only
 - rules: how many hard rules matched and what they moved, and anything a lesson changed
 - work types: how many tasks per type (e.g. `reply 6 · dtools_report 1 · ipt_change 0 · none 4`), and the save result's `work_tags` (`tagged`, plus any `missing` keys or an `error`)
+- read me: if `readme_feedback` changed what you put in the Read me, say how in one line (e.g. `left out 2 monday status changes you've hidden before`)
 - projects: how many project suggestions you sent and how many landed (`work_tags.suggested`), each as `task → project code`
 - **Mondays only, rule check-up:** from `triage_rules`, propose (don't apply; you can't edit rules) any duplicates to merge, hard rules with `hits_30d` of 0 that are more than two weeks old to retire, and lessons applied 5+ times that could become hard rules or part of this skill. Seth makes the changes on My Day.
 

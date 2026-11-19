@@ -10,7 +10,7 @@ import { Plus, CircleCheck, CircleAlert, Sparkles, RefreshCw, X, ListChecks, Sli
 import { useAuth } from '../contexts/AuthContext';
 import { Card, PageHeader } from '../components/ui';
 import { WorkItemRow } from '../components/worklist/WorkItemRow';
-import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard, WorkTypeCard } from '../components/worklist/SidePanels';
+import { ScheduleCard, ReadMeCard, SetAsideCard, ClosedCard, WorkTypeCard, NoteCard } from '../components/worklist/SidePanels';
 import { ReviewedDrawer } from '../components/worklist/ReviewedDrawer';
 import { RulesDrawer } from '../components/worklist/RulesDrawer';
 import { RuleModal, type RuleTarget } from '../components/worklist/RuleModal';
@@ -20,10 +20,19 @@ import type { Project } from '../types';
 import { useWorklist } from '../hooks/useWorklist';
 import { useTriageRules } from '../hooks/useTriageRules';
 import { formatClock, formatDayClock, formatDue, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
-import type { Briefing, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
+import type { Briefing, ReadMeItem, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
 import { KIND_LABEL, URGENCY_LABEL } from '../components/worklist/types';
 
 type KindFilter = 'all' | Exclude<WorkItemKind, 'question'>;
+
+/** What "less like this" was clicked on: a task, or a hidden read-me line (2.5). */
+interface LessTarget {
+  key: string;
+  title: string;
+  itemId?: string;
+  sourceKey?: string;
+  link?: string;
+}
 
 export function MyDayPage() {
   const { isAdmin, user } = useAuth();
@@ -35,7 +44,7 @@ export function MyDayPage() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [ruleTarget, setRuleTarget] = useState<RuleTarget | null>(null);
   // "Less like this" on a task waits for the reviewed log, to pre-fill from its row.
-  const [lessItem, setLessItem] = useState<WorkItem | null>(null);
+  const [lessItem, setLessItem] = useState<LessTarget | null>(null);
   const [linkItem, setLinkItem] = useState<WorkItem | null>(null);
 
   // Connect project (2.4) searches the projects the app already loaded: no extra query.
@@ -74,9 +83,21 @@ export function MyDayPage() {
   }
 
   const openRules = () => { tr.load(); setRulesOpen(true); };
-  const lessLike = (item: WorkItem) => { if (!wl.reviewed) wl.loadReviewed(); setLessItem(item); };
+  const lessLike = (item: WorkItem) => {
+    if (!wl.reviewed) wl.loadReviewed();
+    setLessItem({ key: item.id, title: item.title, itemId: item.id, sourceKey: item.sourceKey });
+  };
+  const lessReadMe = (line: ReadMeItem) => {
+    if (!wl.reviewed) wl.loadReviewed();
+    // Only a real URL identifies the conversation; placeholders like "#" would match anything.
+    const link = line.link && /^https?:\/\//i.test(line.link) ? line.link : undefined;
+    setLessItem({ key: `readme-${line.id}`, title: line.text.replace(/[.\s]+$/, ''), link });
+  };
   const lessExample = lessItem
-    ? (wl.reviewed?.find((r) => r.itemId === lessItem.id || (!!lessItem.sourceKey && r.sourceKey === lessItem.sourceKey)) ?? null)
+    ? (wl.reviewed?.find((r) =>
+        (!!lessItem.itemId && r.itemId === lessItem.itemId)
+        || (!!lessItem.sourceKey && r.sourceKey === lessItem.sourceKey)
+        || (!!lessItem.link && r.link === lessItem.link && r.outcome === 'read_me')) ?? null)
     : null;
   const modalTarget: RuleTarget | null =
     ruleTarget ??
@@ -246,9 +267,10 @@ export function MyDayPage() {
         {/* Side column */}
         {briefing && (
           <div className="space-y-6">
+            <NoteCard onAdd={wl.addNote} inboxCount={wl.inboxCount} />
             {!wl.stale && <ScheduleCard briefing={briefing} />}
             <WorkTypeCard accuracy={wl.workTypeAccuracy} unchecked={open.filter((i) => i.workType && !i.workTypeChecked).length} />
-            <ReadMeCard briefing={briefing} />
+            <ReadMeCard briefing={briefing} stateOf={wl.readMeState} onSet={wl.setReadMe} onLessLike={lessReadMe} />
             <ClosedCard briefing={briefing} />
             <SetAsideCard briefing={briefing} />
           </div>
@@ -290,7 +312,7 @@ export function MyDayPage() {
       )}
       {modalTarget && (
         <RuleModal
-          key={modalTarget.mode === 'edit' ? modalTarget.rule.id : `${modalTarget.direction}-${modalTarget.example?.id ?? lessItem?.id ?? 'new'}`}
+          key={modalTarget.mode === 'edit' ? modalTarget.rule.id : `${modalTarget.direction}-${modalTarget.example?.id ?? lessItem?.key ?? 'new'}`}
           target={modalTarget}
           onClose={closeModal}
           onSave={tr.save}
