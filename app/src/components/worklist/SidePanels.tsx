@@ -1,6 +1,10 @@
-import { Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, ExternalLink, CheckCircle2 } from 'lucide-react';
+import { useState } from 'react';
+import type { FormEvent } from 'react';
+import {
+  Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, ExternalLink, CheckCircle2, Bookmark, BookmarkCheck, EyeOff, Brain,
+} from 'lucide-react';
 import { Card } from '../ui';
-import type { Briefing, WorkItemSource, WorkTypeAccuracy } from './types';
+import type { Briefing, ReadMeItem, ReadMeState, WorkItemSource, WorkTypeAccuracy } from './types';
 import { WORK_TYPE_LABEL } from './types';
 import { formatHHMM, formatTimeRange } from './format';
 
@@ -53,16 +57,57 @@ export function ScheduleCard({ briefing }: { briefing: Briefing }) {
   );
 }
 
-export function ReadMeCard({ briefing }: { briefing: Briefing }) {
+interface ReadMeProps {
+  briefing: Briefing;
+  /** Log / Hide (2.5). Without these the card is read-only. */
+  stateOf?: (line: ReadMeItem) => ReadMeState | undefined;
+  onSet?: (line: ReadMeItem, state: ReadMeState | null) => void;
+  /** "Less like this": open the tuning-rule form for a hidden line. */
+  onLessLike?: (line: ReadMeItem) => void;
+}
+
+export function ReadMeCard({ briefing, stateOf, onSet, onLessLike }: ReadMeProps) {
+  const shown = briefing.readMe.filter((r) => stateOf?.(r) !== 'hidden');
+  const hidden = briefing.readMe.filter((r) => stateOf?.(r) === 'hidden');
   return (
     <Card title="Read me" eyebrow="Worth knowing" flush>
       <ul className="m-0 p-0 list-none">
-        {briefing.readMe.map((r) => {
+        {shown.map((r) => {
           const Icon = SOURCE_ICON[r.source];
+          const logged = stateOf?.(r) === 'logged';
           return (
-            <li key={r.id} className="flex gap-2.5 px-5 py-2.5 border-b border-border-soft last:border-b-0">
+            <li key={r.id} className="group flex gap-2.5 px-5 py-2.5 border-b border-border-soft last:border-b-0">
               <Icon size={13} className="text-fg-3 mt-1 flex-shrink-0" />
-              <span className="text-sm text-fg leading-snug flex-1">{r.text}</span>
+              <span className="text-sm text-fg leading-snug flex-1">
+                {r.text}
+                {logged && (
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-semibold text-status-success-fg align-middle">
+                    <BookmarkCheck size={11} /> logged
+                  </span>
+                )}
+              </span>
+              {onSet && (
+                <span className="flex items-start gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    onClick={() => onSet(r, logged ? null : 'logged')}
+                    className={`p-0.5 rounded ${logged ? 'text-status-success-fg' : 'text-fg-3 hover:text-navy'}`}
+                    title={logged ? 'Logged to your second brain. Click to undo.' : 'Log to your second brain (more like this)'}
+                    aria-label={logged ? 'Undo log' : 'Log to second brain'}
+                  >
+                    {logged ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSet(r, 'hidden')}
+                    className="p-0.5 rounded text-fg-3 hover:text-navy"
+                    title="Hide (less like this)"
+                    aria-label="Hide"
+                  >
+                    <EyeOff size={14} />
+                  </button>
+                </span>
+              )}
               {r.link && (
                 <a href={r.link} target="_blank" rel="noreferrer" className="text-fg-3 hover:text-navy mt-0.5" aria-label="Open source">
                   <ExternalLink size={13} />
@@ -71,7 +116,73 @@ export function ReadMeCard({ briefing }: { briefing: Briefing }) {
             </li>
           );
         })}
+        {shown.length === 0 && <li className="px-5 py-3 text-sm text-fg-3">Nothing left to read.</li>}
       </ul>
+      {hidden.length > 0 && onSet && (
+        <details className="border-t border-border-soft">
+          <summary className="px-5 py-2 text-xs text-fg-3 cursor-pointer hover:text-fg-2">
+            {hidden.length} hidden
+          </summary>
+          <ul className="m-0 p-0 list-none">
+            {hidden.map((r) => (
+              <li key={r.id} className="flex items-start gap-2 px-5 py-1.5 text-xs text-fg-3 border-t border-border-soft">
+                <span className="flex-1 min-w-0 line-clamp-2">{r.text}</span>
+                <button type="button" onClick={() => onSet(r, null)} className="text-navy font-medium hover:underline flex-shrink-0">
+                  Undo
+                </button>
+                {onLessLike && (
+                  <button
+                    type="button"
+                    onClick={() => onLessLike(r)}
+                    className="text-navy font-medium hover:underline flex-shrink-0"
+                    title="Make a rule so the run puts less like this in the Read me"
+                  >
+                    Less like this
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </Card>
+  );
+}
+
+/** Quick capture into the second brain's inbox (2.5). The nightly run files it (2.6). */
+export function NoteCard({ onAdd, inboxCount }: { onAdd: (text: string) => void; inboxCount: number | null }) {
+  const [text, setText] = useState('');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    onAdd(text.trim());
+    setText('');
+  };
+  return (
+    <Card flush>
+      <form onSubmit={submit} className="flex items-center gap-2 px-4 py-2.5">
+        <Brain size={15} className="text-violet-600 flex-shrink-0" />
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Jot something for your second brain…"
+          aria-label="Quick note for your second brain"
+          maxLength={4000}
+          className="flex-1 min-w-0 text-sm bg-transparent outline-none placeholder:text-fg-3"
+        />
+        <button
+          type="submit"
+          disabled={!text.trim()}
+          className="text-xs font-medium px-2.5 py-1 rounded-lg bg-navy text-white disabled:opacity-40"
+        >
+          Save
+        </button>
+      </form>
+      {inboxCount != null && inboxCount > 0 && (
+        <div className="px-4 py-1.5 border-t border-border-soft text-[11px] text-fg-3">
+          {inboxCount} {inboxCount === 1 ? 'note' : 'notes'} in the inbox, waiting to be filed
+        </div>
+      )}
     </Card>
   );
 }
