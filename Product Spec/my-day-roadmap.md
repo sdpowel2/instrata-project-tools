@@ -1,6 +1,6 @@
 # My Day / Work Engine roadmap: phases 2 and 3
 
-**Status:** phase 2 in progress (2.1 first) · **Owner:** Seth · **Updated:** 2026-11-13
+**Status:** phase 2 in progress (2.1–2.5 live) · **Owner:** Seth · **Updated:** 2026-11-19 (team model: scopes, project open items, project notes, rollout)
 **Builds on:** phase 1, live since 2026-11-05 (`supabase/migrations/add_worklist.sql`, `mcp-server/src/worklistTools.ts`, `app/src/hooks/useWorklist.ts`, `.claude/skills/morning-worklist/SKILL.md`)
 **Phase 3 source:** `Product Spec/work-engine-phase-3-spec.md` (Seth's spec). Section "Phase 3" below lists the changes this roadmap makes to it.
 
@@ -8,6 +8,12 @@
 
 - **Phase 1 (done):** the morning skill triages mail, Teams, calendar and monday into a short list on My Day.
 - **Phase 2: trust and context.** See everything the run reviewed, fix misses in one click, and teach the triage with rules instead of prompt edits. Then link tasks to projects, capture notes into a second brain, make it searchable, and move the run to a nightly cloud schedule.
+- **The team model (added 2026-11-19).** My Day is built for Seth first, but everything is shaped so each teammate (~22 people today) can later get their own page, connectors and brain (2.11). What gets captured has one of three **scopes**:
+  - **Personal:** only the owner sees it (a year-end review summary from Lee). This is the default.
+  - **Project:** it belongs to a job. Tasks become the project's **open items** (2.7) and notes go into the project wiki's **notes** section (2.6). Anyone who can see the project sees them, so "summarize project X" has the full picture.
+  - **General:** company knowledge, such as "Crestron raised pricing on Jan 1, 2026". It goes into shared pages the whole team can read (2.6).
+
+  Nothing moves from personal to shared without a click from its owner. The run can suggest a project; only the person can confirm it.
 - **Phase 3: workers.** Claude does the first pass on tasks (reply drafts, IPT change plans, D-Tools reports) and stages each result for approval. Nothing is sent, merged or shared without a click.
 
 **One roadmap, separate branches.** Each numbered milestone gets its own short branch (`my-day/<name>`), merged through `dev` → `main` when its "done when" passes, like phase 1. Phase 3 stays a separate phase because its workers depend on two-week gates and IT sign-off, but its groundwork (2.1–2.3) is built here, first.
@@ -18,11 +24,13 @@
 |---|---|
 | **Triage tuning comes first in phase 2.** | The list is only useful if Seth trusts it isn't missing things. A visible "reviewed" log with one-click fixes is how that trust gets earned, and every phase 3 gate (work-type accuracy, regression replay) needs the same data. |
 | **Hard rules run in code, lessons in the prompt.** | A rule like "always surface anything from this client's domain" must be applied the same way every time. The skill is a model, so the matching happens in an MCP tool (2.2) before Claude classifies anything. Fuzzy guidance ("a GC schedule change sent as FYI should surface") goes into the prompt as a lesson with its example. |
-| **No Claude API call in the app yet.** | The tuning modal pre-fills rules from the item and previews them with a plain SQL match, which needs no model. Answering questions from the second brain works through Claude Code / claude.ai with MCP tools on the enterprise seat. An in-app API call (Claude-proposed rules, the "Ask" box) stays optional (2.9). |
+| **No Claude API call in the app yet.** | The tuning modal pre-fills rules from the item and previews them with a plain SQL match, which needs no model. Answering questions from the second brain works through Claude Code / claude.ai with MCP tools on the enterprise seat. An in-app API call (Claude-proposed rules, the "Ask" box) stays optional (2.10). |
 | **Summaries, not bodies, everywhere.** | The reviewed log stores sender, subject or chat name, a one-line reason and a link back, not the spec's 200-character snippet. Phase 1's rule stands: the original is one click away, and the database never holds message text. |
-| **The second brain lives in Supabase.** | Search, MCP read/write tools and per-user privacy all come for free, the same way the project wiki works. Obsidian stays possible through a one-way export (2.6.4). (Correction to the Nov 5 plan: the app *can* write to the projects SharePoint drive through `sharepoint-project-files`; that's the right home for generated reports in phase 3, but not for the brain.) |
+| **The second brain lives in Supabase.** | Search, MCP read/write tools and per-user privacy all come for free, the same way the project wiki works, and it runs without anyone's laptop. Nothing writes back to a local folder. **Start fresh (2026-11-19):** the existing Obsidian vault is not imported. A one-way export stays possible (2.6.4) but is optional. (Correction to the Nov 5 plan: the app *can* write to the projects SharePoint drive through `sharepoint-project-files`; that's the right home for generated reports in phase 3, but not for the brain.) |
+| **Auto-file, within a scope (2026-11-19).** | The nightly filing files notes without asking, because a confirm step on every note would stall the inbox. Three guards: every page write keeps a version row (undo), filing never changes a note's scope, and a personal note is never filed anywhere shared. |
+| **Project-linked tasks become shared open items; the private details stay private (2026-11-19).** | The point of linking is that anyone on the job can see what's outstanding at a glance. But a task's summary and source link often come from someone's private mail. So the project gets the title (editable when linking), due date, status and who owns it, and My Day keeps the rest. |
 | **Workers never hold send permissions.** | Phase 3 workers write drafts into Project Tools only. Approving from the dashboard creates or sends the Outlook message under Seth's own login. Untrusted email text and the power to act on it never sit in the same job. |
-| **Linked tasks go to a per-project activity log, not the curated project wiki.** | The project wiki is organized around rooms, decisions and questions; task churn would clutter it. |
+| **Tasks go to open items, notes go to the wiki's notes section, and churn stays out of the curated wiki.** | The project wiki is organized around rooms, decisions and questions; task churn would clutter it. So to-dos live in their own open-items list (2.7), logged notes append to a separate dated **notes** section of the wiki (2.6), and the per-person activity log (2.4) stays as each owner's private history. (Updated 2026-11-19; was "linked tasks go to a per-project activity log".) |
 | **Same safety rules as phase 1.** | Owner-only RLS (`user_id = auth.uid()`), admin-only MCP tools, and the skill never writes to monday, mail or Teams. The MCP server keeps acting as the signed-in user; no service-role key. |
 
 ## Phase 2 build order
@@ -34,10 +42,14 @@
 | 2.3 | Work-type tagging (phase 3 groundwork; tag only, no workers) | S | 2.1 |
 | 2.4 | Connect project + project activity log | S–M | nothing |
 | 2.5 | Log / Hide on read-me lines + quick notes | S | 2.2 (Hide opens the modal) |
-| 2.6 | Second brain pages, nightly filing, vault import/export | M–L | 2.5 |
-| 2.7 | Search on My Day + `search_brain` MCP tool | S–M | 2.6 |
-| 2.8 | Nightly cloud schedule + regression replay | M | 2.1–2.3, IT/Lee sign-off |
-| 2.9 | Optional: in-app Claude API (Ask box, Claude-proposed rules) | M | 2.7, API key decision |
+| 2.6 | Second brain pages with scopes, nightly filing, project notes in the wiki | M–L | 2.5 |
+| 2.7 | Project open items: to-dos at the top of the project page | M | 2.4 (can go before 2.6) |
+| 2.8 | Search on My Day + `search_brain` MCP tool | S–M | 2.6 |
+| 2.9 | Nightly cloud schedule + regression replay | M | 2.1–2.3, IT/Lee sign-off |
+| 2.10 | Optional: in-app Claude API (Ask box, Claude-proposed rules) | M | 2.8, API key decision |
+| 2.11 | Team rollout: per-person settings, opt-in, each person's own connectors | M–L | 2.6, 2.7, 2.9, IT/Lee sign-off |
+
+**Renumbered 2026-11-19:** 2.7 (project open items) and 2.11 (team rollout) are new. Old 2.7 search → 2.8, old 2.8 cloud schedule → 2.9, old 2.9 API → 2.10. 2.6 kept its number because migrations and code comments cite it.
 
 **Infrastructure note (2026-11-13):** the hosted Supabase project is over its free-tier usage while IT stands up a self-hosted Supabase and a Docker host for the Fly apps. These milestones add very little load (see "Usage footprint" at the end). Code and migrations can be written now; apply migrations once it's clear which limit is exceeded, or after the move.
 
@@ -71,7 +83,7 @@ create table if not exists public.worklist_reviewed (
 
 - One row per **conversation**, not per message: an email thread, a Teams chat's asks in the window, a monday item. That keeps a run around 150–250 rows.
 - A same-day re-run replaces that briefing's rows (delete + insert in one transaction), except rows Seth already surfaced.
-- **Retention:** rows older than 30 days are deleted at the start of each save. Surfaced rows are kept: they're the regression set (2.8).
+- **Retention:** rows older than 30 days are deleted at the start of each save. Surfaced rows are kept: they're the regression set (2.9).
 - `save_reviewed(p_date date, p_rows jsonb)` RPC (SECURITY INVOKER, max 400 rows).
 - `surface_reviewed(p_id uuid, p_kind text, p_urgency smallint)` RPC: creates or reopens the worklist item with the same `source_key` (kind and urgency from Seth's pick, reason "Surfaced by you from the reviewed list"), links it back, and sets `surfaced_at`. A trigger logs a `surfaced` row in `worklist_feedback` with the snapshot, so the skill sees every miss.
 
@@ -122,7 +134,7 @@ From the phase 3 spec's "Triage tuning", adjusted to work without an in-app mode
 4. **Preview** (hard rules only): `preview_triage_rule()` runs the match against the latest run's reviewed rows: how many match, how many would move (with the list), and how many matched in the last 30 days.
 5. Save, edit or cancel. It applies from the next run.
 
-Claude proposing the rule itself (spec step 3) needs a model call from the app. Deferred to 2.9; until then the nightly run can suggest rules in its chat summary.
+Claude proposing the rule itself (spec step 3) needs a model call from the app. Deferred to 2.10; until then the nightly run can suggest rules in its chat summary.
 
 ### 2.2.4 Rules page
 
@@ -198,6 +210,8 @@ create index if not exists idx_project_activity_project on public.project_activi
 - **`find_projects(codes, numbers, monday_item_ids)`** queries `projects` directly (exact matches, with `matched_by`); no new RPC.
 - **Open decision 1:** built owner-only, as recommended. Widening it later is a policy change on `project_activity`.
 
+**What the project page shows today (2026-11-19):** only the "Your My Day" card, below the Project Wiki card, and only to its owner. No one else on the job sees linked tasks yet. That's what 2.7 fixes: linking a task will also put it on the project's shared open items at the top of the page. The "Your My Day" card stays as the owner's private history.
+
 ### 2.4.4 Done when
 
 - Linking a task shows the chip, writes a `linked` activity row, and survives a re-run of the skill.
@@ -267,6 +281,33 @@ create table if not exists public.worklist_readme_state (
 
 ## 2.6 The second brain organizes itself
 
+**Decided 2026-11-19:** start fresh (no vault import), auto-file within a scope, and project notes go into the project wiki. 2.6.0 below is the team-model layer and takes precedence over the older sketch in 2.6.1–2.6.4 where they differ.
+
+### 2.6.0 Scopes and project notes (added 2026-11-19)
+
+**Every captured note has a scope.**
+- `brain_raw` gains `scope` (`personal` | `project` | `general`, default `personal`) and `project_id` (required when the scope is `project`).
+- `brain_pages` gains the same `scope`. Personal pages stay owner-only. General pages are readable by every signed-in staff member. (As built: anyone can append, with versions; the author or an admin deletes.)
+- Filing never changes a note's scope. Only the owner can, with a click.
+
+**How a note gets its scope.**
+- **Read-me lines get project suggestions.** The skill tags read-me lines with a project using the same exact-match rules as Step 8c (monday item ids, project codes, exact numbers), and the line shows the project chip. Logging a line that has a chip files it as a `project` note. A small menu on the chip lets the owner change or clear the project before or after logging. Logging is the click that shares it; the run never logs anything.
+- **Quick notes** get a scope picker: *Me* (default) · *Project…* (the 2.4 project search) · *Team*.
+- **Logged lines and notes with no project** stay personal unless the owner picks *Team*.
+
+**Project notes live in the project wiki, not in anyone's brain.**
+- New table `project_notes`: `project_id`, `text` (≤ 2000, a summary, never a message body), `link`, `noted_by`, `noted_at`, `raw_id` → `brain_raw`.
+- Anyone who can see the project can read the notes. The author and admins can edit or delete them.
+- The nightly filing turns each `project` note into a dated entry here: a tidied one- or two-line summary plus the source link.
+- The Project Wiki page gets a **Notes** section (newest first, grouped by month), and the wiki summary card shows the latest three.
+- `get_project_wiki` returns recent notes, and `search_project_wiki` searches them. "Give me a summary of project X" then covers decisions, open questions, open items (2.7) and the running notes.
+- The filing **never rewrites** the curated wiki (summary, scope, rooms, decisions). Notes only append. If a note looks like it changes a decision, the chat summary says so, and a person updates the wiki.
+
+**General notes** file into shared `general` pages (kind `company` / `topic`, such as `crestron` or `pricing-changes`).
+- Later: when a note names a manufacturer in the product catalog, also show it on that manufacturer's record. Not in 2.6; it needs the catalog's manufacturer table checked first.
+
+**Version history** keeps every version for 90 days, then one per week. This keeps `brain_page_versions` from becoming the biggest table as the team grows.
+
 ### 2.6.1 Database (migration `add_brain.sql`, part 2)
 
 ```sql
@@ -313,7 +354,7 @@ alter table public.brain_raw
 | Tool | Scope | Does |
 |---|---|---|
 | `get_brain_inbox` | read | `brain_raw` rows with status `new`, oldest first (limit 50) |
-| `search_brain` | read | calls the `search_brain()` RPC (2.7.1); returns slug, title, summary, snippet, rank |
+| `search_brain` | read | calls the `search_brain()` RPC (2.8.1); returns slug, title, summary, snippet, rank |
 | `get_brain_page` | read | one page by slug, including body and its `[[links]]` |
 | `file_brain_raw` | write | the RPC above: create or append to a page, mark raw rows filed |
 | `discard_brain_raw` | write | mark raw rows `discarded` with a reason (duplicates, noise) |
@@ -324,58 +365,158 @@ Runs after `save_briefing`, capped at **20 raw notes and 10 page writes per run*
 
 1. `get_brain_inbox`. For each note, `search_brain` for the right home page.
 2. Good match → append under a dated heading (`### 2026-11-05`) with the source link, and refresh that page's `summary` if the note changes the picture.
-3. No match → create a page (pick `kind`, a short slug, and `[[links]]` to related pages). A note about a project gets `kind: project` and `project_id` when the project is clear.
+3. No match → create a page (pick `kind`, a short slug, and `[[links]]` to related pages). A `project`-scope note doesn't go to a page at all: it becomes a `project_notes` entry (2.6.0). A personal note that merely mentions a project stays a personal page, tagged with `project_id` for search.
 4. **Index pages:** keep one `index` page per kind (`people`, `projects`, `topics`) listing pages with their one-line summaries. These indexes are what keep search and Claude's answers good as the brain grows.
 5. **Rules:** never delete page content; edit only by appending or rewriting the summary. Never copy a message body; the raw note is already a summary. Duplicates go through `discard_brain_raw` with a reason.
 6. The chat summary gets one line: "Filed N notes into M pages (new: …)".
 
 ### 2.6.4 Obsidian bridge
 
-- **Import (one time):** `scripts/import-vault.mts <vault path>` reads every `.md` file. Notes in the vault's raw folder become `brain_raw` rows; organized notes become `brain_pages` (slug from the filename, frontmatter tags → `tags`, `[[wikilinks]]` kept as is). It runs as Seth through a minted user JWT, like the smoke scripts, and prints a dry-run summary before writing.
-- **Export (any time):** `scripts/export-brain.mts <folder>` writes each page as `<slug>.md` with YAML frontmatter (title, kind, tags, updated). It's one-way, so point Obsidian at the export folder and treat it as read-only. Two-way sync is explicitly out of scope; it's where these setups usually break.
+- **Import: dropped (2026-11-19).** Seth is starting fresh, so there's no vault import. If a teammate later wants their notes brought in, the original sketch still applies: one script run, dry run first, reading the folder once.
+- **Export (optional, any time; not part of 2.6's done-when):** `scripts/export-brain.mts <folder>` writes each page as `<slug>.md` with YAML frontmatter (title, kind, tags, updated). It's one-way, so point Obsidian at the export folder and treat it as read-only. Two-way sync is explicitly out of scope; it's where these setups usually break.
 
 ### 2.6.5 Done when
 
 - Logged notes are filed by the next morning run, with an undo-able version row for every page edit.
-- The vault import's dry run matches the vault's file count; after import, `search_brain` finds pages by title and by body text.
-- Exported files open in Obsidian with working links.
+- A logged read-me line with a project chip shows up in that project's wiki Notes section the next day, visible to someone else on the project. A personal note never does.
+- A *Team* note lands on a general page another staff member can read.
+- `search_brain` finds pages by title and body text. `search_project_wiki` finds project notes.
 
-## 2.7 Search
+**Built 2026-11-19** (`add_brain_pages.sql` + `supabase/tests/brain_pages_smoke.sql`, `mcp-server/src/brainTools.ts`, skill v1.7 Step 10). Changes from the plan above:
+- **General pages are a team wiki.** Every signed-in user reads them and can append (every edit keeps a version); the author or an admin deletes. Personal pages stay owner-only. Slugs are unique per owner for personal pages and shared for general ones. A page's scope and owner can't change.
+- **One RPC per kind of filing.**
+  - `file_brain_notes()` creates or appends to a personal/general page and marks the notes filed. It refuses notes of another scope, and a full `body` replace is allowed only on index pages.
+  - `file_project_notes()` writes `project_notes` rows on each note's own project.
+  - `discard_brain_raw()` needs a reason.
+  - `restore_brain_page()` is the undo; it saves the current content first, so a restore can be undone too.
+- **Version thinning lives in the page trigger**: all versions for 90 days, then the newest per week.
+- **`search_brain()` came forward from 2.8.** The filing needs it to find a note's home. 2.8 keeps the My Day search box and the page drawer.
+- **Read-me scope:**
+  - `set_readme_state()` takes `p_scope` / `p_project_id`, and `worklist_readme_state` remembers them.
+  - A line logged with a project moves with a scope change until it's filed. Once it's filed, it stays where it went, and the page says so.
+  - A `project` scope without a project falls back to personal (a trigger on `brain_raw`).
+- **Page:**
+  - Read me lines show the run's suggested project as a dashed chip ("logging this shares it…"), which turns solid once logged. The chip, or a share icon on personal lines, opens *Just me / Team / Project…*.
+  - The quick note has the same picker and goes back to *Just me* after every save.
+  - The project picker is shared with Connect project.
+- **Project wiki:**
+  - A **Notes** card under the context card, grouped by month. Anyone signed in can add a note; the author or an admin can edit or delete it.
+  - The wiki summary card on the project overview shows the latest three.
+  - `get_project_wiki` returns the 20 latest notes, `search_project_wiki` searches them, and the markdown export includes them.
+- **No brain page viewer on My Day yet.** That's 2.8's drawer. Until then, read pages through Claude (`get_brain_page`, `search_brain`).
 
-### 2.7.1 `search_brain(p_query text, p_limit int default 20)` RPC
+## 2.7 Project open items (added 2026-11-19)
+
+The goal: anyone who can see a project opens its overview and sees, at a glance, everything still outstanding, whether it came from someone's My Day or was typed in on the project.
+
+### 2.7.1 Database (`add_project_open_items.sql`)
+
+- **`project_open_items`:**
+  - `id`, `project_id` → projects (cascade), `title` (≤ 300), `status` (`open` | `done` | `dropped`), `due_date`, `owner_id` → profiles (who's on the hook; null = unassigned).
+  - `source` (`my_day` | `manual`), `worklist_item_id` → worklist_items (unique, `on delete set null`).
+  - `created_by`, `created_at`, `updated_at`, `closed_by`, `closed_at`.
+  - Index on (`project_id`, `status`, `due_date`).
+- **RLS follows the project model** (`open_project_view_access.sql`): every signed-in user can read; project-team members (`is_project_member()`, which is true for admins) can add, edit and close. Whoever created an item can always close it.
+- **No message content.** The row holds a title, a date and people, never the task's summary, source link or email/Teams details. Those stay in the owner's My Day.
+- **Two-way sync, by trigger,** so the two lists can't drift:
+  - My Day task done (by the person or by the run, as resolved) → the open item closes ("Done via My Day").
+  - Open item closed on the project page → the My Day task closes as done (`closed_by = 'project'`).
+  - Reopen either side → both reopen.
+  - A guard flag stops the two triggers from bouncing.
+  - Due date and title changes made in My Day carry over. The open item's own title can be edited on the project page without touching My Day.
+- `project_activity` (the owner's private log) keeps logging as it does now.
+
+### 2.7.2 Linking from My Day
+
+- The Connect project modal (2.4) gains **"Add to the project's open items"**, on by default for Do / Respond / Decide tasks. It shows the title that will be shared, editable right there, because a title written from someone's private email may need rewording before the team sees it.
+- **Accepting a suggestion** (the "Link to …?" line) asks the same thing, in one step.
+- **Unlinking** asks: leave the open item on the project, or remove it.
+- Read-me lines never become open items. They're notes (2.6.0).
+
+### 2.7.3 The project page
+
+- **An "Open items" card at the top of `ProjectOverview`,** right under the header, above the timeline:
+  - Shows the count, the overdue count, and the next items by due date (overdue first). Each item has its owner's avatar, a source chip (*My Day* / *Manual*) and a checkbox to close it.
+  - **Add item** (title, due date, owner) for team members. **Show all** expands to the full list, including closed items, with who closed each one and when.
+  - With nothing open, it collapses to a single line with "Add item".
+- The "Your My Day" card stays where it is for its owner's private history.
+- Open items are separate from **closeout punch items**. Punch items are the closeout checklist; open items are everyday to-dos.
+- **Later, small:** an open-items count on the project list and the Dashboard.
+
+### 2.7.4 MCP and skill
+
+- New read tool **`list_project_open_items(project_id, status?)`**, project-scoped and available to every signed-in user like the other project tools, not admin-only. `get_project` returns the open count. "Summarize project X" then includes what's outstanding.
+- The morning skill doesn't create open items. It already can't link (2.4 guard), and the open item comes from the person's link.
+- **With 2.11:** an open item assigned to a teammate who has My Day shows up on their worklist as a task (source `project`), and closing it there closes it on the project.
+
+### 2.7.5 Done when
+
+- Linking a My Day task with the box ticked puts it at the top of the project page, visible to a non-admin who isn't on the project team.
+- Closing it on either side closes the other. Reopening works too.
+- A team member can add, assign and close a manual item. A non-member can see it but not change it.
+- The shared row never holds the task's summary or source link (covered by the smoke test).
+
+## 2.8 Search
+
+### 2.8.1 `search_brain(p_query text, p_limit int default 20)` RPC
 
 - SECURITY INVOKER (RLS applies). `websearch_to_tsquery('english', p_query)` over `search_tsv`, ranked by `ts_rank_cd`, with `ts_headline` snippets from the body.
 - Also returns matching `brain_raw` notes that aren't filed yet, so a note logged this morning is findable today.
 - Same shape as `search_project_wiki()`; reuse its approach.
 
-### 2.7.2 Page
+### 2.8.2 Page
 
 - **"Search my notes"** box at the top of My Day's side column. Results show title, kind, and a highlighted snippet.
 - Clicking a result opens a drawer with the page rendered as markdown. The app doesn't have a markdown renderer yet: add `react-markdown` + `remark-gfm`, rendering `[[slug]]` as in-drawer links.
 - A "Browse" link opens the index pages. A full `/brain` page can wait until the drawer feels cramped.
 
-### 2.7.3 Asking Claude
+### 2.8.3 Asking Claude
 
 Nothing to build beyond the `search_brain` and `get_brain_page` tools. In Claude Code or claude.ai, "what did we decide about the HGTC quote?" searches, reads pages, and answers with links. This is the no-API "Ask" and should cover most needs.
 
-### 2.7.4 Done when
+### 2.8.4 Done when
 
 - Search returns relevant pages in under a second for a few-word query, including today's unfiled notes.
 - Claude answers a question from the brain with page links, through the connector.
 
-## 2.8 Nightly cloud schedule + regression replay
+## 2.9 Nightly cloud schedule + regression replay
 
 - **Cloud routine:** the morning skill runs on a schedule (target 5:00am Eastern) as a scheduled cloud routine. It needs: the skill without the local markdown file (retire it once the page is trusted), the M365, monday and Project Tools connectors available in the cloud, and **IT/Lee sign-off** on company M365, Teams and monday data running through scheduled cloud jobs. Raise the sign-off now; it's the slowest dependency for phase 3 too.
 - **Regression replay:** every surfaced row (2.1) and every rule-correction example (2.2) is a test case: "this conversation should land in this bucket." Hard rules are checked in code against the saved rows on every rules change. Lessons need the model, so `/morning-worklist replay` re-classifies the test set on demand and lists any item that flips. Run it after any skill or rule change.
 - **Run report** in the briefing (from the phase 3 spec): reviewed, surfaced, rules fired, and any failures at the top.
 
-## 2.9 (optional) In-app Claude API: "Ask" box on the page
+## 2.10 (optional) In-app Claude API: "Ask" box on the page
 
-Build only if 2.7.3 isn't enough day to day.
+Build only if 2.8.3 isn't enough day to day.
 
 - **Supabase Edge Function `ask-brain`:** checks the caller's JWT (admin only), runs `search_brain` for the top 8 pages, sends them plus the question to the Claude API, and returns the answer with cited slugs.
 - **Needs:** an Anthropic API key stored as a Supabase secret, per-use billing (this is the cost phase 1 avoided), a per-user rate limit, and a token cap per question.
 - **Later, only if keyword search misses too often:** add `pgvector` embeddings per page for meaning-based search. That needs an embedding API, another cost decision. Tidy index pages (2.6.3, step 4) push this need out a long way.
+
+## 2.11 Team rollout (added 2026-11-19)
+
+Every teammate gets their own My Day page, their own brain and their own morning run, with the same privacy rules as Seth's.
+
+- **Per-person settings, not a hard-coded skill.** New table `my_day_settings` (one row per person, owner-only): `enabled`, mailbox address, monday user id and name, Teams display name, the boards and groups that matter to them, the Read me cap, and the run time.
+  - The skill reads this table at Step 0 instead of the config block in `SKILL.md`. Seth's current config becomes his row.
+- **Opt-in instead of admin-only.** The MCP worklist and brain tools check `my_day_settings.enabled` for the signed-in person, not `isWorklistUser` (admins). The My Day nav item shows only for people who are enabled. Turn people on a few at a time.
+- **Their own connectors and seat.** Each person runs under their own Claude seat with their own M365, monday and Project Tools connectors, so the run only ever sees what that person can see. No shared mailbox access, no service account.
+- **Cloud schedule per person (2.9).** One scheduled routine per enabled person. Until 2.9 is signed off, early adopters run it by hand like Seth does today.
+- **What stays private, what's shared:**
+  - Private: tasks, reviewed log, rules, personal brain pages, `project_activity`.
+  - Shared: project open items (2.7), project notes (2.6.0) and general pages, all with their author's name.
+  - Admins don't get a way into someone's personal brain through the app.
+- **Sign-off and policy (IT/Lee), before anyone but Seth:**
+  - the same cloud-job sign-off as 2.9, covering the team;
+  - retention: reviewed log 30 days (already), brain kept, versions thinned (2.6.0);
+  - **departures:** a leaver's personal brain is deleted (or exported for them, if HR agrees), and their project notes and open items stay with the project under their name, reassigned to the PM.
+- **Size check:** about 25–50 MB per person per year, so 22 people is roughly 0.5–1 GB a year. That's fine on the self-hosted Supabase and outgrows the free tier in the first year. Thinning version history is the main lever. Files stay in SharePoint; only links go in the database.
+
+### 2.11.1 Done when
+
+- A second person (pilot) runs their own morning briefing against their own mail and monday, and sees only their own My Day.
+- Their project-linked items and notes show on the shared project pages, and their personal notes don't show anywhere else.
+- Turning `enabled` off removes their tool access on the next call.
 
 ---
 
@@ -383,7 +524,7 @@ Build only if 2.7.3 isn't enough day to day.
 
 The spec in `work-engine-phase-3-spec.md` stands: stage-don't-ship, triage → dispatch → workers → one approval queue, the five-rule worker contract, the autonomy ladder and the build-order gates. These are the changes now that phase 1 and 2's actual design is known:
 
-1. **Groundwork moves into phase 2.** The spec's milestone 1 (work-type tagging, the reviewed log, rules, the modal, the regression set) is 2.1–2.3 and 2.8 here.
+1. **Groundwork moves into phase 2.** The spec's milestone 1 (work-type tagging, the reviewed log, rules, the modal, the regression set) is 2.1–2.3 and 2.9 here.
 2. **Names.** The spec's `tasks` table is `worklist_items`. Its `source_ref` is mostly `source` + `source_key` + `link`; add `source_ref jsonb` only for what workers need beyond that (thread id, message id). `triage_items` / `triage_runs` are `worklist_reviewed` / `worklist_briefings`.
 3. **Email drafts: the worker writes text, the dashboard makes the draft.** The M365 connector can send but can't create drafts, and the app's own Outlook sign-in (`ms-graph-auth`) only has `Mail.Read`. So:
    - The email drafter stores the draft text, recipients and the thread reference in its `work_items` row. It holds no mail-write permission at all.
@@ -396,12 +537,15 @@ The spec in `work-engine-phase-3-spec.md` stands: stage-don't-ship, triage → d
 
 ## Open decisions
 
-1. **(2.4) Who sees project activity?** Built owner-only (2026-11-18). Revisit if the team wants it on shared project pages.
-2. **(2.6) Where is the current second-brain vault, and how is it laid out?** Needed for the import script.
-3. **(2.6) Auto-file or confirm?** Recommendation: auto-file, with version rows for undo.
-4. **(2.8) IT/Lee sign-off** on scheduled cloud jobs reading company M365, Teams and monday. Ask now.
+1. ~~**(2.4) Who sees project activity?**~~ **Settled 2026-11-19:** `project_activity` stays private. The team sees open items (2.7) and project notes (2.6.0) instead.
+2. ~~**(2.6) Where is the vault?**~~ **Settled 2026-11-19:** start fresh, no import.
+3. ~~**(2.6) Auto-file or confirm?**~~ **Settled 2026-11-19:** auto-file within a scope, version rows for undo, personal never shared without a click.
+4. **(2.9 and 2.11) IT/Lee sign-off** on scheduled cloud jobs reading company M365, Teams and monday, for Seth first and then the team. Ask now.
 5. **(Phase 3) Delegated Graph consent** for `Mail.ReadWrite` + `Mail.Send` on the app's own Outlook sign-in.
-6. **(2.9) API key or not?** Decide after a couple of weeks of 2.7.
+6. **(2.10) API key or not?** Decide after a couple of weeks of 2.8.
+7. **(2.7) Who can close an open item?** Recommendation: any project-team member plus whoever created it. The alternative is only the owner and the PM.
+8. **(2.7) Ticked by default?** Recommendation: "Add to the project's open items" is on by default when linking a Do / Respond / Decide task. The alternative is off by default, sharing only when asked.
+9. **(2.6) General notes: shared pages only, or also on product catalog records?** Recommendation: shared pages in 2.6, and catalog records later.
 
 ## Usage footprint (for the Supabase move)
 
@@ -410,7 +554,8 @@ The spec in `work-engine-phase-3-spec.md` stands: stage-don't-ship, triage → d
 | Phase 1 (live) | ~10–20 items/day, 1 briefing/day | well under 1 MB/month | ~20–50 KB |
 | 2.1 reviewed log | ~150–250 rows/run, 30-day retention | ~2–4 MB at steady state | 0 until the drawer opens (~50–100 KB) |
 | 2.2 rules | dozens of rows | negligible | small |
-| 2.4–2.7 projects, brain, search | a few notes/day; pages grow slowly | a few MB/year | small; search is server-side |
+| 2.4–2.8 projects, open items, brain, search | a few notes/day; pages grow slowly | a few MB/year | small; search is server-side |
+| 2.11 team (22 people) | the above × 22 | ~0.5–1 GB/year, mostly reviewed log + page versions | per person, same as above |
 
 Realtime: one channel per open My Day tab. None of this is what put the project over its free-tier limit. For comparison, the app's `DataLoader` fetches whole tables (`select=*` on BoM items, submittal items and more) on every sign-in, which is likely the larger bandwidth cost.
 
@@ -418,6 +563,10 @@ Realtime: one channel per open My Day tab. None of this is what put the project 
 
 ## Next steps
 
-1. **2.1** on branch `my-day/reviewed-log`: migration, MCP, skill, Reviewed drawer. Apply the migration once the Supabase usage situation is clear.
-2. **2.2** right after, on its own branch.
-3. Raise open decision 4 (IT/Lee sign-off) now, in parallel.
+(Updated 2026-11-19; 2.1–2.5 are live.)
+
+1. **2.7 or 2.6 next.** They don't depend on each other.
+   - 2.7 (open items) puts linked tasks in front of the team, using links that already exist.
+   - 2.6 (brain + project notes) starts filing the notes that are piling up in the inbox.
+2. Then whichever of the two is left, then 2.8 search.
+3. Raise open decision 4 (IT/Lee sign-off, now covering the team) in parallel. It gates 2.9 and 2.11.

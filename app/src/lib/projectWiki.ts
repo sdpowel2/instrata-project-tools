@@ -9,6 +9,7 @@
 // potentially large, so it's fetched on demand by the Wiki page (same pattern
 // as projectFiles.ts).
 import { supabase, isSupabaseConfigured } from './supabase';
+import { fetchProjectNotes, noteDay } from './projectNotes';
 
 // ── Vocabulary (twin of mcp-server/src/wikiTools.ts — keep in sync) ──────────
 export type WikiStatus = 'draft' | 'in_progress' | 'awaiting_review' | 'reviewed' | 'final';
@@ -244,7 +245,7 @@ export interface WikiRoomBundle {
 }
 
 export interface WikiSearchHit {
-  kind: 'wiki' | 'room' | 'decision' | 'question';
+  kind: 'wiki' | 'room' | 'decision' | 'question' | 'note';
   id: string;
   roomId: string | null;
   roomLabel: string | null;
@@ -719,6 +720,15 @@ export async function buildWikiMarkdown(project: { name: string; number: string;
   if (wiki?.summary) out.push('## Summary', '', wiki.summary, '');
   if (wiki?.scopeSummary) out.push('## Scope', '', wiki.scopeSummary, '');
   if (wiki?.designBasis) out.push('## Design basis', '', wiki.designBasis, '');
+
+  const notes = await fetchProjectNotes(projectId).catch(() => []);
+  if (notes.length) {
+    out.push('## Notes', '');
+    for (const n of notes) {
+      out.push(`- **${noteDay(n.notedAt)}, ${new Date(n.notedAt).getFullYear()}** — ${n.text} _(${n.notedByName})_${n.link ? ` [source](${n.link})` : ''}`);
+    }
+    out.push('');
+  }
 
   const projectDecisions = decisions.filter((d) => !d.roomId);
   if (projectDecisions.length) {

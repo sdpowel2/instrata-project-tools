@@ -1,6 +1,7 @@
 // Project lookup helpers for Connect project (My Day 2.4).
 
 import type { Project } from '../../types';
+import type { NoteTarget } from './types';
 
 /** INST-2026-0123, else the project number. */
 export function projectCode(p: Pick<Project, 'projectCode' | 'number'>): string {
@@ -9,6 +10,13 @@ export function projectCode(p: Pick<Project, 'projectCode' | 'number'>): string 
 
 export function shortName(name: string, max = 30): string {
   return name.length > max ? `${name.slice(0, max - 1).trimEnd()}…` : name;
+}
+
+/** Who a note is for, in a few words (2.6): "Just me", "Team", or the project's code and name. */
+export function targetLabel(target: NoteTarget, project: Project | undefined): string {
+  if (target.scope === 'general') return 'Team';
+  if (target.scope === 'project') return project ? `${projectCode(project)} · ${shortName(project.name, 24)}` : 'Project';
+  return 'Just me';
 }
 
 /** All words must appear in the name, number, client or code. Exact code/number hits first. */

@@ -13,6 +13,7 @@ import { PhaseRibbon } from '../components/PhaseRibbon';
 import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { WikiRoomDetail } from '../components/wiki/WikiRoomDetail';
+import { ProjectNotesCard } from '../components/wiki/ProjectNotesCard';
 import { RoomStatusChip, WikiStatusChip, SeverityChip, QuestionStatusChip, OriginTag, Field, MarkdownText } from '../components/wiki/wikiUi';
 import {
   WIKI_STATUSES, ROOM_STATUSES, ENTRY_KINDS, QUESTION_SEVERITIES, labelFor, isBlocking, splitSnippet, fmtDate,
@@ -130,12 +131,13 @@ export function ProjectWiki() {
       ) : (
         <>
           <div className="grid grid-cols-3 gap-5 mb-5">
-            <div className="col-span-2">
+            <div className="col-span-2 space-y-5">
               <ContextCard
                 wiki={wiki}
                 canEdit={canEdit}
                 onSave={async (patch) => { await upsertWiki(projectId, patch); await reload(); }}
               />
+              <ProjectNotesCard projectId={projectId} userId={user?.id ?? null} isAdmin={isAdmin} />
             </div>
             <div className="space-y-5">
               <OpenItemsCard items={openItems} blockingRooms={blockingRooms} onOpenRoom={(id) => selectRoom(id)} />

@@ -83,10 +83,23 @@ export interface ReadMeItem {
   text: string;
   source: WorkItemSource;
   link?: string;
+  /** The run's project suggestion (2.6): exact matches only. Logging the line shares it there. */
+  projectId?: string;
 }
 
 /** Seth's call on a read-me line (2.5): logged into the second brain, or hidden (less like this). */
 export type ReadMeState = 'logged' | 'hidden';
+
+/**
+ * Who a captured note is for (2.6). personal = only you. project = the project
+ * wiki's Notes (everyone who can see the project). general = the team's shared pages.
+ */
+export type NoteScope = 'personal' | 'project' | 'general';
+export interface NoteTarget {
+  scope: NoteScope;
+  /** Set when scope is project. */
+  projectId?: string;
+}
 
 export interface SetAsideItem {
   id: string;

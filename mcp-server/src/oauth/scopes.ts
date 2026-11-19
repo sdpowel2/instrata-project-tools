@@ -69,6 +69,15 @@ export const TOOL_SCOPES: Record<string, ToolScope> = {
   save_briefing: 'mcp:write',
   match_triage_rules: 'mcp:read',
   find_projects: 'mcp:read',
+  // brainTools.ts — My Day second brain (registered with the worklist tools)
+  get_brain_inbox: 'mcp:read',
+  search_brain: 'mcp:read',
+  list_brain_pages: 'mcp:read',
+  get_brain_page: 'mcp:read',
+  file_brain_notes: 'mcp:write',
+  file_project_notes: 'mcp:write',
+  discard_brain_raw: 'mcp:write',
+  restore_brain_page: 'mcp:write',
 };
 
 export function isSupportedScope(s: string): s is Scope {

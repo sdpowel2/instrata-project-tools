@@ -91,7 +91,7 @@ export const SAMPLE_BRIEFING: Briefing = {
     },
   ],
   readMe: [
-    { id: 'r1', source: 'email', text: 'Riverside Medical moved substantial completion up two weeks – install crew schedule will tighten.', link: '#' },
+    { id: 'r1', source: 'email', text: 'Hudson Yards GC (INS-2026-002) moved substantial completion up two weeks – install crew schedule will tighten.', link: '#', projectId: 'p2' },
     { id: 'r2', source: 'teams', text: 'Programming team finished the Westlake DSP config; handover can be scheduled.', link: '#' },
     { id: 'r3', source: 'email', text: 'New bid invite: county courthouse courtroom AV (due Dec 2). Looks in scope.', link: '#' },
     { id: 'r4', source: 'monday', text: 'Two Pre-Sales items were marked Won overnight by the Salesforce sync.', link: '#' },
