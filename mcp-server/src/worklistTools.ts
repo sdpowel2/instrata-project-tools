@@ -49,6 +49,7 @@ const SURFACED_COLS =
   'source, source_key, title, from_label, outcome, reason, reason_group, surfaced_at, item:worklist_items(kind, effective_urgency)';
 const RULE_COLS = 'id, kind, effect, match, note, example_id, hits_30d, last_hit_at, created_at';
 const EXAMPLE_COLS = 'id, source, title, from_label, outcome, reason, reason_group';
+const README_STATE_COLS = 'briefing_date, readme_id, state, readme_text, readme_source, readme_link, at';
 const FEEDBACK_COLS =
   'action, from_value, to_value, item_source, item_kind, item_title, item_from, claude_urgency, created_at';
 
@@ -233,7 +234,9 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'their words (note) with an example row: read these before classifying. kind "hard" = applied by ' +
         'match_triage_rules, listed here for reference. Each open item carries project_id (linked by the user), ' +
         'suggested_project_id (your earlier suggestion, still pending) and dismissed_project_id (a project the ' +
-        'user said no to for that task: never suggest it again).',
+        'user said no to for that task: never suggest it again). And readme_feedback: the user’s calls on recent ' +
+        'Read me lines (last 14 days): state "logged" = worth knowing, more like this; "hidden" = less like this. ' +
+        'readme_text is the line as you wrote it.',
       inputSchema: {
         feedback_days: z.number().int().min(1).max(60).optional().describe('Feedback lookback in days (default 14)'),
       },
@@ -246,7 +249,8 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
 
       const surfacedSince = new Date(Date.now() - 30 * 86_400_000).toISOString();
 
-      const [last, open, closed, feedback, surfaced, rules] = await Promise.all([
+      const readmeSince = easternToday(new Date(Date.now() - 14 * 86_400_000));
+      const [last, open, closed, feedback, surfaced, rules, readme] = await Promise.all([
         supa
           .from('worklist_briefings')
           .select('briefing_date, ran_at, window_since, missing')
@@ -291,6 +295,13 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
           .eq('active', true)
           .order('created_at', { ascending: true })
           .limit(200),
+        supa
+          .from('worklist_readme_state')
+          .select(README_STATE_COLS)
+          .eq('user_id', userId)
+          .gte('briefing_date', readmeSince)
+          .order('at', { ascending: false })
+          .limit(100),
       ]);
 
       const firstError = last.error ?? open.error ?? closed.error ?? feedback.error;
@@ -298,6 +309,7 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
       // Tolerate the reviewed log not existing yet, so deploy order doesn't matter.
       if (surfaced.error && !notMigrated(surfaced.error)) return fail(surfaced.error.message);
       if (rules.error && !notMigrated(rules.error)) return fail(rules.error.message);
+      if (readme.error && !notMigrated(readme.error)) return fail(readme.error.message);
 
       // Attach each rule's example conversation (lessons lean on it).
       const ruleRows = (rules.error ? [] : (rules.data ?? [])) as unknown as Array<Record<string, unknown>>;
@@ -321,6 +333,7 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         feedback: feedback.data ?? [],
         recently_surfaced: surfaced.error ? [] : (surfaced.data ?? []),
         triage_rules: triageRules,
+        readme_feedback: readme.error ? [] : (readme.data ?? []),
       });
     },
   );

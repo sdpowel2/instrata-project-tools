@@ -252,6 +252,13 @@ create table if not exists public.worklist_readme_state (
 - `get_worklist_state` also returns read-me states for the last 14 days.
 - Hide is a "surface less of this" entry point: it opens the 2.2 tuning modal pre-filled from the line. Logged lines are the opposite signal (more of that, please) and reach the skill as calibration.
 
+**Built 2026-11-19** (`add_brain_raw.sql` + `supabase/tests/brain_raw_smoke.sql`, skill v1.6). Changes from the plan above:
+- **One RPC for Log / Hide / Undo**, `set_readme_state()`, so the state and the inbox can't disagree: Hide or Undo takes back a logged line's inbox row if it isn't filed yet; a filed note is never touched. Logging twice doesn't duplicate.
+- **Same-day re-runs reuse read-me ids** for different lines, so the state keeps the line's text (and link) and the page applies a state only while the text still matches. Inbox rows match on date + id + text.
+- **Hide doesn't pop the modal.** Hidden lines collapse into an "N hidden" footer with **Undo** and **Less like this** (the 2.2 modal, pre-filled from the reviewed row with the same link when there is one). A modal on every hide would make hiding a chore.
+- **Quick note** sits at the top of the side column with an "N notes in the inbox" count.
+- `get_worklist_state` returns `readme_feedback` (14 days). The skill acts on a hidden pattern seen twice; logged patterns win ties at the Read me cap.
+
 ### 2.5.4 Done when
 
 - Log and Hide survive reload, and undo works.

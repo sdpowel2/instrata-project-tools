@@ -126,7 +126,7 @@ try {
   assert('get_worklist_state → ok with today/open_items/recently_closed/feedback/recently_surfaced/triage_rules',
     !s1.isError && /^\d{4}-\d{2}-\d{2}$/.test(state1.today ?? '') && Array.isArray(state1.open_items)
       && Array.isArray(state1.recently_closed) && Array.isArray(state1.feedback) && Array.isArray(state1.recently_surfaced)
-      && Array.isArray(state1.triage_rules), s1.text);
+      && Array.isArray(state1.triage_rules) && Array.isArray((state1 as { readme_feedback?: unknown[] }).readme_feedback), s1.text);
 
   const m1 = await call(access, 'match_triage_rules', {
     candidates: [{ key: 'smoke:respond', source: 'email', sender: 'nobody@smoke.invalid', title: 'Smoke test reply' }],

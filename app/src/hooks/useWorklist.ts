@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { SAMPLE_BRIEFING, SAMPLE_REVIEWED } from '../components/worklist/sampleData';
 import { addDays, daysBetween, easternDate } from '../components/worklist/format';
 import type {
-  Briefing, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency, WorkType, WorkTypeAccuracy,
+  Briefing, ReadMeItem, ReadMeState, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency, WorkType, WorkTypeAccuracy,
 } from '../components/worklist/types';
 
 const ITEM_BASE_COLS =
@@ -144,6 +144,14 @@ export interface Worklist {
   linkProject: (id: string, projectId: string | null) => void;
   /** Yes or no to the run's suggested project. No is remembered, so it isn't suggested again. */
   answerSuggestion: (id: string, accept: boolean) => void;
+  /** Log / Hide state of a line in the shown briefing's Read me (2.5). */
+  readMeState: (line: ReadMeItem) => ReadMeState | undefined;
+  /** Log or hide a read-me line; null undoes. Logging puts it in the second brain's inbox. */
+  setReadMe: (line: ReadMeItem, state: ReadMeState | null) => void;
+  /** A quick note straight into the second brain's inbox. */
+  addNote: (text: string) => void;
+  /** Notes waiting in the inbox (status new); null until loaded or before the 2.5 migration. */
+  inboxCount: number | null;
 }
 
 function toItem(r: ItemRow, today: string): WorkItem {
@@ -528,6 +536,93 @@ export function useWorklist(): Worklist {
     [mode, rows, linkProject, patchRow, write],
   );
 
+  // ── Read me Log / Hide + quick notes (2.5) ─────────────────────────────────
+  // States are keyed by read-me id, but a same-day re-run reuses ids for other
+  // lines, so a state only applies while its text snapshot still matches.
+  const briefingDate = view.briefing?.date;
+  const [readMe, setReadMeMap] = useState<{ date?: string; states: Map<string, { state: ReadMeState; text: string }> }>(
+    () => ({ states: new Map() }),
+  );
+  const [inboxCount, setInboxCount] = useState<number | null>(mode === 'sample' ? 2 : null);
+
+  const loadInbox = useCallback(() => {
+    if (mode !== 'live' || !userId) return;
+    void supabase.from('brain_raw').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'new')
+      .then(({ count, error: e }) => { if (!e) setInboxCount(count ?? 0); });
+  }, [mode, userId]);
+
+  useEffect(() => { loadInbox(); }, [loadInbox]);
+
+  useEffect(() => {
+    if (mode !== 'live' || !userId || !briefingDate) return;
+    let cancelled = false;
+    void supabase.from('worklist_readme_state').select('readme_id, state, readme_text')
+      .eq('user_id', userId).eq('briefing_date', briefingDate)
+      .then(({ data, error: e }) => {
+        if (cancelled || e) return; // before the 2.5 migration: no states
+        const states = new Map<string, { state: ReadMeState; text: string }>();
+        for (const r of (data ?? []) as { readme_id: string; state: ReadMeState; readme_text: string }[]) {
+          states.set(r.readme_id, { state: r.state, text: r.readme_text });
+        }
+        setReadMeMap({ date: briefingDate, states });
+      });
+    return () => { cancelled = true; };
+  }, [mode, userId, briefingDate]);
+
+  const readMeState = useCallback(
+    (line: ReadMeItem): ReadMeState | undefined => {
+      if (readMe.date !== undefined && readMe.date !== briefingDate) return undefined;
+      const s = readMe.states.get(line.id);
+      return s && s.text === line.text.trim().slice(0, 500) ? s.state : undefined;
+    },
+    [readMe, briefingDate],
+  );
+
+  const setReadMe = useCallback(
+    (line: ReadMeItem, state: ReadMeState | null) => {
+      if (!briefingDate) return;
+      const text = line.text.trim();
+      const prev = readMe.states.get(line.id);
+      const apply = (next: { state: ReadMeState; text: string } | undefined) =>
+        setReadMeMap((m) => {
+          const states = new Map(m.date === briefingDate ? m.states : []);
+          if (next) states.set(line.id, next); else states.delete(line.id);
+          return { date: briefingDate, states };
+        });
+      apply(state ? { state, text: text.slice(0, 500) } : undefined);
+      const wasLogged = prev?.state === 'logged' && prev.text === text.slice(0, 500);
+      const delta = (state === 'logged' ? 1 : 0) - (wasLogged ? 1 : 0);
+      if (delta) setInboxCount((c) => (c == null ? c : Math.max(0, c + delta)));
+      if (mode === 'sample') return;
+      void supabase
+        .rpc('set_readme_state', {
+          p_date: briefingDate, p_readme_id: line.id, p_state: state, p_text: text,
+          p_source: line.source, p_link: line.link ?? null,
+        })
+        .then(({ error: e }) => {
+          if (!e) return;
+          apply(prev);
+          setError(`That read-me change didn't save: ${e.message}`);
+          loadInbox();
+        });
+    },
+    [briefingDate, readMe, mode, loadInbox],
+  );
+
+  const addNote = useCallback(
+    (text: string) => {
+      const t = text.trim();
+      if (!t) return;
+      setInboxCount((c) => (c == null ? (mode === 'sample' ? 1 : c) : c + 1));
+      if (mode === 'sample') return;
+      void supabase.from('brain_raw').insert({ source: 'note', text: t.slice(0, 4000) }).then(({ error: e }) => {
+        if (e) setError(`The note didn't save: ${e.message}`);
+        loadInbox();
+      });
+    },
+    [mode, loadInbox],
+  );
+
   // ── Reviewed log (2.1): loaded only when the drawer opens ─────────────────
   const [reviewed, setReviewed] = useState<ReviewedRow[] | null>(null);
   const [reviewedLoading, setReviewedLoading] = useState(false);
@@ -623,5 +718,9 @@ export function useWorklist(): Worklist {
     workTypeAccuracy: mode === 'sample' ? sampleAccuracy : accuracy,
     linkProject,
     answerSuggestion,
+    readMeState,
+    setReadMe,
+    addNote,
+    inboxCount,
   };
 }
