@@ -138,6 +138,18 @@ try {
   const fp = f1.data as { projects?: unknown[] };
   assert('find_projects → ok, no match for made-up keys', !f1.isError && Array.isArray(fp.projects) && fp.projects.length === 0, f1.text);
 
+  // ── second brain (2.6), read-only ──────────────────────────────────────────
+  const brainTools = ['get_brain_inbox', 'search_brain', 'list_brain_pages', 'get_brain_page', 'file_brain_notes',
+    'file_project_notes', 'discard_brain_raw', 'restore_brain_page'];
+  assert('tools/list includes the second brain tools', brainTools.every((t) => tools.includes(t)),
+    brainTools.filter((t) => !tools.includes(t)));
+  const inbox = await call(access, 'get_brain_inbox', { limit: 5 });
+  const ib = inbox.data as { total?: number; notes?: unknown[] };
+  assert('get_brain_inbox → ok with total + notes', !inbox.isError && typeof ib.total === 'number' && Array.isArray(ib.notes), inbox.text);
+  const sb = await call(access, 'search_brain', { query: 'smoke-no-such-word-zzqx' });
+  const sbd = sb.data as { hits?: unknown[] };
+  assert('search_brain → ok, no hits for a made-up word', !sb.isError && Array.isArray(sbd.hits) && sbd.hits.length === 0, sb.text);
+
   // ── write ──────────────────────────────────────────────────────────────────
   const save = await call(access, 'save_briefing', {
     briefing: {

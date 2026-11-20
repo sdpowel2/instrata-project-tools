@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { SAMPLE_BRIEFING, SAMPLE_REVIEWED } from '../components/worklist/sampleData';
 import { addDays, daysBetween, easternDate } from '../components/worklist/format';
 import type {
-  Briefing, ReadMeItem, ReadMeState, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency, WorkType, WorkTypeAccuracy,
+  Briefing, NoteTarget, ReadMeItem, ReadMeState, ReviewedRow, WorkItem, WorkItemKind, WorkItemStatus, Urgency, WorkType, WorkTypeAccuracy,
 } from '../components/worklist/types';
 
 const ITEM_BASE_COLS =
@@ -148,10 +148,28 @@ export interface Worklist {
   readMeState: (line: ReadMeItem) => ReadMeState | undefined;
   /** Log or hide a read-me line; null undoes. Logging puts it in the second brain's inbox. */
   setReadMe: (line: ReadMeItem, state: ReadMeState | null) => void;
-  /** A quick note straight into the second brain's inbox. */
-  addNote: (text: string) => void;
+  /** Who a read-me line is for when logged (2.6): its saved scope, your pick, or the run's suggested project. */
+  readMeTarget: (line: ReadMeItem) => NoteTarget;
+  /** Change who a read-me line is for. Moves an already-logged line's note if it isn't filed yet. */
+  setReadMeTarget: (line: ReadMeItem, target: NoteTarget) => void;
+  /** A quick note straight into the second brain's inbox, personal unless a target says otherwise. */
+  addNote: (text: string, target?: NoteTarget) => void;
   /** Notes waiting in the inbox (status new); null until loaded or before the 2.5 migration. */
   inboxCount: number | null;
+}
+
+/** A read-me line's saved state; target = where a logged line went (2.6). */
+interface ReadMeEntry {
+  state: ReadMeState;
+  text: string;
+  target?: NoteTarget;
+}
+interface ReadMeStateRow {
+  readme_id: string;
+  state: ReadMeState;
+  readme_text: string;
+  scope?: NoteTarget['scope'];
+  project_id?: string | null;
 }
 
 function toItem(r: ItemRow, today: string): WorkItem {
@@ -540,8 +558,12 @@ export function useWorklist(): Worklist {
   // States are keyed by read-me id, but a same-day re-run reuses ids for other
   // lines, so a state only applies while its text snapshot still matches.
   const briefingDate = view.briefing?.date;
-  const [readMe, setReadMeMap] = useState<{ date?: string; states: Map<string, { state: ReadMeState; text: string }> }>(
+  const [readMe, setReadMeMap] = useState<{ date?: string; states: Map<string, ReadMeEntry> }>(
     () => ({ states: new Map() }),
+  );
+  // Your scope picks on lines not logged yet (2.6), keyed like the states.
+  const [picks, setPicks] = useState<{ date?: string; targets: Map<string, { text: string; target: NoteTarget }> }>(
+    () => ({ targets: new Map() }),
   );
   const [inboxCount, setInboxCount] = useState<number | null>(mode === 'sample' ? 2 : null);
 
@@ -556,16 +578,21 @@ export function useWorklist(): Worklist {
   useEffect(() => {
     if (mode !== 'live' || !userId || !briefingDate) return;
     let cancelled = false;
-    void supabase.from('worklist_readme_state').select('readme_id, state, readme_text')
-      .eq('user_id', userId).eq('briefing_date', briefingDate)
-      .then(({ data, error: e }) => {
-        if (cancelled || e) return; // before the 2.5 migration: no states
-        const states = new Map<string, { state: ReadMeState; text: string }>();
-        for (const r of (data ?? []) as { readme_id: string; state: ReadMeState; readme_text: string }[]) {
-          states.set(r.readme_id, { state: r.state, text: r.readme_text });
-        }
-        setReadMeMap({ date: briefingDate, states });
-      });
+    const query = (cols: string) =>
+      supabase.from('worklist_readme_state').select(cols).eq('user_id', userId).eq('briefing_date', briefingDate);
+    void (async () => {
+      let res = await query('readme_id, state, readme_text, scope, project_id');
+      if (res.error?.code === '42703') res = await query('readme_id, state, readme_text'); // before 2.6
+      if (cancelled || res.error) return; // before the 2.5 migration: no states
+      const states = new Map<string, ReadMeEntry>();
+      for (const r of (res.data ?? []) as unknown as ReadMeStateRow[]) {
+        states.set(r.readme_id, {
+          state: r.state, text: r.readme_text,
+          target: r.scope ? { scope: r.scope, projectId: r.project_id ?? undefined } : undefined,
+        });
+      }
+      setReadMeMap({ date: briefingDate, states });
+    })();
     return () => { cancelled = true; };
   }, [mode, userId, briefingDate]);
 
@@ -578,44 +605,122 @@ export function useWorklist(): Worklist {
     [readMe, briefingDate],
   );
 
+  const readMeTarget = useCallback(
+    (line: ReadMeItem): NoteTarget => {
+      const key = line.text.trim().slice(0, 500);
+      const s = readMe.date === briefingDate ? readMe.states.get(line.id) : undefined;
+      if (s && s.text === key && s.state === 'logged' && s.target) return s.target;
+      const p = picks.date === briefingDate ? picks.targets.get(line.id) : undefined;
+      if (p && p.text === key) return p.target;
+      return line.projectId ? { scope: 'project', projectId: line.projectId } : { scope: 'personal' };
+    },
+    [readMe, picks, briefingDate],
+  );
+
+  /** Send a read-me change; on a logged line, the result says where it really is. */
+  const sendReadMe = useCallback(
+    (line: ReadMeItem, state: ReadMeState | null, target: NoteTarget, onFail: (msg: string) => void) => {
+      void supabase
+        .rpc('set_readme_state', {
+          p_date: briefingDate, p_readme_id: line.id, p_state: state, p_text: line.text.trim(),
+          p_source: line.source, p_link: line.link ?? null,
+          p_scope: state === 'logged' ? target.scope : null,
+          p_project_id: state === 'logged' && target.scope === 'project' ? target.projectId ?? null : null,
+        })
+        .then(({ data, error: e }) => {
+          if (e) { onFail(e.message); return; }
+          const res = data as { filed?: boolean; scope?: NoteTarget['scope'] | null; project_id?: string | null } | null;
+          if (state !== 'logged' || !res?.scope) return;
+          const actual: NoteTarget = { scope: res.scope, projectId: res.project_id ?? undefined };
+          if (actual.scope === target.scope && actual.projectId === target.projectId) return;
+          // Already filed (or the project is gone): it stays where it went.
+          setReadMeMap((m) => {
+            const cur = m.states.get(line.id);
+            if (!cur) return m;
+            const states = new Map(m.states);
+            states.set(line.id, { ...cur, target: actual });
+            return { ...m, states };
+          });
+          setPicks((p) => {
+            const targets = new Map(p.targets);
+            targets.delete(line.id);
+            return { ...p, targets };
+          });
+          if (res.filed) setError('That line was already filed, so it stays where it went. Change it in the project wiki, or ask Claude.');
+        });
+    },
+    [briefingDate],
+  );
+
   const setReadMe = useCallback(
     (line: ReadMeItem, state: ReadMeState | null) => {
       if (!briefingDate) return;
       const text = line.text.trim();
       const prev = readMe.states.get(line.id);
-      const apply = (next: { state: ReadMeState; text: string } | undefined) =>
+      const target = readMeTarget(line);
+      const apply = (next: ReadMeEntry | undefined) =>
         setReadMeMap((m) => {
           const states = new Map(m.date === briefingDate ? m.states : []);
           if (next) states.set(line.id, next); else states.delete(line.id);
           return { date: briefingDate, states };
         });
-      apply(state ? { state, text: text.slice(0, 500) } : undefined);
+      apply(state ? { state, text: text.slice(0, 500), target: state === 'logged' ? target : undefined } : undefined);
       const wasLogged = prev?.state === 'logged' && prev.text === text.slice(0, 500);
       const delta = (state === 'logged' ? 1 : 0) - (wasLogged ? 1 : 0);
       if (delta) setInboxCount((c) => (c == null ? c : Math.max(0, c + delta)));
       if (mode === 'sample') return;
-      void supabase
-        .rpc('set_readme_state', {
-          p_date: briefingDate, p_readme_id: line.id, p_state: state, p_text: text,
-          p_source: line.source, p_link: line.link ?? null,
-        })
-        .then(({ error: e }) => {
-          if (!e) return;
-          apply(prev);
-          setError(`That read-me change didn't save: ${e.message}`);
-          loadInbox();
-        });
+      sendReadMe(line, state, target, (msg) => {
+        apply(prev);
+        setError(`That read-me change didn't save: ${msg}`);
+        loadInbox();
+      });
     },
-    [briefingDate, readMe, mode, loadInbox],
+    [briefingDate, readMe, readMeTarget, mode, loadInbox, sendReadMe],
+  );
+
+  const setReadMeTarget = useCallback(
+    (line: ReadMeItem, target: NoteTarget) => {
+      if (!briefingDate) return;
+      const key = line.text.trim().slice(0, 500);
+      setPicks((p) => {
+        const targets = new Map(p.date === briefingDate ? p.targets : []);
+        targets.set(line.id, { text: key, target });
+        return { date: briefingDate, targets };
+      });
+      const cur = readMe.date === briefingDate ? readMe.states.get(line.id) : undefined;
+      if (!cur || cur.state !== 'logged' || cur.text !== key) return; // takes effect when logged
+      const prevTarget = cur.target;
+      const put = (t: NoteTarget | undefined) =>
+        setReadMeMap((m) => {
+          const c = m.states.get(line.id);
+          if (!c) return m;
+          const states = new Map(m.states);
+          states.set(line.id, { ...c, target: t });
+          return { ...m, states };
+        });
+      put(target);
+      if (mode === 'sample') return;
+      sendReadMe(line, 'logged', target, (msg) => {
+        put(prevTarget);
+        setError(`That change didn't save: ${msg}`);
+      });
+    },
+    [briefingDate, readMe, mode, sendReadMe],
   );
 
   const addNote = useCallback(
-    (text: string) => {
+    (text: string, target?: NoteTarget) => {
       const t = text.trim();
       if (!t) return;
       setInboxCount((c) => (c == null ? (mode === 'sample' ? 1 : c) : c + 1));
       if (mode === 'sample') return;
-      void supabase.from('brain_raw').insert({ source: 'note', text: t.slice(0, 4000) }).then(({ error: e }) => {
+      // Personal notes send no scope at all, so they also save before the 2.6 migration.
+      const row: Record<string, unknown> = { source: 'note', text: t.slice(0, 4000) };
+      if (target && target.scope !== 'personal') {
+        row.scope = target.scope;
+        if (target.scope === 'project') row.project_id = target.projectId ?? null;
+      }
+      void supabase.from('brain_raw').insert(row).then(({ error: e }) => {
         if (e) setError(`The note didn't save: ${e.message}`);
         loadInbox();
       });
@@ -720,6 +825,8 @@ export function useWorklist(): Worklist {
     answerSuggestion,
     readMeState,
     setReadMe,
+    readMeTarget,
+    setReadMeTarget,
     addNote,
     inboxCount,
   };

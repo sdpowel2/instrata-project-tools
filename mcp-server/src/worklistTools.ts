@@ -50,6 +50,8 @@ const SURFACED_COLS =
 const RULE_COLS = 'id, kind, effect, match, note, example_id, hits_30d, last_hit_at, created_at';
 const EXAMPLE_COLS = 'id, source, title, from_label, outcome, reason, reason_group';
 const README_STATE_COLS = 'briefing_date, readme_id, state, readme_text, readme_source, readme_link, at';
+/** 2.6 adds where a logged line was filed to; dropped again if that migration isn't applied yet. */
+const README_STATE_COLS_26 = `${README_STATE_COLS}, scope, project_id`;
 const FEEDBACK_COLS =
   'action, from_value, to_value, item_source, item_kind, item_title, item_from, claude_urgency, created_at';
 
@@ -97,6 +99,8 @@ const readMeItem = z.object({
   text: z.string().min(1).max(500).describe('One or two sentences. A summary, never the message body.'),
   source: z.enum(SOURCES),
   link: z.string().max(2000).optional(),
+  /** Suggested project (2.6): exact matches only, same rules as Step 8c. Logging the line shares it there. */
+  projectId: z.string().uuid().transform((s) => s.toLowerCase()).optional(),
 });
 
 const setAsideItem = z.object({
@@ -236,7 +240,8 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         'suggested_project_id (your earlier suggestion, still pending) and dismissed_project_id (a project the ' +
         'user said no to for that task: never suggest it again). And readme_feedback: the user’s calls on recent ' +
         'Read me lines (last 14 days): state "logged" = worth knowing, more like this; "hidden" = less like this. ' +
-        'readme_text is the line as you wrote it.',
+        'readme_text is the line as you wrote it; scope / project_id say where a logged line was filed (personal, ' +
+        'project or general), so a line the user filed under a project tells you that kind of line belongs there.',
       inputSchema: {
         feedback_days: z.number().int().min(1).max(60).optional().describe('Feedback lookback in days (default 14)'),
       },
@@ -295,13 +300,19 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
           .eq('active', true)
           .order('created_at', { ascending: true })
           .limit(200),
-        supa
-          .from('worklist_readme_state')
-          .select(README_STATE_COLS)
-          .eq('user_id', userId)
-          .gte('briefing_date', readmeSince)
-          .order('at', { ascending: false })
-          .limit(100),
+        (async () => {
+          const query = (cols: string) =>
+            supa
+              .from('worklist_readme_state')
+              .select(cols)
+              .eq('user_id', userId)
+              .gte('briefing_date', readmeSince)
+              .order('at', { ascending: false })
+              .limit(100);
+          const res = await query(README_STATE_COLS_26);
+          // 42703: the 2.6 columns aren't there yet.
+          return res.error?.code === '42703' ? query(README_STATE_COLS) : res;
+        })(),
       ]);
 
       const firstError = last.error ?? open.error ?? closed.error ?? feedback.error;
@@ -353,6 +364,8 @@ export function registerWorklistTools(server: ToolRegistrar, supa: SupabaseClien
         "see and surface anything that was missed. The result's reviewed.violations lists rows whose outcome breaks " +
         "one of the user's hard rules; fix those and call save_briefing once more with the corrected payload. " +
         'reviewed.dismissed / dismissed_keys are open items a "Read me at most" rule took off the list. ' +
+        'A read-me line may carry projectId: an exact-match project suggestion (same rules as tasks); if the user ' +
+        'logs that line it is shared to the project wiki, so only suggest exact matches. ' +
         'Summaries and links only — never paste email or chat bodies.',
       inputSchema: {
         briefing: briefingSchema,

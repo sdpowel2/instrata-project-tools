@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import {
-  Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, ExternalLink, CheckCircle2, Bookmark, BookmarkCheck, EyeOff, Brain,
+  Mail, MessageSquare, LayoutGrid, PenLine, Sparkles, ExternalLink, CheckCircle2, Bookmark, BookmarkCheck, EyeOff, Brain, Share2,
 } from 'lucide-react';
 import { Card } from '../ui';
-import type { Briefing, ReadMeItem, ReadMeState, WorkItemSource, WorkTypeAccuracy } from './types';
+import type { Project } from '../../types';
+import type { Briefing, NoteTarget, ReadMeItem, ReadMeState, WorkItemSource, WorkTypeAccuracy } from './types';
+import { ScopeChip, ScopeMenu } from './NoteScope';
+import { targetLabel } from './projects';
 import { WORK_TYPE_LABEL } from './types';
 import { formatHHMM, formatTimeRange } from './format';
 
@@ -64,19 +67,30 @@ interface ReadMeProps {
   onSet?: (line: ReadMeItem, state: ReadMeState | null) => void;
   /** "Less like this": open the tuning-rule form for a hidden line. */
   onLessLike?: (line: ReadMeItem) => void;
+  /** Who a line is for when logged (2.6). Without these, lines have no scope controls. */
+  targetOf?: (line: ReadMeItem) => NoteTarget;
+  onTarget?: (line: ReadMeItem, target: NoteTarget) => void;
+  /** Open the project picker for a line. */
+  onPickProject?: (line: ReadMeItem) => void;
+  projectsById?: Map<string, Project>;
 }
 
-export function ReadMeCard({ briefing, stateOf, onSet, onLessLike }: ReadMeProps) {
+export function ReadMeCard({ briefing, stateOf, onSet, onLessLike, targetOf, onTarget, onPickProject, projectsById }: ReadMeProps) {
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const shown = briefing.readMe.filter((r) => stateOf?.(r) !== 'hidden');
   const hidden = briefing.readMe.filter((r) => stateOf?.(r) === 'hidden');
+  const scoped = !!(targetOf && onTarget && onPickProject);
   return (
     <Card title="Read me" eyebrow="Worth knowing" flush>
       <ul className="m-0 p-0 list-none">
         {shown.map((r) => {
           const Icon = SOURCE_ICON[r.source];
           const logged = stateOf?.(r) === 'logged';
+          const target = targetOf?.(r) ?? { scope: 'personal' as const };
+          const project = target.projectId ? projectsById?.get(target.projectId) : undefined;
+          const menuOpen = menuFor === r.id;
           return (
-            <li key={r.id} className="group flex gap-2.5 px-5 py-2.5 border-b border-border-soft last:border-b-0">
+            <li key={r.id} className="group relative flex gap-2.5 px-5 py-2.5 border-b border-border-soft last:border-b-0">
               <Icon size={13} className="text-fg-3 mt-1 flex-shrink-0" />
               <span className="text-sm text-fg leading-snug flex-1">
                 {r.text}
@@ -85,14 +99,42 @@ export function ReadMeCard({ briefing, stateOf, onSet, onLessLike }: ReadMeProps
                     <BookmarkCheck size={11} /> logged
                   </span>
                 )}
+                {scoped && target.scope !== 'personal' && (
+                  <span className="ml-1.5">
+                    <ScopeChip target={target} project={project} pending={!logged} onClick={() => setMenuFor(menuOpen ? null : r.id)} />
+                  </span>
+                )}
               </span>
+              {scoped && menuOpen && (
+                <ScopeMenu
+                  target={target}
+                  onPick={(t) => { onTarget!(r, t); setMenuFor(null); }}
+                  onPickProject={() => { setMenuFor(null); onPickProject!(r); }}
+                  onClose={() => setMenuFor(null)}
+                />
+              )}
               {onSet && (
                 <span className="flex items-start gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  {scoped && target.scope === 'personal' && (
+                    <button
+                      type="button"
+                      onClick={() => setMenuFor(menuOpen ? null : r.id)}
+                      className="p-0.5 rounded text-fg-3 hover:text-navy"
+                      title="Who it's for: just you (now), the team, or a project's wiki"
+                      aria-label="Share with the team or a project"
+                    >
+                      <Share2 size={14} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => onSet(r, logged ? null : 'logged')}
                     className={`p-0.5 rounded ${logged ? 'text-status-success-fg' : 'text-fg-3 hover:text-navy'}`}
-                    title={logged ? 'Logged to your second brain. Click to undo.' : 'Log to your second brain (more like this)'}
+                    title={logged
+                      ? 'Logged. Click to undo.'
+                      : target.scope === 'personal'
+                        ? 'Log to your second brain (more like this)'
+                        : `Log it: files to ${targetLabel(target, project)} tonight (more like this)`}
                     aria-label={logged ? 'Undo log' : 'Log to second brain'}
                   >
                     {logged ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
@@ -149,18 +191,33 @@ export function ReadMeCard({ briefing, stateOf, onSet, onLessLike }: ReadMeProps
   );
 }
 
+interface NoteCardProps {
+  onAdd: (text: string, target: NoteTarget) => void;
+  inboxCount: number | null;
+  /** Who the next note is for (2.6). Without these, notes are always personal. */
+  target?: NoteTarget;
+  onTarget?: (target: NoteTarget) => void;
+  onPickProject?: () => void;
+  projectsById?: Map<string, Project>;
+}
+
 /** Quick capture into the second brain's inbox (2.5). The nightly run files it (2.6). */
-export function NoteCard({ onAdd, inboxCount }: { onAdd: (text: string) => void; inboxCount: number | null }) {
+export function NoteCard({ onAdd, inboxCount, target, onTarget, onPickProject, projectsById }: NoteCardProps) {
   const [text, setText] = useState('');
+  const [menu, setMenu] = useState(false);
+  const t = target ?? { scope: 'personal' as const };
+  const project = t.projectId ? projectsById?.get(t.projectId) : undefined;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
-    onAdd(text.trim());
+    onAdd(text.trim(), t);
     setText('');
+    // Back to private after every note, so sharing never carries over by accident.
+    if (t.scope !== 'personal') onTarget?.({ scope: 'personal' });
   };
   return (
     <Card flush>
-      <form onSubmit={submit} className="flex items-center gap-2 px-4 py-2.5">
+      <form onSubmit={submit} className="relative flex items-center gap-2 px-4 py-2.5">
         <Brain size={15} className="text-violet-600 flex-shrink-0" />
         <input
           value={text}
@@ -170,6 +227,27 @@ export function NoteCard({ onAdd, inboxCount }: { onAdd: (text: string) => void;
           maxLength={4000}
           className="flex-1 min-w-0 text-sm bg-transparent outline-none placeholder:text-fg-3"
         />
+        {onTarget && onPickProject && (
+          <button
+            type="button"
+            onClick={() => setMenu((m) => !m)}
+            className={[
+              'text-[11px] px-1.5 py-0.5 rounded border max-w-[150px] truncate flex-shrink-0',
+              t.scope === 'personal' ? 'border-border text-fg-3 hover:text-fg' : 'border-navy/30 text-navy font-semibold bg-navy/[0.04]',
+            ].join(' ')}
+            title="Who this note is for"
+          >
+            {targetLabel(t, project)}
+          </button>
+        )}
+        {menu && onTarget && onPickProject && (
+          <ScopeMenu
+            target={t}
+            onPick={(next) => { onTarget(next); setMenu(false); }}
+            onPickProject={() => { setMenu(false); onPickProject(); }}
+            onClose={() => setMenu(false)}
+          />
+        )}
         <button
           type="submit"
           disabled={!text.trim()}

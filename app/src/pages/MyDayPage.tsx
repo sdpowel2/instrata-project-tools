@@ -20,10 +20,13 @@ import type { Project } from '../types';
 import { useWorklist } from '../hooks/useWorklist';
 import { useTriageRules } from '../hooks/useTriageRules';
 import { formatClock, formatDayClock, formatDue, formatLongDate, URGENCY_STYLE } from '../components/worklist/format';
-import type { Briefing, ReadMeItem, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
+import type { Briefing, NoteTarget, ReadMeItem, WorkItem, WorkItemKind, Urgency } from '../components/worklist/types';
 import { KIND_LABEL, URGENCY_LABEL } from '../components/worklist/types';
 
 type KindFilter = 'all' | Exclude<WorkItemKind, 'question'>;
+
+/** What the project picker is choosing for. */
+type PickFor = { kind: 'task'; item: WorkItem } | { kind: 'readme'; line: ReadMeItem } | { kind: 'note' };
 
 /** What "less like this" was clicked on: a task, or a hidden read-me line (2.5). */
 interface LessTarget {
@@ -45,7 +48,9 @@ export function MyDayPage() {
   const [ruleTarget, setRuleTarget] = useState<RuleTarget | null>(null);
   // "Less like this" on a task waits for the reviewed log, to pre-fill from its row.
   const [lessItem, setLessItem] = useState<LessTarget | null>(null);
-  const [linkItem, setLinkItem] = useState<WorkItem | null>(null);
+  // One project picker for tasks (2.4), read-me lines and quick notes (2.6).
+  const [picking, setPicking] = useState<PickFor | null>(null);
+  const [noteTarget, setNoteTarget] = useState<NoteTarget>({ scope: 'personal' });
 
   // Connect project (2.4) searches the projects the app already loaded: no extra query.
   const projects = useStore((s) => s.projects);
@@ -53,12 +58,16 @@ export function MyDayPage() {
   const recentProjects = useMemo(() => {
     const seen = new Set<string>();
     const out: Project[] = [];
-    for (const i of items) {
-      const p = i.projectId ? projectsById.get(i.projectId) : undefined;
+    const ids = [
+      ...items.map((i) => i.projectId),
+      ...(briefing?.readMe ?? []).map((r) => r.projectId),
+    ];
+    for (const id of ids) {
+      const p = id ? projectsById.get(id) : undefined;
       if (p && !seen.has(p.id)) { seen.add(p.id); out.push(p); }
     }
     return out;
-  }, [items, projectsById]);
+  }, [items, briefing, projectsById]);
 
   const questions = items.filter((i) => i.kind === 'question' && i.status === 'open');
   const tasks = items.filter((i) => i.kind !== 'question');
@@ -108,7 +117,7 @@ export function MyDayPage() {
 
   const rowProps = {
     today, onStatus: setStatus, onUrgency: setUrgency, onAnswer: answer, onLessLike: lessLike, onWorkType: wl.setWorkType,
-    projectsById, onLink: setLinkItem, onUnlink: (id: string) => wl.linkProject(id, null), onSuggestion: wl.answerSuggestion,
+    projectsById, onLink: (item: WorkItem) => setPicking({ kind: 'task', item }), onUnlink: (id: string) => wl.linkProject(id, null), onSuggestion: wl.answerSuggestion,
   };
 
   const counts = (k: KindFilter) => (k === 'all' ? open.length : open.filter((i) => i.kind === k).length);
@@ -267,10 +276,26 @@ export function MyDayPage() {
         {/* Side column */}
         {briefing && (
           <div className="space-y-6">
-            <NoteCard onAdd={wl.addNote} inboxCount={wl.inboxCount} />
+            <NoteCard
+              onAdd={wl.addNote}
+              inboxCount={wl.inboxCount}
+              target={noteTarget}
+              onTarget={setNoteTarget}
+              onPickProject={() => setPicking({ kind: 'note' })}
+              projectsById={projectsById}
+            />
             {!wl.stale && <ScheduleCard briefing={briefing} />}
             <WorkTypeCard accuracy={wl.workTypeAccuracy} unchecked={open.filter((i) => i.workType && !i.workTypeChecked).length} />
-            <ReadMeCard briefing={briefing} stateOf={wl.readMeState} onSet={wl.setReadMe} onLessLike={lessReadMe} />
+            <ReadMeCard
+              briefing={briefing}
+              stateOf={wl.readMeState}
+              onSet={wl.setReadMe}
+              onLessLike={lessReadMe}
+              targetOf={wl.readMeTarget}
+              onTarget={wl.setReadMeTarget}
+              onPickProject={(line) => setPicking({ kind: 'readme', line })}
+              projectsById={projectsById}
+            />
             <ClosedCard briefing={briefing} />
             <SetAsideCard briefing={briefing} />
           </div>
@@ -301,13 +326,20 @@ export function MyDayPage() {
         onActive={tr.setActive}
         onDelete={tr.remove}
       />
-      {linkItem && (
+      {picking && (
         <ConnectProjectModal
-          item={linkItem}
+          title={picking.kind === 'task' ? picking.item.title : picking.kind === 'readme' ? picking.line.text : 'Your next quick note'}
+          heading={picking.kind === 'task' ? 'Connect project' : 'Share with a project'}
+          hint={picking.kind === 'task' ? undefined : "It goes into that project's wiki Notes, where everyone on the project can read it."}
           projects={projects}
           recent={recentProjects}
-          onPick={(projectId) => { wl.linkProject(linkItem.id, projectId); setLinkItem(null); }}
-          onClose={() => setLinkItem(null)}
+          onPick={(projectId) => {
+            if (picking.kind === 'task') wl.linkProject(picking.item.id, projectId);
+            else if (picking.kind === 'readme') wl.setReadMeTarget(picking.line, { scope: 'project', projectId });
+            else setNoteTarget({ scope: 'project', projectId });
+            setPicking(null);
+          }}
+          onClose={() => setPicking(null)}
         />
       )}
       {modalTarget && (
