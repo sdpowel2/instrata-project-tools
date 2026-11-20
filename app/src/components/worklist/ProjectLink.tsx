@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FolderOpen, X, Check, Search } from 'lucide-react';
 import type { Project } from '../../types';
-import type { WorkItem } from './types';
 import { projectCode, searchProjects, shortName } from './projects';
 
 // ── The chip on a linked task ─────────────────────────────────────────────────
@@ -74,7 +73,12 @@ export function SuggestionLine({
 
 // ── The picker ────────────────────────────────────────────────────────────────
 interface ModalProps {
-  item: WorkItem;
+  /** What's being connected: a task title, a read-me line or a note. */
+  title: string;
+  /** Heading; "Connect project" by default. */
+  heading?: string;
+  /** One line under the title, e.g. who will see it once shared. */
+  hint?: string;
   projects: Project[];
   /** Projects linked on other tasks, most recent first: offered before typing. */
   recent: Project[];
@@ -82,7 +86,7 @@ interface ModalProps {
   onClose: () => void;
 }
 
-export function ConnectProjectModal({ item, projects, recent, onPick, onClose }: ModalProps) {
+export function ConnectProjectModal({ title, heading = 'Connect project', hint, projects, recent, onPick, onClose }: ModalProps) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -102,11 +106,12 @@ export function ConnectProjectModal({ item, projects, recent, onPick, onClose }:
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] px-4">
       <div className="fixed inset-0 bg-black/40" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label="Connect project" className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg">
+      <div role="dialog" aria-modal="true" aria-label={heading} className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg">
         <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-border">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-navy">Connect project</h2>
-            <p className="text-xs text-fg-2 truncate" title={item.title}>{item.title}</p>
+            <h2 className="text-base font-semibold text-navy">{heading}</h2>
+            <p className="text-xs text-fg-2 truncate" title={title}>{title}</p>
+            {hint && <p className="text-[11px] text-fg-3 mt-0.5">{hint}</p>}
           </div>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface text-fg-3" aria-label="Close"><X size={18} /></button>
         </div>

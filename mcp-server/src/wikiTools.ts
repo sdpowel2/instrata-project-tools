@@ -58,6 +58,8 @@ const QUESTION_COLS =
   'raised_by, answered_by, raised_at, answered_at';
 const LABOR_COLS = 'id, room_id, labor_type, hours, basis, origin, updated_at';
 const WIKI_COLS = 'id, project_id, summary, scope_summary, design_basis, status, pipeline_run_at, created_by, created_at, updated_at';
+/** The wiki's Notes section (My Day 2.6): dated summaries, newest first. */
+const NOTE_COLS = 'id, text, link, source, noted_at, noted_by:profiles!project_notes_noted_by_fkey(full_name)';
 
 type Row = Record<string, unknown>;
 
@@ -90,18 +92,23 @@ export function registerWikiTools(server: ToolRegistrar, supa: SupabaseClient, u
         'index: one line per room / subsystem with status, headline, decision count and open-question ' +
         'count, in display order. Rooms at status "escalated" and questions at "open" are the blocking ' +
         'set. wiki is null if no project-level context has been written yet (rooms can still exist). ' +
+        'notes is the wiki\'s Notes section: the 20 most recent dated notes (things people logged about the ' +
+        'project, newest first, with who noted them); search_project_wiki searches all of them. ' +
         'Start here, then drill into get_project_room or search_project_wiki.',
       inputSchema: { project_id: z.string().describe('Project uuid (from list_projects)') },
     },
     async ({ project_id }) => {
-      const [{ data: wiki, error: wErr }, { data: rooms, error: rErr }, { data: questions, error: qErr }] = await Promise.all([
+      const [{ data: wiki, error: wErr }, { data: rooms, error: rErr }, { data: questions, error: qErr }, notes] = await Promise.all([
         supa.from('project_wiki').select(WIKI_COLS).eq('project_id', project_id).maybeSingle(),
         supa.from('wiki_room_index').select(INDEX_COLS).eq('project_id', project_id).order('sort_order').order('room_number'),
         supa.from('wiki_questions').select('id, severity, status, room_id').eq('project_id', project_id).in('status', ['open', 'answered']),
+        supa.from('project_notes').select(NOTE_COLS).eq('project_id', project_id).order('noted_at', { ascending: false }).limit(20),
       ]);
       if (wErr) return fail(wErr.message);
       if (rErr) return fail(rErr.message);
       if (qErr) return fail(qErr.message);
+      // project_notes arrives with My Day 2.6 (add_brain_pages.sql); before that, no notes.
+      const noteRows = notes.error ? [] : (notes.data ?? []);
       const idx = (rooms ?? []) as unknown as Row[];
       const openItems = (questions ?? []) as Row[];
       return ok({
@@ -114,6 +121,7 @@ export function registerWikiTools(server: ToolRegistrar, supa: SupabaseClient, u
           answered_unresolved: openItems.filter((q) => q.status === 'answered').length,
         },
         rooms: idx,
+        notes: noteRows,
       });
     },
   );
@@ -267,7 +275,8 @@ export function registerWikiTools(server: ToolRegistrar, supa: SupabaseClient, u
       title: 'Search a project wiki',
       description:
         'Full-text search across a project\'s wiki: room headlines / detail / validation notes, ' +
-        'decision titles / rationale, questions / answers, and the project-level context. This is how ' +
+        'decision titles / rationale, questions / answers, the project-level context and the dated Notes ' +
+        '(kind "note"). This is how ' +
         'you answer "why are there 3 transmitters and 4 receivers in room 311?" — search, then read ' +
         'the matching decision\'s rationale or open the room with get_project_room. Supports web-style ' +
         'syntax: quoted phrases, OR, and -excluded words. Snippets mark matches with <b>…</b>.',

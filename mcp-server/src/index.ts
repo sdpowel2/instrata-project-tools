@@ -32,6 +32,7 @@ import { registerTools } from './tools.js';
 import { registerSubmittalTools } from './submittalTools.js';
 import { registerWikiTools } from './wikiTools.js';
 import { isWorklistUser, registerWorklistTools } from './worklistTools.js';
+import { registerBrainTools } from './brainTools.js';
 import { assertToolScopesComplete, collectingRegistrar, scopedRegistrar } from './toolHelpers.js';
 import { allow, keyFor } from './rateLimit.js';
 import { ProjectToolsOAuthProvider } from './oauth/provider.js';
@@ -49,6 +50,7 @@ const SERVER_INFO = { name: 'instrata-project-tools', version: '2.0.0' };
   registerSubmittalTools(collector, noClient, '');
   registerWikiTools(collector, noClient, '');
   registerWorklistTools(collector, noClient, '');
+  registerBrainTools(collector, noClient, '');
   assertToolScopesComplete(names);
 }
 
@@ -202,7 +204,10 @@ async function handleMcp(req: Request, res: Response): Promise<void> {
     registerSubmittalTools(registrar, supa, userId);
     registerWikiTools(registrar, supa, userId);
     // Personal My Day worklist: admins only, so nobody else's Claude sees these tools.
-    if (await isWorklistUser(supa, userId)) registerWorklistTools(registrar, supa, userId);
+    if (await isWorklistUser(supa, userId)) {
+      registerWorklistTools(registrar, supa, userId);
+      registerBrainTools(registrar, supa, userId);
+    }
 
     // Stateless mode: no session id generator.
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
