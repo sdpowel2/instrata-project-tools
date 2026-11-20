@@ -391,7 +391,7 @@ function SearchCard({ projectId, onOpenRoom }: { projectId: string; onOpenRoom: 
       <form onSubmit={run} className="p-4">
         <div className="relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-3" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search headlines, notes, rationale, questions…" className="input pl-9 pr-9 py-2 text-sm" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search headlines, notes, rationale, questions…" className="input pl-9! pr-9! py-2! text-sm" />
           {busy && <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-fg-3" />}
         </div>
       </form>
