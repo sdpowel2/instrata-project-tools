@@ -73,6 +73,16 @@ begin
 end $$;
 
 -- ── brain_pages ───────────────────────────────────────────────────────────────
+-- array_to_string() is only STABLE, and a generated column needs IMMUTABLE parts.
+-- Joining a text[] with a space has no outside dependencies, so this wrapper is safe.
+create or replace function public.brain_tags_text(p_tags text[])
+returns text
+language sql
+immutable
+parallel safe
+set search_path = public
+as $$ select coalesce(array_to_string(p_tags, ' '), '') $$;
+
 create table if not exists public.brain_pages (
   id           uuid primary key default gen_random_uuid(),
   user_id      uuid not null default auth.uid() references public.profiles(id) on delete cascade,  -- author / owner
@@ -90,7 +100,7 @@ create table if not exists public.brain_pages (
   updated_at   timestamptz not null default now(),
   search_tsv   tsvector generated always as (
                  setweight(to_tsvector('english', coalesce(title, '') || ' ' || replace(slug, '-', ' ')), 'A') ||
-                 setweight(to_tsvector('english', coalesce(summary, '') || ' ' || array_to_string(tags, ' ')), 'B') ||
+                 setweight(to_tsvector('english', coalesce(summary, '') || ' ' || public.brain_tags_text(tags)), 'B') ||
                  setweight(to_tsvector('english', coalesce(body, '')), 'C')
                ) stored
 );
